@@ -91,6 +91,14 @@ interface WeaverState {
   themeId: ThemeId;
   setTheme: (id: ThemeId) => void;
 
+  // --- Modos del agente (toggles en el popup +) ---
+  /** Modo plan: el agente primero propone un plan y espera confirmación antes de ejecutar. */
+  planMode: boolean;
+  /** Perseguir objetivo: el agente itera hasta completar el objetivo, no se rinde al primer fallo. */
+  pursueObjective: boolean;
+  setPlanMode: (v: boolean) => void;
+  setPursueObjective: (v: boolean) => void;
+
   // --- Regeneración de mensajes ---
   regenerateMessage: (messageId: string) => Promise<void>;
 
@@ -343,6 +351,12 @@ export const useWeaver = create<WeaverState>((set, get) => ({
     applyTheme(id);
     set({ themeId: id });
   },
+
+  // --- Modos del agente ---
+  planMode: false,
+  pursueObjective: true,
+  setPlanMode: (v) => set({ planMode: v }),
+  setPursueObjective: (v) => set({ pursueObjective: v }),
 
   // --- Regeneración ---
   regenerateMessage: async (messageId) => {
