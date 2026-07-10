@@ -15,6 +15,8 @@ import type { Plan, Subtask, TraceStep } from '@/agent/types';
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, getProvider } from '@/providers/registry';
 import { apiKeyStore } from '@/providers/store';
 import type { Attachment } from '@/lib/attachments';
+import type { ThemeId } from '@/lib/themes';
+import { getActiveTheme, applyTheme, THEMES } from '@/lib/themes';
 
 export type ViewId = 'chat' | 'complementos' | 'habilidades' | 'automatizaciones' | 'configuracion';
 
@@ -67,6 +69,13 @@ interface WeaverState {
   setModel: (id: string) => void;
   providersWithKey: Set<ProviderId>;
   refreshProvidersWithKey: () => Promise<void>;
+
+  // --- Tema ---
+  themeId: ThemeId;
+  setTheme: (id: ThemeId) => void;
+
+  // --- Regeneración de mensajes ---
+  regenerateMessage: (messageId: string) => Promise<void>;
 
   // --- Agent events ---
   handleAgentEvent: (event: AgentEvent) => void;
@@ -214,6 +223,69 @@ export const useWeaver = create<WeaverState>((set, get) => ({
   refreshProvidersWithKey: async () => {
     const known = await apiKeyStore.listKnown();
     set({ providersWithKey: new Set(known) });
+  },
+
+  // --- Tema ---
+  themeId: getActiveTheme(),
+  setTheme: (id) => {
+    applyTheme(id);
+    set({ themeId: id });
+  },
+
+  // --- Regeneración ---
+  regenerateMessage: async (messageId) => {
+    // Encuentra la conversación activa y el mensaje.
+    const s = get();
+    const conv = s.conversations.find((c) => c.id === s.activeConversationId);
+    if (!conv) return;
+    const idx = conv.messages.findIndex((m) => m.id === messageId);
+    if (idx < 0) return;
+    // Toma todos los mensajes anteriores al que se regenera.
+    const context = conv.messages.slice(0, idx).filter((m) => m.role === 'user' || m.role === 'assistant');
+    // Reemplaza el contenido del mensaje a regenerar.
+    s.setAgentState('executing');
+    try {
+      const { createProvider } = await import('@/providers');
+      const { streamUntilDone } = await import('@/lib/chain');
+      const llm = await createProvider(s.providerId);
+      // Vaciar el mensaje a regenerar.
+      const emptyMsg: Message = { ...conv.messages[idx], content: '', reasoning: undefined };
+      const newMsgs = [...conv.messages];
+      newMsgs[idx] = emptyMsg;
+      set((st) => ({
+        conversations: st.conversations.map((c) =>
+          c.id === conv.id ? { ...c, messages: newMsgs } : c,
+        ),
+      }));
+      const systemMsg: Message = {
+        role: 'system',
+        content:
+          'Eres Weaver, un asistente de escritorio amable y conciso. Si tu respuesta se acerca al límite de tokens, termina con la línea exacta <<CONTINUE>>. Al terminar del todo, emite <<END>>.',
+      };
+      const full = await streamUntilDone(llm, s.modelId, [systemMsg, ...context], {
+        maxChains: 5,
+        onDelta: (delta) => {
+          set((st) => ({
+            conversations: st.conversations.map((c) => {
+              if (c.id !== conv.id) return c;
+              const msgs = [...c.messages];
+              const cur = msgs[idx];
+              msgs[idx] = { ...cur, content: cur.content + delta };
+              return { ...c, messages: msgs };
+            }),
+          }));
+        },
+      });
+      // Para el último delta consolidado (por si quedó algo sin emitir).
+      void full;
+    } catch (e) {
+      s.appendMessage({
+        role: 'assistant',
+        content: `❌ Error regenerando: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    } finally {
+      s.setAgentState('idle');
+    }
   },
 
   // --- Agent events → store mutations ---

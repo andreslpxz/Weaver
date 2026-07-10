@@ -7,16 +7,18 @@ import { ModelPickerPopup } from '@/components/model-picker/ModelPickerPopup';
 import { AttachmentChips } from '@/components/composer/AttachmentChips';
 import { createProvider } from '@/providers';
 import { runAgent } from '@/agent/loop';
-import { streamChat } from '@/lib/chain';
+import { streamChat, streamUntilDone } from '@/lib/chain';
 import {
   fileToAttachment,
   buildMessageWithAttachments,
   getFilesFromDrop,
-  formatSize,
 } from '@/lib/attachments';
 import { runtime } from '@/lib/tauri';
 import type { Message } from '@/providers/types';
 import type { Attachment } from '@/lib/attachments';
+
+const newMsgId = () =>
+  typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `m-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 export function Composer() {
   const [value, setValue] = useState('');
@@ -92,7 +94,6 @@ export function Composer() {
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
     addFiles(files);
-    // Reset para permitir seleccionar el mismo archivo otra vez.
     e.target.value = '';
   };
 
@@ -136,10 +137,23 @@ export function Composer() {
     let convId = activeConversationId;
     if (!convId) convId = newConversation();
 
-    const finalText = buildMessageWithAttachments(value, draftAttachments);
-    const userMsg: Message = { role: 'user', content: finalText || '(adjuntos sin texto)' };
+    const built = buildMessageWithAttachments(value, draftAttachments);
+    const userMsg: Message = {
+      id: newMsgId(),
+      ts: Date.now(),
+      role: 'user',
+      content: built.toUI,
+      attachments: draftAttachments.map((a) => ({
+        id: a.id,
+        name: a.name,
+        kind: a.kind,
+        size: a.size,
+        mime: a.mime,
+        truncated: a.truncated,
+      })),
+    };
     appendMessage(userMsg);
-    const objectiveText = finalText;
+    const objectiveText = built.toLLM;
     setValue('');
     clearDraftAttachments();
     setIsRunning(true);
@@ -151,7 +165,7 @@ export function Composer() {
     try {
       const llm = await createProvider(providerId);
       // Detectar si es una tarea agéntica o un chat simple.
-      const agentive = /\b(abre|escribe en|copia|pega|transfiere|envía|completa|rellena|sube|baja)\b/i.test(
+      const agentive = /\b(abre|escribe en|copia|pega|transfiere|envía|completa|rellena|sube|baja|ejecuta|instala|busca en internet)\b/i.test(
         objectiveText,
       );
 
@@ -161,24 +175,14 @@ export function Composer() {
           signal: ac.signal,
           onEvent: handleAgentEvent,
         })) {
-          // los eventos se manejan via handleAgentEvent
+          // events handled via handleAgentEvent
         }
       } else if (agentive && runtime.isBrowser) {
-        appendMessage({
-          role: 'assistant',
-          content:
-            '⚠️ Las tareas agénticas (abre, escribe en, copia, etc.) requieren el backend de Tauri.\n\n' +
-            'Para ejecutarlas:\n' +
-            '1. Instala las dependencias del sistema:\n' +
-            '   `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev xdotool wmctrl`\n' +
-            '2. Habilita accesibilidad AT-SPI:\n' +
-            '   `gsettings set org.gnome.desktop.interface toolkit-accessibility true`\n' +
-            '3. Ejecuta en modo Tauri: `npm run tauri:dev`\n\n' +
-            'Mientras tanto puedo responder como chat normal si reformulas la petición.',
-        });
+        // En navegador, aunque sea "agéntico" el verbo, intentamos chat con tools básicas.
+        await runChatWithTools(llm, objectiveText, ac.signal);
       } else {
         // Chat simple con streaming y encadenamiento.
-        appendMessage({ role: 'assistant', content: '' });
+        appendMessage({ role: 'assistant', content: '', id: newMsgId(), ts: Date.now() });
         const messages: Message[] = [
           {
             role: 'system',
@@ -187,19 +191,11 @@ export function Composer() {
           },
           { role: 'user', content: objectiveText },
         ];
-        const { text } = await streamChat(llm, modelId, messages, {
+        await streamUntilDone(llm, modelId, messages, {
+          maxChains: 5,
           signal: ac.signal,
           onDelta: (delta) => updateLastAssistantMessage(delta),
         });
-        if (text.includes('<<CONTINUE>>')) {
-          const { streamUntilDone } = await import('@/lib/chain');
-          const full = await streamUntilDone(llm, modelId, messages, {
-            maxChains: 5,
-            signal: ac.signal,
-            onDelta: (delta) => updateLastAssistantMessage(delta),
-          });
-          updateLastAssistantMessage(full.slice(text.length));
-        }
       }
     } catch (e) {
       appendMessage({
@@ -211,6 +207,72 @@ export function Composer() {
       setIsRunning(false);
       abortRef.current = null;
       setAgentState('idle');
+    }
+  }
+
+  /** Chat simple que también expone web_search/web_fetch/shell al LLM. */
+  async function runChatWithTools(
+    llm: import('@/providers/types').LLMProvider,
+    userText: string,
+    signal: AbortSignal,
+  ) {
+    const { buildAdvancedToolsList, dispatchAdvancedTool } = await import('@/lib/tools');
+    const { streamChat } = await import('@/lib/chain');
+
+    appendMessage({ role: 'assistant', content: '', id: newMsgId(), ts: Date.now() });
+    const messages: Message[] = [
+      {
+        role: 'system',
+        content:
+          'Eres Weaver, un asistente de escritorio. Tienes acceso a tools para buscar en internet, ejecutar comandos shell y leer/escribir archivos. ' +
+          'Si el usuario pide algo que requiere una tool, úsala. Si no, responde normal.\n' +
+          'Si tu respuesta se acerca al límite de tokens, termina con <<CONTINUE>>. Al terminar del todo, emite <<END>>.',
+      },
+      { role: 'user', content: userText },
+    ];
+
+    const tools = buildAdvancedToolsList();
+    const MAX_TOOL_ROUNDS = 6;
+
+    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      const result = await streamChat(llm, modelId, messages, {
+        tools,
+        signal,
+        onDelta: (delta) => updateLastAssistantMessage(delta),
+      });
+
+      if (result.toolCalls.length === 0) {
+        // Sin más tool calls → fin.
+        return;
+      }
+
+      // Para cada tool call, ejecutar y realimentar.
+      // El contenido de texto ya se emitió arriba; añadimos como assistant msg.
+      messages.push({
+        role: 'assistant',
+        content: result.text || '',
+        tool_calls: result.toolCalls,
+      });
+
+      for (const tc of result.toolCalls) {
+        let args: Record<string, unknown> = {};
+        try {
+          args = JSON.parse(tc.function.arguments || '{}');
+        } catch {
+          // ignore parse error
+        }
+        const toolResult = await dispatchAdvancedTool(tc.function.name, args);
+        const summary = toolResult.ok
+          ? toolResult.output.slice(0, 4000)
+          : `ERROR: ${toolResult.error ?? 'unknown'}`;
+        // Mostrar el resultado como observación en la UI (mensaje tool oculto).
+        updateLastAssistantMessage(`\n\n[tool ${tc.function.name}: ${summary.slice(0, 200)}…]\n`);
+        messages.push({
+          role: 'tool',
+          tool_call_id: tc.id,
+          content: summary,
+        });
+      }
     }
   }
 
@@ -309,13 +371,6 @@ export function Composer() {
             </span>
 
             <div className="flex-1" />
-            <IconButton
-              title="Adjuntar (alternativa)"
-              className="w-6 h-6"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <Paperclip size={12} />
-            </IconButton>
           </div>
 
           {/* Textarea */}
@@ -346,7 +401,7 @@ export function Composer() {
             rows={1}
           />
 
-          {/* Bottom row: model picker + mic + send */}
+          {/* Bottom row: model picker + clip + mic + send */}
           <div className="flex items-center gap-2 px-1">
             <button
               onClick={() => setModelPickerOpen(!modelPickerOpen)}
@@ -368,7 +423,16 @@ export function Composer() {
 
             <div className="flex-1" />
 
-            <IconButton title="Voz" className="w-6 h-6">
+            {/* Botón 📎 (clip) a la derecha, justo antes del micrófono */}
+            <IconButton
+              title="Adjuntar archivos"
+              className="w-7 h-7"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Paperclip size={14} />
+            </IconButton>
+
+            <IconButton title="Voz" className="w-7 h-7">
               <Mic size={14} />
             </IconButton>
 

@@ -1,10 +1,37 @@
 import { useEffect, useState } from 'react';
-import { Puzzle, Sparkles, Plus, Settings as SettingsIcon, Search, Trash2, ExternalLink } from 'lucide-react';
+import {
+  Puzzle,
+  Sparkles,
+  Plus,
+  Settings as SettingsIcon,
+  Trash2,
+  ExternalLink,
+  Palette,
+  Brain,
+  Search,
+  Terminal,
+  FileText,
+} from 'lucide-react';
 import { mcpClient, type McpServer } from '@/mcp/client';
 import { skillsRegistry, type Skill } from '@/skills/registry';
 import { skillsInstaller } from '@/skills/installer';
 import { Badge, Button } from '@/components/common/Button';
 import { runtime } from '@/lib/tauri';
+import { THEMES, type ThemeId } from '@/lib/themes';
+import { useWeaver } from '@/store/weaver';
+import {
+  IMPORT_PROMPT,
+  importMemory,
+  listImportedMemories,
+  CATEGORY_LABELS,
+  type MemorySource,
+  type ImportedCategory,
+} from '@/lib/memory-import';
+import {
+  getTavilyApiKey,
+  setTavilyApiKey,
+  deleteTavilyApiKey,
+} from '@/lib/tools';
 
 // ============================================================================
 // ComplementosView — MCP servers + Skills importadas (skills.sh)
@@ -167,10 +194,7 @@ export function ComplementosView() {
           ) : (
             <div className="space-y-2">
               {servers.map((s) => (
-                <div
-                  key={s.id}
-                  className="flex items-center justify-between p-3 codex-card"
-                >
+                <div key={s.id} className="flex items-center justify-between p-3 codex-card">
                   <div>
                     <div className="text-sm font-medium">{s.name}</div>
                     <div className="text-xs text-text-muted font-mono">
@@ -305,6 +329,63 @@ export function AutomatizacionesView() {
 // ============================================================================
 
 export function ConfiguracionView() {
+  const { themeId, setTheme } = useWeaver();
+  const [tavilyKey, setTavilyKey] = useState('');
+  const [tavilyStatus, setTavilyStatus] = useState<string | null>(null);
+  const [tavilyHas, setTavilyHas] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [importedMemories, setImportedMemories] = useState<
+    { source: MemorySource; category: ImportedCategory; text: string }[]
+  >([]);
+
+  useEffect(() => {
+    getTavilyApiKey().then((k) => {
+      setTavilyHas(!!k);
+      if (k) setTavilyKey(k);
+    });
+    setImportedMemories(listImportedMemories());
+  }, []);
+
+  async function saveTavily() {
+    if (!tavilyKey || tavilyKey.length < 10) {
+      setTavilyStatus('API key demasiado corta');
+      return;
+    }
+    await setTavilyApiKey(tavilyKey);
+    setTavilyHas(true);
+    setTavilyStatus('✓ Guardada');
+    setTimeout(() => setTavilyStatus(null), 2000);
+  }
+
+  async function deleteTavily() {
+    await deleteTavilyApiKey();
+    setTavilyKey('');
+    setTavilyHas(false);
+    setTavilyStatus('Eliminada');
+    setTimeout(() => setTavilyStatus(null), 2000);
+  }
+
+  function copyImportPrompt() {
+    navigator.clipboard.writeText(IMPORT_PROMPT).then(() => {
+      setImportStatus('Prompt copiado al portapapeles. Pégalo en la otra IA y trae su respuesta aquí.');
+      setTimeout(() => setImportStatus(null), 4000);
+    });
+  }
+
+  async function doImport() {
+    if (!importText.trim()) return;
+    try {
+      const result = await importMemory(importText);
+      setImportStatus(`✓ Importadas ${result.saved} entradas desde ${result.source}.`);
+      setImportText('');
+      setImportedMemories(listImportedMemories());
+    } catch (e) {
+      setImportStatus(`❌ Error: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    setTimeout(() => setImportStatus(null), 5000);
+  }
+
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-2xl mx-auto px-6 py-10 space-y-6">
@@ -316,6 +397,7 @@ export function ConfiguracionView() {
           </p>
         </div>
 
+        {/* Modo de ejecución */}
         <SettingCard
           title="Modo de ejecución"
           desc="Determina qué capacidades están disponibles."
@@ -330,7 +412,7 @@ export function ConfiguracionView() {
             <div className="mt-3 p-3 rounded-codex bg-warning/10 border border-warning/30 text-xs text-text-secondary space-y-2">
               <div className="font-medium text-warning">Estás en modo navegador</div>
               <div>
-                En este modo las API keys se guardan en <code>localStorage</code> (no es seguro, sólo para desarrollo) y las tareas agénticas (AT-SPI, automatización) no están disponibles.
+                En este modo las API keys se guardan en <code>localStorage</code> (no es seguro, sólo para desarrollo) y las tareas agénticas AT-SPI no están disponibles. Sin embargo, las tools web (search/fetch) y el chat con tools SÍ funcionan.
               </div>
               <div>
                 Para acceso completo ejecuta:{' '}
@@ -338,6 +420,170 @@ export function ConfiguracionView() {
               </div>
             </div>
           )}
+        </SettingCard>
+
+        {/* Tema */}
+        <SettingCard
+          title="Tema"
+          desc="Elige la paleta de colores. Los cambios se aplican al instante."
+        >
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {THEMES.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setTheme(t.id as ThemeId)}
+                className={`text-left p-2 rounded-codex border transition-colors ${
+                  themeId === t.id
+                    ? 'border-accent bg-accent/10'
+                    : 'border-border hover:border-border-accent'
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <span
+                    className="w-4 h-4 rounded-full border border-border-accent"
+                    style={{ background: t.swatch }}
+                  />
+                  <span className="text-sm font-medium">{t.label}</span>
+                </div>
+                <div className="text-[10px] text-text-muted">{t.desc}</div>
+              </button>
+            ))}
+          </div>
+        </SettingCard>
+
+        {/* Tavily API key */}
+        <SettingCard
+          title="Búsqueda web (Tavily)"
+          desc="API key para que el agente busque en internet. Obtén una gratis en tavily.com"
+        >
+          <div className="flex gap-2">
+            <input
+              type="password"
+              value={tavilyKey}
+              onChange={(e) => setTavilyKey(e.target.value)}
+              placeholder="tvly-..."
+              className="codex-input flex-1 px-3 py-2 text-sm"
+            />
+            <Button variant="primary" onClick={saveTavily}>
+              Guardar
+            </Button>
+            {tavilyHas && (
+              <Button variant="danger" onClick={deleteTavily}>
+                <Trash2 size={12} />
+              </Button>
+            )}
+          </div>
+          <div className="flex items-center justify-between mt-2">
+            <a
+              href="https://tavily.com"
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs text-accent hover:underline inline-flex items-center gap-1"
+            >
+              Obtener API key <ExternalLink size={10} />
+            </a>
+            {tavilyHas && <Badge color="success">Configurada</Badge>}
+          </div>
+          {tavilyStatus && (
+            <div className="mt-2 text-xs text-accent">{tavilyStatus}</div>
+          )}
+        </SettingCard>
+
+        {/* Importar memoria */}
+        <SettingCard
+          title="Importar memoria de otra IA"
+          desc="Trae el contexto que ChatGPT/Claude/Gemini/Grok aprendieron sobre ti."
+        >
+          <p className="text-xs text-text-secondary mb-2">
+            1. Copia el prompt y pégalo en la otra IA. 2. Pega aquí su respuesta. Weaver categorizará las entradas y las guardará como facts.
+          </p>
+          <div className="flex gap-2 mb-3">
+            <Button onClick={copyImportPrompt}>
+              <FileText size={12} /> Copiar prompt
+            </Button>
+          </div>
+          <textarea
+            value={importText}
+            onChange={(e) => setImportText(e.target.value)}
+            placeholder="Pega aquí la respuesta de la otra IA…"
+            className="codex-input w-full px-3 py-2 text-xs font-mono min-h-[160px] resize-y"
+          />
+          <div className="flex items-center justify-between mt-2">
+            <span className="text-xs text-text-muted">{importText.length} caracteres</span>
+            <Button variant="primary" onClick={doImport} disabled={!importText.trim()}>
+              <Brain size={12} /> Importar memoria
+            </Button>
+          </div>
+          {importStatus && (
+            <div className="mt-2 text-xs text-accent whitespace-pre-wrap">{importStatus}</div>
+          )}
+
+          {/* Memorias importadas */}
+          {importedMemories.length > 0 && (
+            <div className="mt-4 pt-3 border-t border-border">
+              <div className="text-xs font-medium text-text-secondary mb-2">
+                Memorias importadas ({importedMemories.length})
+              </div>
+              <div className="space-y-1 max-h-60 overflow-y-auto">
+                {importedMemories.map((m, i) => (
+                  <div
+                    key={i}
+                    className="text-xs p-2 rounded bg-app-bg border border-border"
+                  >
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <Badge color="accent">{m.source}</Badge>
+                      <span className="text-text-muted text-[10px]">
+                        {CATEGORY_LABELS[m.category]}
+                      </span>
+                    </div>
+                    <div className="text-text-secondary">{m.text}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </SettingCard>
+
+        {/* Tools disponibles */}
+        <SettingCard
+          title="Herramientas del agente"
+          desc="What Weaver can do via tools. Algunas requieren modo Tauri."
+        >
+          <ul className="text-xs space-y-1.5">
+            <li className="flex items-start gap-2">
+              <Search size={11} className="text-accent mt-0.5" />
+              <div>
+                <strong className="text-text-primary">web_search</strong> — Búsqueda en internet (Tavily). Funciona en navegador y Tauri.
+              </div>
+            </li>
+            <li className="flex items-start gap-2">
+              <Search size={11} className="text-accent mt-0.5" />
+              <div>
+                <strong className="text-text-primary">web_fetch</strong> — Descarga una URL y devuelve texto/markdown. Funciona en ambos modos.
+              </div>
+            </li>
+            <li className="flex items-start gap-2">
+              <Terminal size={11} className={runtime.isTauri ? 'text-accent' : 'text-text-muted'} />
+              <div>
+                <strong className="text-text-primary">shell_exec</strong> — Ejecuta comandos en bash. {runtime.isTauri ? '✓ Disponible' : '⚠ Sólo Tauri'}
+              </div>
+            </li>
+            <li className="flex items-start gap-2">
+              <FileText size={11} className={runtime.isTauri ? 'text-accent' : 'text-text-muted'} />
+              <div>
+                <strong className="text-text-primary">file_read / file_write / file_list</strong> — Operaciones de filesystem. {runtime.isTauri ? '✓ Disponible' : '⚠ Sólo Tauri'}
+              </div>
+            </li>
+            <li className="flex items-start gap-2">
+              <SettingsIcon size={11} className={runtime.isTauri ? 'text-accent' : 'text-text-muted'} />
+              <div>
+                <strong className="text-text-primary">atspi_* / auto_*</strong> — Control de apps vía accesibilidad AT-SPI. {runtime.isTauri ? '✓ Disponible' : '⚠ Sólo Tauri'}
+              </div>
+            </li>
+          </ul>
+          <div className="mt-3 p-2 rounded bg-app-bg border border-border text-[11px] text-text-muted">
+            💡 En modo navegador, si escribes "busca en internet X" o "lee el archivo /etc/hosts", Weaver usará web_search/web_fetch automáticamente. Para shell_exec y AT-SPI necesitas <code>npm run tauri:dev</code>.
+          </div>
         </SettingCard>
 
         <SettingCard title="Accesibilidad AT-SPI" desc="Requerido para que el agente opere otras apps (sólo en modo Tauri).">
@@ -359,9 +605,10 @@ export function ConfiguracionView() {
             <Button
               variant="danger"
               onClick={() => {
-                if (confirm('¿Borrar TODA la memoria episódica y semántica?')) {
+                if (confirm('¿Borrar TODA la memoria episódica y semántica (incluida la importada)?')) {
                   localStorage.removeItem('weaver:episodes');
                   localStorage.removeItem('weaver:facts');
+                  setImportedMemories([]);
                   alert('Memoria borrada.');
                 }
               }}
@@ -393,7 +640,13 @@ export function ConfiguracionView() {
 function SettingCard({ title, desc, children }: { title: string; desc: string; children: React.ReactNode }) {
   return (
     <div className="codex-card p-4">
-      <div className="font-medium text-sm">{title}</div>
+      <div className="font-medium text-sm flex items-center gap-2">
+        {title === 'Tema' && <Palette size={12} className="text-accent" />}
+        {title === 'Importar memoria de otra IA' && <Brain size={12} className="text-accent" />}
+        {title === 'Búsqueda web (Tavily)' && <Search size={12} className="text-accent" />}
+        {title === 'Herramientas del agente' && <SettingsIcon size={12} className="text-accent" />}
+        {title}
+      </div>
       {desc && <p className="text-xs text-text-muted mt-0.5 mb-3">{desc}</p>}
       {children}
     </div>
@@ -401,7 +654,5 @@ function SettingCard({ title, desc, children }: { title: string; desc: string; c
 }
 
 function has(bin: string): boolean {
-  // Best-effort check: en el frontend no podemos `which`. Asumimos true en Linux.
-  // Para verificación real, añadir comando Tauri `which_binary`.
   return true;
 }

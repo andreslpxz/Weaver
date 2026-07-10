@@ -45,11 +45,28 @@ export interface ModelInfo {
 
 export type MessageRole = 'system' | 'user' | 'assistant' | 'tool';
 
+export interface AttachmentRef {
+  id: string;
+  name: string;
+  kind: 'text' | 'image' | 'binary';
+  size: number;
+  mime: string;
+  truncated?: boolean;
+}
+
 export interface Message {
   role: MessageRole;
   content: string;
   tool_call_id?: string;
   tool_calls?: ToolCall[];
+  /** Referencias a adjuntos (no el contenido crudo, que vive en attachments[]) */
+  attachments?: AttachmentRef[];
+  /** Razonamiento/chain-of-thought mostrado colapsable. */
+  reasoning?: string;
+  /** ID único del mensaje (para copy/regenerate). */
+  id?: string;
+  /** Marca de tiempo. */
+  ts?: number;
 }
 
 export interface ToolCall {
