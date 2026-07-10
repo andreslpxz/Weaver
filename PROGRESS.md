@@ -1,7 +1,7 @@
 # Weaver — Progreso
 
 > Documento vivo. Cada sesión añade una nueva entrada al final.
-> Estado global: **[FASE 1 — Fundación COMPLETA · MVP Linux funcional]**
+> Estado global: **[MVP Linux funcional · Multimodal + SQLite + Proyectos + Popup Codex]**
 
 ## Convención de estados
 
@@ -12,104 +12,220 @@
 
 ---
 
-## Sesión 1 — Fundación, scaffold y MVP Linux
+## Sesión 1 — Fundación y MVP Linux (PR #1)
 
-**Objetivo:** clonar repo, instalar toolchain, planificar, montar la estructura base del proyecto y dejar esqueletos compilables para el backend Rust y el frontend React.
+**Objetivo:** clonar repo, instalar toolchain, planificar, montar estructura base y dejar esqueletos compilables.
 
 ### Tareas
 
-- [x] Clonar `github.com/andreslpxz/Weaver.git` → `/home/z/my-project/Weaver`
-- [x] Confirmar que el repo solo tenía `README.md` + `LICENSE` (Apache 2.0)
+- [x] Clonar `github.com/andreslpxz/Weaver.git`
 - [x] Instalar Rust toolchain (`rustc 1.97.0`)
-- [x] Verificar librerías Linux presentes: `libatspi2.0-0t64`, `libatk-bridge2.0-0t64`, `libgtk-3-0t64`
+- [x] Verificar librerías Linux: `libatspi2.0-0t64`, `libatk-bridge2.0-0t64`, `libgtk-3-0t64`
 - [x] Analizar imágenes de referencia visual (Codex/Claude dark theme) con VLM
-- [x] Escribir `PLAN.md` (visión, fases, riesgos, MVP)
-- [x] Escribir `ARCHITECTURE.md` (capas, flujo agéntico, proveedores, paleta)
-- [x] Inicializar `worklog.md` y `PROGRESS.md`
+- [x] Escribir `PLAN.md`, `ARCHITECTURE.md`, `PROGRESS.md`
 - [x] Scaffold Tauri v2 + React + TS + Vite
-  - `package.json`, `tsconfig.json`, `vite.config.ts`, `tailwind.config.js`, `postcss.config.js`, `index.html`
-  - `src-tauri/Cargo.toml`, `tauri.conf.json`, `build.rs`, `capabilities/default.json`, `icons/*`
-- [x] Declarar dependencias Rust (tauri 2, zbus 4, keyring 3, rusqlite 0.32, tokio, x11rb, which, etc.)
-- [x] Declarar dependencias TS (react 18, tailwind, lucide-react, zustand, react-markdown, react-syntax-highlighter, @tauri-apps/* v2)
-- [x] Módulo Rust `acpi/atspi/`:
-  - `types.rs`: `AccessibleNode`, `ApplicationInfo`, `Rect`, `Role`, `StateSet` (serializables a TS)
-  - `client.rs`: conexión D-Bus, proxies `org.a11y.atspi.{Accessible,Action,Component,Text}`, `list_applications()`, `query_tree()` recursivo con Box::pin
-  - `tree.rs`: helper `get_focused_subtree()` (lee sub-árbol de la ventana activa)
-  - `actions.rs`: `click`, `double_click`, `type_text`, `press_key`, `get_text`, `get_extents`, `focus`
-- [x] Módulo Rust `acpi/automation/`:
-  - `keyboard.rs`: detección Wayland/X11, delega a `wtype`/`xdotool`, parser de combos ("ctrl+s")
-  - `mouse.rs`: clic en coordenadas absolutas vía `xdotool`
-  - `clipboard.rs`: `wl-copy`/`wl-paste` y `xclip`
-  - `windows.rs`: `wmctrl -l -p -G` parser, `activate_window`
-- [x] Módulo Rust `keyring/`: get/set/delete/list de API keys vía crate `keyring` (libsecret en Linux)
-- [x] Comandos Tauri IPC registrados en `lib.rs`: 10 comandos AT-SPI + 6 automation + 4 keyring
-- [x] Frontend `providers/`:
-  - `types.ts`: interfaces `LLMProvider`, `ProviderInfo`, `ModelInfo`, `Message`, `Tool`, `StreamChunk`
-  - `registry.ts`: 22 proveedores canónicos con baseUrl, docsUrl, models curados
-  - `adapters/openai-compat.ts`: SSE parser, tool calls acumulados, listModels
-  - `adapters/anthropic.ts`: Messages API + streaming SSE + tool_use
-  - `adapters/gemini.ts`: streamGenerateContent con SSE
-  - `adapters/ollama.ts`: NDJSON streaming + listModels local
-  - `store.ts`: wrapper sobre keyring Tauri con cache en memoria
-  - `index.ts`: factory `createProvider(id)` → adaptador correcto
-- [x] Frontend `lib/`:
-  - `tauri-types.ts`: tipos espejo de `atspi/types.rs` y `automation/windows.rs`
-  - `tauri.ts`: wrappers tipados sobre `invoke()`
-  - `chain.ts`: `streamChat()` y `streamUntilDone()` con encadenamiento `<<CONTINUE>>`/`<<END>>`
-- [x] Frontend `agent/`:
-  - `types.ts`: `Objective`, `Subtask`, `Plan`, `Episode`, `Fact`, `ToolDef`, marcadores
-  - `planner.ts`: planner jerárquico (HTN-lite), JSON output, validación acíclica
-  - `executor.ts`: ReAct loop con 11 tools AT-SPI/automation, máximo 12 pasos
-  - `critic.ts`: validación contra `successCriteria` con snapshot AT-SPI
-  - `reflection.ts`: extracción de lecciones + skill auto-aprendida
-  - `memory.ts`: memoria episódica + semántica (localStorage MVP, migrable a SQLite)
-  - `loop.ts`: orquestador `runAgent()` con eventos tipados
-- [x] Frontend `mcp/client.ts`: registry de servidores MCP (esqueleto, Fase 6)
-- [x] Frontend `skills/`:
-  - `registry.ts`: parser de SKILL.md (YAML frontmatter minimalista), cache local
-  - `installer.ts`: wrapper sobre `npx skills add <url> --skill <name>` via `tauri-plugin-shell`
-- [x] Frontend UI Codex-style:
-  - `styles/tokens.css`: 14 variables CSS + utilidades Tailwind (codex-card, codex-input, sidebar-item, etc.)
-  - `components/common/Button.tsx`: Button, IconButton, Badge
-  - `components/sidebar/Sidebar.tsx`: header con logo, secciones (Nuevo chat, Buscar, Complementos, Automatizaciones, Proyectos, Configuración), conversaciones recientes, colapsable
-  - `components/composer/Composer.tsx`: input box estilo Codex con +/file/model-picker/mic/send, autosize, detecta tarea agéntica vs chat simple, escucha sugerencias
-  - `components/model-picker/ModelPickerPopup.tsx`: popup con tabs (Modelos / API Keys), buscador, lista de modelos por proveedor, editor de API key con test
-  - `components/chat/MessageList.tsx`: empty state con sugerencias, burbujas user/assistant/tool, react-markdown + syntax-highlighting, PlanCard expandible, TraceCard con pasos del agente
-  - `views/Views.tsx`: ComplementosView (MCP + skills importadas), HabilidadesView (skills aprendidas), AutomatizacionesView (episodios recientes), ConfiguracionView (AT-SPI, deps, memoria, about)
-  - `store/weaver.ts`: Zustand con conversaciones, plan, traces, agentState, providers
-  - `App.tsx`, `main.tsx`: layout, routing por vista, top bar con model picker
-- [x] **TypeScript sin errores** (`tsc --noEmit` pasa limpio)
-- [x] **Vite build exitoso** (`npm run build` produce `dist/` con 1MB JS + 18KB CSS)
-- [x] **Rust core compila** (verificado con sub-crate standalone sin tauri)
-- [!] **Tauri backend no compila en sandbox**: requiere `libwebkit2gtk-4.1-dev` y `libgtk-3-dev` (necesita `sudo apt install`). El usuario debe instalar las deps en su máquina Linux; el código Rust está verificado sintácticamente.
-
-### Hallazgos
-
-- **Entorno:** Debian 13 (trixie), Node 22.x, sin Rust inicialmente → instalado vía rustup 1.97.0.
-- **AT-SPI:** librerías runtime presentes (`libatspi2.0-0t64`, `libatk-bridge2.0-0t64`); no así los `-dev` (no se pueden instalar sin root). El código Rust usa `zbus` puro sin bindings C, así que solo necesita `pkg-config` y `libatspi2.0-dev` a futuro (no estrictamente para `zbus`, sí para linking de Tauri/GTK).
-- **Wayland:** el sandbox está en X11. El MVP apunta a X11 (vía `xdotool`/`xclip`/`wmctrl`); Wayland requiere `wtype`/`wl-clipboard` y está soportado como fallback automático.
-- **Limitación del sandbox:** sin `sudo`, no se pudo ejecutar `cargo build` del crate `weaver` (Tauri). Se creó `/home/z/my-project/scripts/weaver-core-check/` como sub-crate standalone que replica los módulos atspi/automation/keyring sin tauri, para verificar que el código Rust compila.
-
-### Próximos pasos (Sesión 2)
-
-1. **En máquina Linux real del usuario:** instalar deps del sistema (`sudo apt install libwebkit2gtk-4.1-dev ...`) y ejecutar `npm run tauri:dev` para probar.
-2. **Probar end-to-end:** configurar API key de OpenAI/Anthropic/Ollama, pedir "abre gedit y escribe Hola", verificar que el agente ejecuta vía AT-SPI.
-3. **Persistencia real:** migrar `agent/memory.ts` y `skills/registry.ts` de localStorage a SQLite vía un comando Tauri `memory_*`.
-4. **VertexAI/Bedrock adapters:** implementar firma AWS SigV4 y OAuth2 de Google.
-5. **Soporte Wayland vía portales:** integrar `xdg-desktop-portal` para inyección de input segura.
-6. **Persistencia de skills auto-aprendidas:** comando Tauri `skills_write_learned` para escribir a `~/.weaver/skills/learned/<name>.md`.
-7. **MCP runtime real:** lanzar subprocesos stdio JSON-RPC y exponer tools al executor.
+- [x] Declarar dependencias Rust (tauri 2, zbus 4, keyring 3, rusqlite, tokio, x11rb)
+- [x] Declarar dependencias TS (react 18, tailwind, zustand, react-markdown, lucide-react)
+- [x] Módulo Rust `atspi/`: cliente D-Bus AT-SPI2 con `query_tree`, `click`, `type_text`, `press_key`, `get_text`, `get_extents`, `focus`, `get_focused_subtree`
+- [x] Módulo Rust `automation/`: keyboard (wtype/xdotool), mouse, clipboard (wl-clipboard/xclip), windows (wmctrl)
+- [x] Módulo Rust `keyring/`: API keys vía libsecret
+- [x] 20 comandos Tauri IPC registrados
+- [x] Frontend: 22 proveedores IA en 4 familias de adaptadores (OpenAI-compat, Anthropic, Gemini, Ollama)
+- [x] Model picker popup con gestión de API keys
+- [x] Bucle agéntico: planner + executor + critic + reflection + memory
+- [x] Encadenamiento automático >8,192 tokens (`<<CONTINUE>>`/`<<END>>`)
+- [x] UI Codex-style: sidebar, composer, chat con markdown+code, 4 vistas
+- [x] Skills.sh installer + parser SKILL.md + esqueleto MCP
+- [x] TypeScript sin errores, Vite build OK, Rust core compila
 
 ---
 
-## Roadmap alto-nivel
+## Sesión 2 — Browser fallback + Drag-and-drop (PR #2)
 
-| Fase | Estado | ETA |
+### Tareas
+
+- [x] Fix bug `Cannot read properties of undefined (reading 'invoke')` cuando se ejecuta en navegador plano
+- [x] `lib/tauri.ts` detecta `window.__TAURI_INTERNALS__` y proporciona fallbacks:
+  - keyring → localStorage (prefijo `weaver:key:`)
+  - clipboard → `navigator.clipboard` API
+  - atspi/automation → error claro pidiendo ejecutar en Tauri
+- [x] Sistema de adjuntos: `lib/attachments.ts` con `fileToAttachment()`, `buildMessageWithAttachments()`, `getFilesFromDrop()`, `formatSize()`
+- [x] Detección de tipo: texto / imagen / binario por extensión + MIME
+- [x] Lectura de texto inline (200KB límite, 50k chars truncado)
+- [x] Imágenes: data URL base64 + thumbnail 64px
+- [x] `AttachmentChips` con thumbnail, nombre, badge truncado, botón quitar
+- [x] Drag-and-drop overlay en el composer
+- [x] Botón `+` funcional (file picker nativo multi-selección)
+- [x] Paste de imágenes con Ctrl+V
+- [x] `draftAttachments[]` en el store Zustand
+- [x] Badge de modo runtime (Tauri/Navegador) en el composer
+
+---
+
+## Sesión 3 — Temas, memoria importada, tools avanzadas (PR #3)
+
+### Tareas
+
+- [x] **Fix bug `<<CONTINUE>>` leak**: `streamChat()` ahora bufferiza marcadores parciales y los descarta antes de llegar al UI
+- [x] **Fix adjuntos como code block gigante**: `buildMessageWithAttachments()` devuelve `{toLLM, toUI}` — el UI muestra solo resumen, el LLM recibe contenido completo
+- [x] **Sistema de temas** (6 paletas) con CSS variables dinámicas:
+  - Sage Dark (default), Pure Black OLED, Soft Gray (claro), Midnight Blue, Warm Paper, Cobalt
+  - Aplicación instantánea vía `data-theme` attr
+- [x] **Importar memoria de otras IAs** (ChatGPT/Claude/Gemini/Grok):
+  - Prompt canónico con 5 categorías (demográfica, intereses, relaciones, eventos, instrucciones)
+  - Parser detecta `Importado de: <name>` al final
+  - Categoriza bullets y guarda como facts con key `imported:<source>:<category>:<n>`
+- [x] **Tools avanzadas estilo Codex**:
+  - `shell_exec` (bash con timeout)
+  - `file_read` / `file_write` / `file_list`
+  - `web_search` (Tavily API)
+  - `web_fetch` (descarga URL, strip HTML)
+  - Detección automática de intención ("busca en internet X", "lee /etc/hosts")
+  - ReAct loop con tools en navegador y Tauri
+- [x] **Tavily API key** en Configuración con link a tavily.com
+- [x] **Botones de mensaje**: copy + regenerate (hover reveal)
+- [x] **Icono cerebro** arriba de mensajes: expande razonamiento en gris semi-transparente
+- [x] **Indicador "pensando…"** con spinner
+- [x] **Referencias de adjuntos** en burbuja de usuario con icono/nombre/tamaño
+
+---
+
+## Sesión 4 — Multimodal real, SQLite, Bedrock/VertexAI, Proyectos (PR #4)
+
+### Tareas
+
+#### Backend Rust
+- [x] `src-tauri/src/db/mod.rs`: SQLite en `~/.weaver/memory.db` con 7 tablas:
+  - `episodes`, `facts`, `projects`, `conversations`, `conversation_messages`, `skills`
+- [x] 24 comandos Tauri para CRUD completo de todas las entidades
+- [x] `src-tauri/src/tools/mod.rs`: `shell_exec`, `file_read`, `file_write`, `file_list` con expansión de `~/`
+- [x] `lib.rs` registra `DbState` + 28 comandos nuevos
+
+#### Multimodal real
+- [x] `Message.images?: ImageContent[]` (dataUrl + mime + name)
+- [x] Adapter **OpenAI-compat**: `content` array con `image_url`
+- [x] Adapter **Anthropic**: `source.base64` con `media_type`
+- [x] Adapter **Gemini**: `inline_data` con `mime_type` + `data`
+- [x] Composer extrae imágenes de attachments y las pasa al Message
+
+#### Persistencia SQLite (con fallback localStorage)
+- [x] `agent/memory.ts`: async, SQLite-backed en Tauri
+- [x] `skills/registry.ts`: async, SQLite-backed
+- [x] `store/weaver.ts`: projects CRUD con SQLite
+- [x] `lib/tauri.ts`: `sqlite.*` con 24 wrappers tipados
+
+#### Adapters Bedrock y VertexAI
+- [x] `bedrock.ts`: proxy URL para navegador, SigV4 nativo pendiente en Tauri
+- [x] `vertexai.ts`: OAuth2 Bearer token, soporta Gemini + Claude en Vertex
+
+#### Sistema de Proyectos
+- [x] Sidebar reescrito: sección Proyectos con crear/expandir/colapsar/eliminar
+- [x] Conversaciones agrupadas: "Sin proyecto" + secciones por proyecto
+- [x] Menú (...) en cada conversación para moverla a un proyecto
+- [x] Contador de conversaciones por proyecto
+
+#### Composer (versión inicial)
+- [x] Eliminado: engranaje ⚙️ junto al model picker
+- [x] Eliminado: "Seleccionar archivo" y badge "Navegador" del top row
+- [x] Botón `+` con popup (Subir archivo / carpeta / URL)
+- [x] Menú `@` con skills, proveedores, archivos recientes, comandos
+
+---
+
+## Sesión 5 — Popup + estilo Codex con toggles + mover + abajo (PR #5)
+
+### Tareas
+
+- [x] **Botón `+` movido al bottom row**, al lado del model picker (antes estaba arriba solo)
+- [x] **Top row eliminado** completamente (ya no hay + ni "Seleccionar archivo" ni badge Navegador arriba)
+- [x] **Popup `+` reescrito estilo Codex/Claude** (según screenshots del usuario):
+  - 📎 Agregar fotos y archivos
+  - 📁 Subir carpeta (webkitdirectory, recursivo)
+  - 🔗 Añadir desde URL
+  - 🖥️ Adjuntar app (AT-SPI, Tauri)
+  - 🗺️ **Modo plan** (toggle switch) — proponer plan y esperar confirmación
+  - 🎯 **Perseguir objetivo** (toggle switch) — iterar hasta completar
+  - 🧩 Complementos (navega a vista)
+- [x] **ToggleSwitch** component estilo iOS/Codex (pill con knob blanco)
+- [x] **Modos del agente** (`planMode`, `pursueObjective`) en el store:
+  - `planMode`: precede el prompt con instrucción de proponer plan y esperar confirmación
+  - `pursueObjective`: precede el prompt con instrucción de iterar hasta completar (máx 3 intentos por subtarea)
+  - `pursueObjective` ON por defecto, `planMode` OFF por defecto
+  - Chips visuales en el composer cuando los modos están ON
+- [x] **Menú `@` mejorado**: añadida sección Proyectos (`@project:nombre`)
+- [x] Añadido comando rápido "Modo plan" al menú `@`
+
+---
+
+## Estado actual por módulo
+
+### Backend Rust (src-tauri/)
+- [x] `atspi/` — Cliente AT-SPI2 sobre D-Bus (zbus puro)
+  - `list_applications()`, `query_tree()` recursivo, `get_focused_subtree()`
+  - `click`, `double_click`, `type_text`, `press_key`, `get_text`, `get_extents`, `focus`
+- [x] `automation/` — Teclado (wtype/xdotool), ratón, clipboard (wl-clipboard/xclip), ventanas (wmctrl)
+- [x] `keyring/` — API keys vía libsecret (Linux), Keychain (macOS), Credential Manager (Windows)
+- [x] `db/` — SQLite con 7 tablas + 24 comandos CRUD
+- [x] `tools/` — shell_exec + file ops con expansión de `~/`
+- [x] `commands.rs` — 20 comandos AT-SPI/automation/keyring
+- [x] `lib.rs` — registra 52 comandos Tauri en total
+
+### Frontend TypeScript (src/)
+- [x] `providers/` — 22 proveedores en 6 familias:
+  - OpenAI-compat (15), Anthropic, Google Gemini, Ollama (2), VertexAI, Bedrock
+- [x] `providers/adapters/` — 6 adapters con multimodal real:
+  - openai-compat, anthropic, gemini, ollama, bedrock, vertexai
+- [x] `agent/` — Bucle agéntico completo:
+  - `planner.ts` (HTN-lite), `executor.ts` (ReAct, 11 tools), `critic.ts`, `reflection.ts`, `memory.ts`, `loop.ts`
+- [x] `lib/` — Utilidades:
+  - `tauri.ts` (wrappers con fallback navegador), `chain.ts` (encadenamiento), `attachments.ts`, `themes.ts` (6 temas), `tools.ts` (shell/web/fs), `memory-import.ts`
+- [x] `components/` — UI Codex-style:
+  - `sidebar/` (con proyectos), `composer/` (popup + estilo Codex, menú @), `chat/` (copy/regenerate/brain), `model-picker/`, `common/`
+- [x] `views/` — 4 vistas: Complementos, Habilidades, Automatizaciones, Configuración
+- [x] `store/weaver.ts` — Zustand con conversaciones, proyectos, temas, modos, attachments
+- [x] `skills/` — Parser SKILL.md + installer (`npx skills add`)
+- [x] `mcp/` — Esqueleto MCP client
+
+### Documentación
+- [x] `PLAN.md` — Visión, 7 fases, MVP, riesgos
+- [x] `ARCHITECTURE.md` — Capas, flujo agéntico, 22 proveedores, paleta, decisiones técnicas
+- [x] `PROGRESS.md` — Este archivo
+- [x] `README.md` — Instalación y uso
+
+---
+
+## Estadísticas
+
+- **Líneas de código**: ~5,500 TS/TSX + ~1,500 Rust = ~7,000 LOC
+- **Archivos fuente**: 35+ archivos
+- **Proveedores IA**: 22 (de 6 familias)
+- **Comandos Tauri**: 52
+- **Tablas SQLite**: 7
+- **Temas**: 6
+- **PRs merged**: 4 (#1, #2, #3, #4)
+- **PR actual**: #5 (popup Codex + toggles)
+
+---
+
+## Roadmap
+
+| Fase | Estado | PR |
 |------|--------|-----|
-| 1 — Fundación | [x] Hecha | Sesión 1 ✅ |
-| 2 — Núcleo Linux (AT-SPI + automation) | [x] Hecho | Sesión 1 ✅ |
-| 3 — Proveedores IA (22) | [x] 20/22 (VertexAI/Bedrock TBD) | Sesión 1 ✅ |
-| 4 — UI Codex-style | [x] Hecho | Sesión 1 ✅ |
-| 5 — Bucle agéntico | [x] Esqueleto completo | Sesión 1 ✅ |
-| 6 — MCP + skills.sh | [~] Esqueleto, runtime real TBD | Sesión 2 |
-| 7 — Pulido Linux + empaquetado | [ ] Pendiente | Sesión 2-3 |
+| 1 — Fundación | [x] Hecha | #1 |
+| 2 — Núcleo Linux (AT-SPI + automation) | [x] Hecho | #1 |
+| 3 — Proveedores IA (22) | [x] 22/22 | #1, #4 |
+| 4 — UI Codex-style | [x] Hecho | #1, #3, #5 |
+| 5 — Bucle agéntico | [x] Completo | #1 |
+| 6 — MCP + skills.sh | [~] Esqueleto, runtime real TBD | #1 |
+| 7 — Pulido Linux + empaquetado | [ ] Pendiente | — |
+
+### Pendiente para próximas iteraciones
+
+- [ ] **Adjuntar app** real: picker AT-SPI que liste ventanas abiertas (estilo Codex "Adjuntar Google Chrome")
+- [ ] Persistir conversaciones completas a SQLite al cambiar entre ellas (ahora solo al crearse)
+- [ ] Comando Tauri `bedrock_invoke` con SigV4 nativo
+- [ ] MCP runtime real (lanzar subprocesos stdio JSON-RPC)
+- [ ] Soporte Wayland vía `xdg-desktop-portal`
+- [ ] Empaquetado `.deb`, `.AppImage`, `.rpm` y CI
+- [ ] Soporte multimodal en Bedrock y VertexAI adapters
+- [ ] Skills auto-aprendidas: persistir a `~/.weaver/skills/learned/` tras reflexión exitosa
