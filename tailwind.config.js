@@ -4,29 +4,29 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Weaver Codex-like palette (see ARCHITECTURE.md §7)
+        // Weaver Codex-like palette mapped to CSS variables (see ARCHITECTURE.md §7)
         app: {
-          bg: '#0E0F0C',
-          sidebar: '#171915',
-          elevated: '#1E211D',
-          input: '#232722',
+          bg: 'var(--bg-app)',
+          sidebar: 'var(--bg-sidebar)',
+          elevated: 'var(--bg-elevated)',
+          input: 'var(--bg-input)',
         },
         border: {
-          DEFAULT: '#2C302B',
-          accent: '#3A3F38',
+          DEFAULT: 'var(--border)',
+          accent: 'var(--border-accent)',
         },
         text: {
-          primary: '#F4F4F0',
-          secondary: '#9CA3A0',
-          muted: '#6B736E',
+          primary: 'var(--text-primary)',
+          secondary: 'var(--text-secondary)',
+          muted: 'var(--text-muted)',
         },
         accent: {
-          DEFAULT: '#8FB89B',
-          strong: '#A8C9B8',
+          DEFAULT: 'var(--accent)',
+          strong: 'var(--accent-strong)',
         },
-        danger: '#E07A5F',
-        warning: '#E8B86A',
-        success: '#7BAE7F',
+        danger: 'var(--danger)',
+        warning: 'var(--warning)',
+        success: 'var(--success)',
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif'],
