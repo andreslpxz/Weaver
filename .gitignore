@@ -1,0 +1,29 @@
+# dependencies
+node_modules/
+dist/
+dist-ssr/
+
+# editor / OS
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# rust / tauri
+src-tauri/target/
+src-tauri/Cargo.lock
+src-tauri/gen/schemas/
+
+# logs
+*.log
+npm-debug.log*
+
+# weaver local data (when running)
+.weaver/
+
+# TS build artifacts
+*.tsbuildinfo
+vite.config.d.ts
+vite.config.js
