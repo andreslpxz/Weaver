@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -6,8 +7,22 @@ import { cn } from '@/components/common/Button';
 import type { Message } from '@/providers/types';
 import { useWeaver } from '@/store/weaver';
 import type { Subtask, TraceStep } from '@/agent/types';
-import { CheckCircle2, Circle, Loader2, XCircle, ChevronDown, ChevronRight } from 'lucide-react';
-import { useState } from 'react';
+import {
+  CheckCircle2,
+  Circle,
+  Loader2,
+  XCircle,
+  ChevronDown,
+  ChevronRight,
+  Brain,
+  Copy,
+  Check,
+  RefreshCw,
+  FileText,
+  Image as ImageIcon,
+  File as FileIcon,
+} from 'lucide-react';
+import { formatSize } from '@/lib/attachments';
 
 export function MessageList() {
   const conversation = useWeaver((s) =>
@@ -21,7 +36,7 @@ export function MessageList() {
       <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
         {conversation.messages.length === 0 && <EmptyState />}
         {conversation.messages.map((msg, i) => (
-          <MessageBubble key={i} msg={msg} />
+          <MessageBubble key={msg.id ?? i} msg={msg} />
         ))}
         {conversation.plan && <PlanCard plan={conversation.plan} />}
         {Object.entries(conversation.traces).map(([sid, steps]) =>
@@ -42,11 +57,9 @@ function EmptyState() {
         accesibilidad AT-SPI, verificará y reflexionará para aprender.
       </p>
       <div className="mt-8 grid grid-cols-1 gap-2 max-w-md w-full">
-        <Suggestion
-          text="Abre gedit y escribe 'Hola desde Weaver', luego guárdalo en ~/weaver-test.txt"
-        />
-        <Suggestion text="Copia el contenido de la ventana activa y pégalo en un nuevo correo" />
-        <Suggestion text="Lee los títulos de las pestañas abiertas en Firefox" />
+        <Suggestion text="Abre gedit y escribe 'Hola desde Weaver', luego guárdalo en ~/weaver-test.txt" />
+        <Suggestion text="Busca en internet las últimas noticias de IA y haz un resumen" />
+        <Suggestion text="Lee el archivo /etc/os-release y dime qué distro es" />
       </div>
     </div>
   );
@@ -76,73 +89,165 @@ function useSuggestionSetter() {
 function MessageBubble({ msg }: { msg: Message }) {
   const isUser = msg.role === 'user';
   const isTool = msg.role === 'tool';
+  const isAssistant = msg.role === 'assistant';
+  const [showReasoning, setShowReasoning] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const regenerate = useWeaver((s) => s.regenerateMessage);
+  const isRunning = useWeaver((s) => {
+    const c = s.conversations.find((cc) => cc.id === s.activeConversationId);
+    return c?.agentState !== 'idle' && c?.agentState !== 'error';
+  });
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(msg.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // ignore
+    }
+  };
+
   return (
-    <div
-      className={cn(
-        'selectable',
-        isUser && 'flex justify-end',
-        isTool && 'text-xs text-text-muted font-mono',
+    <div className="group selectable">
+      {/* Reasoning toggle (cerebro) — solo si hay reasoning y es assistant */}
+      {isAssistant && msg.reasoning && msg.reasoning.trim() && (
+        <button
+          onClick={() => setShowReasoning((v) => !v)}
+          className="inline-flex items-center gap-1 text-xs text-text-muted hover:text-accent mb-1.5 transition-colors"
+          title="Mostrar/ocultar razonamiento"
+        >
+          <Brain size={12} />
+          {showReasoning ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+          Razonamiento
+        </button>
       )}
-    >
+      {isAssistant && showReasoning && msg.reasoning && (
+        <div
+          className="text-xs leading-relaxed mb-2 px-3 py-2 rounded-codex bg-app-bg border border-border"
+          style={{ color: 'var(--text-muted)', opacity: 0.75 }}
+        >
+          <pre className="whitespace-pre-wrap font-sans">{msg.reasoning}</pre>
+        </div>
+      )}
+
+      {/* Contenido del mensaje */}
       {isUser ? (
-        <div className="bg-app-elevated border border-border rounded-codex px-3 py-2 max-w-[80%]">
-          <div className="text-sm whitespace-pre-wrap">{msg.content}</div>
+        <div className="flex justify-end">
+          <div className="bg-app-elevated border border-border rounded-codex px-3 py-2 max-w-[85%]">
+            <div className="text-sm whitespace-pre-wrap">{msg.content}</div>
+            {msg.attachments && msg.attachments.length > 0 && (
+              <div className="mt-2 pt-2 border-t border-border space-y-1">
+                {msg.attachments.map((a) => (
+                  <div key={a.id} className="flex items-center gap-1.5 text-xs text-text-secondary">
+                    {a.kind === 'text' ? (
+                      <FileText size={11} className="text-accent" />
+                    ) : a.kind === 'image' ? (
+                      <ImageIcon size={11} className="text-warning" />
+                    ) : (
+                      <FileIcon size={11} className="text-text-muted" />
+                    )}
+                    <span className="truncate flex-1">{a.name}</span>
+                    <span className="text-text-muted">{formatSize(a.size)}</span>
+                    {a.truncated && <span className="text-warning text-[10px]">trunc</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       ) : isTool ? (
         <div className="border-l-2 border-border-accent pl-2 py-1">
           <div className="text-xs opacity-70 mb-1">tool result</div>
-          <div className="whitespace-pre-wrap">{msg.content}</div>
+          <div className="whitespace-pre-wrap text-xs text-text-muted">{msg.content}</div>
         </div>
       ) : (
         <div className="max-w-none text-sm leading-relaxed">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-              code({ className, children, ...props }) {
-                const match = /language-(\w+)/.exec(className || '');
-                const isInline = !className;
-                return !isInline && match ? (
-                  <SyntaxHighlighter
-                    language={match[1]}
-                    style={vscDarkPlus}
-                    customStyle={{
-                      background: 'var(--bg-app)',
-                      border: '1px solid var(--border)',
-                      borderRadius: '0.5rem',
-                      fontSize: '0.8125rem',
-                    }}
-                  >
-                    {String(children).replace(/\n$/, '')}
-                  </SyntaxHighlighter>
-                ) : (
-                  <code
-                    className="px-1 py-0.5 rounded bg-app-elevated text-xs font-mono"
-                    {...props}
-                  >
+          {msg.content.trim() === '' && isRunning ? (
+            <div className="flex items-center gap-2 text-text-muted text-xs">
+              <Loader2 size={12} className="animate-spin" />
+              pensando…
+            </div>
+          ) : (
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                code({ className, children, ...props }) {
+                  const match = /language-(\w+)/.exec(className || '');
+                  const isInline = !className;
+                  return !isInline && match ? (
+                    <SyntaxHighlighter
+                      language={match[1]}
+                      style={vscDarkPlus}
+                      customStyle={{
+                        background: 'var(--bg-app)',
+                        border: '1px solid var(--border)',
+                        borderRadius: '0.5rem',
+                        fontSize: '0.8125rem',
+                      }}
+                    >
+                      {String(children).replace(/\n$/, '')}
+                    </SyntaxHighlighter>
+                  ) : (
+                    <code
+                      className="px-1 py-0.5 rounded bg-app-elevated text-xs font-mono"
+                      {...props}
+                    >
+                      {children}
+                    </code>
+                  );
+                },
+                p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
+                ul: ({ children }) => <ul className="list-disc pl-5 mb-3 space-y-1">{children}</ul>,
+                ol: ({ children }) => <ol className="list-decimal pl-5 mb-3 space-y-1">{children}</ol>,
+                h1: ({ children }) => <h1 className="text-lg font-semibold mb-3 mt-4">{children}</h1>,
+                h2: ({ children }) => <h2 className="text-base font-semibold mb-2 mt-3">{children}</h2>,
+                h3: ({ children }) => <h3 className="text-sm font-semibold mb-2 mt-2">{children}</h3>,
+                a: ({ children, href }) => (
+                  <a href={href} target="_blank" rel="noreferrer" className="text-accent hover:underline">
                     {children}
-                  </code>
-                );
-              },
-              p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
-              ul: ({ children }) => <ul className="list-disc pl-5 mb-3 space-y-1">{children}</ul>,
-              ol: ({ children }) => <ol className="list-decimal pl-5 mb-3 space-y-1">{children}</ol>,
-              h1: ({ children }) => <h1 className="text-lg font-semibold mb-3 mt-4">{children}</h1>,
-              h2: ({ children }) => <h2 className="text-base font-semibold mb-2 mt-3">{children}</h2>,
-              h3: ({ children }) => <h3 className="text-sm font-semibold mb-2 mt-2">{children}</h3>,
-              a: ({ children, href }) => (
-                <a href={href} target="_blank" rel="noreferrer" className="text-accent hover:underline">
-                  {children}
-                </a>
-              ),
-              blockquote: ({ children }) => (
-                <blockquote className="border-l-2 border-border-accent pl-3 text-text-secondary italic mb-3">
-                  {children}
-                </blockquote>
-              ),
-            }}
-          >
-            {msg.content}
-          </ReactMarkdown>
+                  </a>
+                ),
+                blockquote: ({ children }) => (
+                  <blockquote className="border-l-2 border-border-accent pl-3 text-text-secondary italic mb-3">
+                    {children}
+                  </blockquote>
+                ),
+                table: ({ children }) => (
+                  <div className="overflow-x-auto mb-3">
+                    <table className="border-collapse border border-border text-xs">{children}</table>
+                  </div>
+                ),
+                th: ({ children }) => <th className="border border-border p-2 bg-app-elevated">{children}</th>,
+                td: ({ children }) => <td className="border border-border p-2">{children}</td>,
+              }}
+            >
+              {msg.content}
+            </ReactMarkdown>
+          )}
+
+          {/* Botones de acción bajo el mensaje: copiar + regenerar */}
+          {msg.content.trim() !== '' && (
+            <div className="flex items-center gap-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button
+                onClick={handleCopy}
+                className="codex-icon-btn w-6 h-6"
+                title="Copiar mensaje"
+              >
+                {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
+              </button>
+              {msg.id && (
+                <button
+                  onClick={() => regenerate(msg.id!)}
+                  disabled={isRunning}
+                  className="codex-icon-btn w-6 h-6 disabled:opacity-40"
+                  title="Regenerar respuesta"
+                >
+                  <RefreshCw size={11} className={isRunning ? 'animate-spin' : ''} />
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

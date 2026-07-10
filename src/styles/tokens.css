@@ -3,8 +3,8 @@
 @tailwind utilities;
 
 @layer base {
+  /* Tema por defecto (Sage Dark). Los demás se aplican vía JS en lib/themes.ts */
   :root {
-    /* Weaver Codex-like palette (ver ARCHITECTURE.md §7) */
     --bg-app: #0e0f0c;
     --bg-sidebar: #171915;
     --bg-elevated: #1e211d;
@@ -39,6 +39,7 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     user-select: none;
+    transition: background-color 0.2s ease, color 0.2s ease;
   }
 
   /* Scrollbar minimalista */
@@ -54,39 +55,71 @@
     border-radius: 4px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #4a4f48;
+    background: var(--text-muted);
   }
 }
 
 @layer components {
   .codex-card {
-    @apply bg-app-elevated border border-border rounded-codex;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
   }
   .codex-input {
-    @apply bg-app-input border border-border rounded-codex text-text-primary placeholder:text-text-muted;
-    @apply focus:outline-none focus:border-accent transition-colors;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    color: var(--text-primary);
+  }
+  .codex-input::placeholder {
+    color: var(--text-muted);
+  }
+  .codex-input:focus {
+    outline: none;
+    border-color: var(--accent);
   }
   .codex-btn {
-    @apply inline-flex items-center justify-center gap-2 px-3 py-1.5 rounded-codex;
-    @apply text-text-secondary hover:text-text-primary hover:bg-app-elevated transition-colors;
-    @apply text-sm font-medium cursor-pointer;
+    @apply inline-flex items-center justify-center gap-2 px-3 py-1.5 rounded-codex text-sm font-medium cursor-pointer;
+    color: var(--text-secondary);
+    transition: background-color 0.15s, color 0.15s;
+  }
+  .codex-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-elevated);
   }
   .codex-btn-primary {
-    @apply bg-accent text-app-bg hover:bg-accent-strong;
+    background: var(--accent);
+    color: var(--bg-app);
+  }
+  .codex-btn-primary:hover {
+    background: var(--accent-strong);
+    color: var(--bg-app);
   }
   .codex-icon-btn {
-    @apply inline-flex items-center justify-center w-7 h-7 rounded-codex;
-    @apply text-text-muted hover:text-text-primary hover:bg-app-elevated transition-colors cursor-pointer;
+    @apply inline-flex items-center justify-center w-7 h-7 rounded-codex cursor-pointer;
+    color: var(--text-muted);
+    transition: background-color 0.15s, color 0.15s;
+  }
+  .codex-icon-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-elevated);
   }
   .sidebar-item {
     @apply flex items-center gap-2 px-2 py-1.5 rounded-codex text-sm cursor-pointer;
-    @apply text-text-secondary hover:text-text-primary hover:bg-app-elevated transition-colors;
+    color: var(--text-secondary);
+    transition: background-color 0.15s, color 0.15s;
+  }
+  .sidebar-item:hover {
+    color: var(--text-primary);
+    background: var(--bg-elevated);
   }
   .sidebar-item.active {
-    @apply bg-app-elevated text-text-primary;
+    background: var(--bg-elevated);
+    color: var(--text-primary);
   }
   .sidebar-section-title {
-    @apply text-xs uppercase tracking-wider text-text-muted font-medium px-2 mt-3 mb-1;
+    @apply text-xs uppercase tracking-wider font-medium px-2 mt-3 mb-1;
+    color: var(--text-muted);
   }
 }
 
