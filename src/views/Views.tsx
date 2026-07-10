@@ -4,6 +4,7 @@ import { mcpClient, type McpServer } from '@/mcp/client';
 import { skillsRegistry, type Skill } from '@/skills/registry';
 import { skillsInstaller } from '@/skills/installer';
 import { Badge, Button } from '@/components/common/Button';
+import { runtime } from '@/lib/tauri';
 
 // ============================================================================
 // ComplementosView — MCP servers + Skills importadas (skills.sh)
@@ -315,7 +316,31 @@ export function ConfiguracionView() {
           </p>
         </div>
 
-        <SettingCard title="Accesibilidad AT-SPI" desc="Requerido para que el agente opere otras apps.">
+        <SettingCard
+          title="Modo de ejecución"
+          desc="Determina qué capacidades están disponibles."
+        >
+          <div className="flex items-center gap-2">
+            <Badge color={runtime.isTauri ? 'success' : 'warning'}>
+              {runtime.isTauri ? 'Tauri webview' : 'Navegador (dev)'}
+            </Badge>
+            <span className="text-xs text-text-muted">{runtime.describe()}</span>
+          </div>
+          {runtime.isBrowser && (
+            <div className="mt-3 p-3 rounded-codex bg-warning/10 border border-warning/30 text-xs text-text-secondary space-y-2">
+              <div className="font-medium text-warning">Estás en modo navegador</div>
+              <div>
+                En este modo las API keys se guardan en <code>localStorage</code> (no es seguro, sólo para desarrollo) y las tareas agénticas (AT-SPI, automatización) no están disponibles.
+              </div>
+              <div>
+                Para acceso completo ejecuta:{' '}
+                <code className="px-1 py-0.5 rounded bg-app-bg">npm run tauri:dev</code>
+              </div>
+            </div>
+          )}
+        </SettingCard>
+
+        <SettingCard title="Accesibilidad AT-SPI" desc="Requerido para que el agente opere otras apps (sólo en modo Tauri).">
           <code className="text-xs">gsettings set org.gnome.desktop.interface toolkit-accessibility true</code>
         </SettingCard>
 

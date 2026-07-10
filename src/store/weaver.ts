@@ -14,6 +14,7 @@ import type { AgentEvent } from '@/agent/loop';
 import type { Plan, Subtask, TraceStep } from '@/agent/types';
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, getProvider } from '@/providers/registry';
 import { apiKeyStore } from '@/providers/store';
+import type { Attachment } from '@/lib/attachments';
 
 export type ViewId = 'chat' | 'complementos' | 'habilidades' | 'automatizaciones' | 'configuracion';
 
@@ -38,6 +39,13 @@ interface WeaverState {
 
   modelPickerOpen: boolean;
   setModelPickerOpen: (open: boolean) => void;
+
+  // --- Adjuntos (draft del composer, no persistidos por conversación) ---
+  draftAttachments: Attachment[];
+  addDraftAttachment: (att: Attachment) => void;
+  addDraftAttachments: (atts: Attachment[]) => void;
+  removeDraftAttachment: (id: string) => void;
+  clearDraftAttachments: () => void;
 
   // --- Conversaciones ---
   conversations: Conversation[];
@@ -74,6 +82,18 @@ export const useWeaver = create<WeaverState>((set, get) => ({
 
   modelPickerOpen: false,
   setModelPickerOpen: (open) => set({ modelPickerOpen: open }),
+
+  // --- Adjuntos ---
+  draftAttachments: [],
+  addDraftAttachment: (att) =>
+    set((s) => ({ draftAttachments: [...s.draftAttachments, att] })),
+  addDraftAttachments: (atts) =>
+    set((s) => ({ draftAttachments: [...s.draftAttachments, ...atts] })),
+  removeDraftAttachment: (id) =>
+    set((s) => ({
+      draftAttachments: s.draftAttachments.filter((a) => a.id !== id),
+    })),
+  clearDraftAttachments: () => set({ draftAttachments: [] }),
 
   // --- Conversaciones ---
   conversations: [],
