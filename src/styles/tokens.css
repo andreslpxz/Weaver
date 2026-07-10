@@ -1,0 +1,97 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Weaver Codex-like palette (ver ARCHITECTURE.md §7) */
+    --bg-app: #0e0f0c;
+    --bg-sidebar: #171915;
+    --bg-elevated: #1e211d;
+    --bg-input: #232722;
+    --border: #2c302b;
+    --border-accent: #3a3f38;
+    --text-primary: #f4f4f0;
+    --text-secondary: #9ca3a0;
+    --text-muted: #6b736e;
+    --accent: #8fb89b;
+    --accent-strong: #a8c9b8;
+    --danger: #e07a5f;
+    --warning: #e8b86a;
+    --success: #7bae7f;
+  }
+
+  * {
+    border-color: var(--border);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg-app);
+    color: var(--text-primary);
+    font-feature-settings: 'cv11', 'ss01', 'ss03';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    user-select: none;
+  }
+
+  /* Scrollbar minimalista */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-accent);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #4a4f48;
+  }
+}
+
+@layer components {
+  .codex-card {
+    @apply bg-app-elevated border border-border rounded-codex;
+  }
+  .codex-input {
+    @apply bg-app-input border border-border rounded-codex text-text-primary placeholder:text-text-muted;
+    @apply focus:outline-none focus:border-accent transition-colors;
+  }
+  .codex-btn {
+    @apply inline-flex items-center justify-center gap-2 px-3 py-1.5 rounded-codex;
+    @apply text-text-secondary hover:text-text-primary hover:bg-app-elevated transition-colors;
+    @apply text-sm font-medium cursor-pointer;
+  }
+  .codex-btn-primary {
+    @apply bg-accent text-app-bg hover:bg-accent-strong;
+  }
+  .codex-icon-btn {
+    @apply inline-flex items-center justify-center w-7 h-7 rounded-codex;
+    @apply text-text-muted hover:text-text-primary hover:bg-app-elevated transition-colors cursor-pointer;
+  }
+  .sidebar-item {
+    @apply flex items-center gap-2 px-2 py-1.5 rounded-codex text-sm cursor-pointer;
+    @apply text-text-secondary hover:text-text-primary hover:bg-app-elevated transition-colors;
+  }
+  .sidebar-item.active {
+    @apply bg-app-elevated text-text-primary;
+  }
+  .sidebar-section-title {
+    @apply text-xs uppercase tracking-wider text-text-muted font-medium px-2 mt-3 mb-1;
+  }
+}
+
+/* Permitir selección en mensajes de chat */
+.selectable,
+.selectable * {
+  user-select: text;
+}
