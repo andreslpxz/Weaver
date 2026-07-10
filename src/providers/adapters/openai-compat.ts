@@ -104,12 +104,26 @@ export class OpenAICompatProvider implements LLMProvider {
   private buildBody(opts: ChatOptions): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model: opts.model,
-      messages: opts.messages.map((m) => ({
-        role: m.role,
-        content: m.content,
-        ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
-        ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
-      })),
+      messages: opts.messages.map((m) => {
+        // Multimodal: si el mensaje tiene imágenes, enviar content como array.
+        if (m.images && m.images.length > 0 && (m.role === 'user' || m.role === 'assistant')) {
+          const content: unknown[] = [];
+          if (m.content) content.push({ type: 'text', text: m.content });
+          for (const img of m.images) {
+            content.push({
+              type: 'image_url',
+              image_url: { url: img.dataUrl, detail: 'auto' },
+            });
+          }
+          return { role: m.role, content };
+        }
+        return {
+          role: m.role,
+          content: m.content,
+          ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
+          ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
+        };
+      }),
       stream: true,
       stream_options: { include_usage: true },
     };

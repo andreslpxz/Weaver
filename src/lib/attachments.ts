@@ -147,46 +147,74 @@ function makeThumbnail(file: File, maxDim: number): Promise<string | undefined> 
 }
 
 /**
- * Construye el texto del mensaje de usuario con attachments embebidos.
- * Los archivos de texto se incluyen entre fences con el lenguaje detectado.
- * Las imágenes se mencionan con metadata.
- * Los binarios se mencionan con nombre + tamaño.
+ * Construye el texto del mensaje de usuario con attachments.
+ *
+ * Estrategia MEJORADA: en lugar de embeber TODO el contenido como un code block
+ * gigante (que se ve feo en la UI y satura el contexto), genera un "contexto de
+ * archivos" estructurado y legible. El contenido de texto se incluye entre
+ * fences con cabecera clara; las imágenes y binarios como metadata.
+ *
+ * El callback `onRendered` recibe la versión "UI" del prompt (sin el contenido
+ * embebido de archivos) que se muestra al usuario en la burbuja del chat.
  */
-export function buildMessageWithAttachments(prompt: string, attachments: Attachment[]): string {
-  if (attachments.length === 0) return prompt;
+export interface BuiltMessage {
+  /** Texto completo enviado al LLM (con contenido embebido). */
+  toLLM: string;
+  /** Texto corto mostrado en la burbuja de chat del usuario (sin contenido). */
+  toUI: string;
+}
 
-  const parts: string[] = [];
-  if (prompt.trim()) parts.push(prompt);
+export function buildMessageWithAttachments(
+  prompt: string,
+  attachments: Attachment[],
+): BuiltMessage {
+  if (attachments.length === 0) {
+    return { toLLM: prompt, toUI: prompt };
+  }
+
+  const llmParts: string[] = [];
+  if (prompt.trim()) llmParts.push(prompt);
+  llmParts.push('');
+  llmParts.push('--- Contexto de archivos adjuntos ---');
+  llmParts.push('');
+
+  const uiParts: string[] = [];
+  if (prompt.trim()) uiParts.push(prompt);
+  uiParts.push('');
+  uiParts.push('📎 Archivos adjuntos:');
 
   const textAtts = attachments.filter((a) => a.kind === 'text');
   const imageAtts = attachments.filter((a) => a.kind === 'image');
   const binaryAtts = attachments.filter((a) => a.kind === 'binary');
 
-  if (textAtts.length > 0 || imageAtts.length > 0 || binaryAtts.length > 0) {
-    parts.push('');
-    parts.push('--- Archivos adjuntos ---');
-  }
-
   for (const a of textAtts) {
     const ext = getExt(a.name);
     const lang = ext === 'md' ? 'markdown' : ext === 'py' ? 'python' : ext;
-    parts.push('');
-    parts.push(`### ${a.name} (${formatSize(a.size)}${a.truncated ? ', TRUNCADO' : ''})`);
-    parts.push('');
-    parts.push('```' + lang);
-    parts.push(a.content ?? '');
-    parts.push('```');
+    uiParts.push(`  • 📄 ${a.name} (${formatSize(a.size)}${a.truncated ? ', truncado' : ''})`);
+
+    llmParts.push(`### 📄 ${a.name}`);
+    llmParts.push(`Tamaño: ${formatSize(a.size)}${a.truncated ? ' (TRUNCADO a 50k chars)' : ''}`);
+    llmParts.push('');
+    llmParts.push('```' + lang);
+    llmParts.push(a.content ?? '');
+    llmParts.push('```');
+    llmParts.push('');
   }
 
   for (const a of imageAtts) {
-    parts.push(`- Imagen: ${a.name} (${formatSize(a.size)})`);
+    uiParts.push(`  • 🖼️ ${a.name} (${formatSize(a.size)})`);
+    llmParts.push(`- 🖼️ Imagen: ${a.name} (${formatSize(a.size)}, ${a.mime})`);
   }
 
   for (const a of binaryAtts) {
-    parts.push(`- Archivo: ${a.name} (${formatSize(a.size)}, ${a.mime})`);
+    uiParts.push(`  • 📦 ${a.name} (${formatSize(a.size)})`);
+    llmParts.push(`- 📦 Archivo binario: ${a.name} (${formatSize(a.size)}, ${a.mime})`);
   }
 
-  return parts.join('\n');
+  return {
+    toLLM: llmParts.join('\n'),
+    toUI: uiParts.join('\n'),
+  };
 }
 
 /**

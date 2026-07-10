@@ -9,9 +9,20 @@ import {
   ConfiguracionView,
 } from '@/views/Views';
 import { useWeaver } from '@/store/weaver';
+import { initTheme } from '@/lib/themes';
 
 export default function App() {
-  const { view, newConversation } = useWeaver();
+  const { view, newConversation, themeId } = useWeaver();
+
+  // Inicializar tema al montar.
+  useEffect(() => {
+    initTheme();
+  }, []);
+
+  // Re-aplicar tema cuando cambie.
+  useEffect(() => {
+    initTheme();
+  }, [themeId]);
 
   // Inicializar conversación si no hay ninguna.
   useEffect(() => {

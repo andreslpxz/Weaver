@@ -52,7 +52,8 @@ export async function* runAgent(
     yield emit({ type: 'planning_started' });
 
     // Contexto para el planner.
-    const similar = memory.findSimilar(objectiveText, 2).map((e) => e.objective);
+    const similarEpisodes = await memory.findSimilar(objectiveText, 2);
+    const similar = similarEpisodes.map((e) => e.objective);
     const plan = await makePlan(provider, model, objective, { similarEpisodes: similar });
     yield emit({ type: 'plan_ready', plan });
 

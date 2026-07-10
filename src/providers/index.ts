@@ -12,6 +12,8 @@ import { OpenAICompatProvider } from './adapters/openai-compat';
 import { AnthropicProvider } from './adapters/anthropic';
 import { GeminiProvider } from './adapters/gemini';
 import { OllamaProvider } from './adapters/ollama';
+import { BedrockProvider } from './adapters/bedrock';
+import { VertexAIProvider } from './adapters/vertexai';
 import { apiKeyStore } from './store';
 
 export async function createProvider(id: ProviderId): Promise<LLMProvider> {
@@ -33,9 +35,9 @@ export async function createProvider(id: ProviderId): Promise<LLMProvider> {
     case 'google-gemini':
       return new GeminiProvider(info, apiKey);
     case 'vertexai':
-      throw new Error('VertexAI adapter aún no implementado (TODO Fase 6)');
+      return new VertexAIProvider(info, apiKey);
     case 'bedrock':
-      throw new Error('Bedrock adapter aún no implementado (TODO Fase 6)');
+      return new BedrockProvider(info, apiKey);
     default:
       throw new Error(`Familia no soportada: ${info.family}`);
   }

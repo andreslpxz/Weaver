@@ -16,6 +16,8 @@
  *   1. Confirma el dominio...
  */
 
+import { sqlite, runtime, type SkillRow } from '@/lib/tauri';
+
 export interface Skill {
   name: string;
   description: string;
@@ -28,26 +30,59 @@ export interface Skill {
 
 const STORE_KEY = 'weaver:skills:cache';
 
+function rowToSkill(row: SkillRow): Skill {
+  return {
+    name: row.name,
+    description: row.description,
+    triggers: safeParse(row.triggers_json, []),
+    toolsRequired: safeParse(row.tools_required_json, []),
+    body: row.body,
+    source: (row.source as Skill['source']) ?? 'installed',
+    filePath: row.file_path ?? undefined,
+  };
+}
+
+function safeParse<T>(json: string | null, fallback: T): T {
+  if (!json) return fallback;
+  try {
+    return JSON.parse(json) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 export const skillsRegistry = {
-  /** Carga todas las skills disponibles (instaladas + aprendidas). */
+  /** Carga todas las skills disponibles (SQLite en Tauri, localStorage en navegador). */
   async loadAll(): Promise<Skill[]> {
-    // MVP: leer de localStorage cache. En producción, via Tauri command
-    // `skills_list` que escanea ~/.weaver/skills/{installed,learned}/*.md.
-    const cached = readCache();
-    return cached;
+    if (runtime.isTauri) {
+      const rows = await sqlite.listSkills();
+      return rows.map(rowToSkill);
+    }
+    return readCache();
   },
 
   /** Devuelve skills cuyo trigger coincide con el objetivo del usuario. */
   async findRelevant(objective: string): Promise<Skill[]> {
     const all = await this.loadAll();
     const obj = objective.toLowerCase();
-    return all.filter((s) =>
-      s.triggers.some((t) => obj.includes(t.toLowerCase())),
-    );
+    return all.filter((s) => s.triggers.some((t) => obj.includes(t.toLowerCase())));
   },
 
-  /** Registra una skill en el cache local (tras ser instalada o aprendida). */
-  register(skill: Skill): void {
+  /** Registra una skill (SQLite en Tauri, localStorage en navegador). */
+  async register(skill: Skill): Promise<void> {
+    if (runtime.isTauri) {
+      const row: SkillRow = {
+        name: skill.name,
+        description: skill.description,
+        triggers_json: JSON.stringify(skill.triggers),
+        tools_required_json: JSON.stringify(skill.toolsRequired),
+        body: skill.body,
+        source: skill.source,
+        file_path: skill.filePath ?? null,
+      };
+      await sqlite.saveSkill(row);
+      return;
+    }
     const all = readCache();
     const idx = all.findIndex((s) => s.name === skill.name);
     if (idx >= 0) all[idx] = skill;
@@ -55,8 +90,12 @@ export const skillsRegistry = {
     writeCache(all);
   },
 
-  /** Elimina una skill del cache. */
-  unregister(name: string): void {
+  /** Elimina una skill. */
+  async unregister(name: string): Promise<void> {
+    if (runtime.isTauri) {
+      await sqlite.deleteSkill(name);
+      return;
+    }
     writeCache(readCache().filter((s) => s.name !== name));
   },
 };

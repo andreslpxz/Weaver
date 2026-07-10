@@ -27,12 +27,32 @@ export class AnthropicProvider implements LLMProvider {
   async stream(opts: ChatOptions): Promise<AsyncIterable<StreamChunk>> {
     if (!this.apiKey) throw new Error('Anthropic requiere API key');
 
+    // Multimodal: convertir mensajes con imágenes al formato Anthropic.
     const body = {
       model: opts.model,
       max_tokens: opts.maxTokens ?? 4096,
       messages: opts.messages
         .filter((m) => m.role !== 'system')
-        .map((m) => ({ role: m.role, content: m.content })),
+        .map((m) => {
+          if (m.images && m.images.length > 0 && m.role === 'user') {
+            const content: unknown[] = [];
+            if (m.content) content.push({ type: 'text', text: m.content });
+            for (const img of m.images) {
+              // Anthropic espera: { type: 'image', source: { type: 'base64', media_type, data } }
+              const base64 = img.dataUrl.split(',')[1] ?? '';
+              content.push({
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: img.mime,
+                  data: base64,
+                },
+              });
+            }
+            return { role: m.role, content };
+          }
+          return { role: m.role, content: m.content };
+        }),
       system: opts.messages.find((m) => m.role === 'system')?.content,
       stream: true,
       ...(opts.tools && opts.tools.length > 0
