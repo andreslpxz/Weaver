@@ -231,17 +231,19 @@ export async function importMemory(text: string): Promise<{
     const cat = f.category;
     counters[cat] = (counters[cat] ?? 0) + 1;
     const key = `imported:${source.toLowerCase()}:${cat}:${counters[cat]}`;
-    memory.setFact(key, f.text, 'user');
+    await memory.setFact(key, f.text, 'user');
     saved++;
   }
   // Marcar la fuente como importada
-  memory.setFact(`imported:${source.toLowerCase()}:_meta`, `Importado el ${new Date().toISOString()}`, 'system');
+  await memory.setFact(`imported:${source.toLowerCase()}:_meta`, `Importado el ${new Date().toISOString()}`, 'system');
   return { facts, source, saved };
 }
 
 /** Lista facts importados agrupados por source y categoría. */
-export function listImportedMemories(): { source: MemorySource; category: ImportedCategory; text: string }[] {
-  const all = memory.listFacts();
+export async function listImportedMemories(): Promise<
+  { source: MemorySource; category: ImportedCategory; text: string }[]
+> {
+  const all = await memory.listFacts();
   return all
     .filter((f) => f.key.startsWith('imported:'))
     .filter((f) => !f.key.endsWith(':_meta'))

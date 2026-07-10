@@ -38,7 +38,7 @@ export const skillsInstaller = {
         body: `(Skill instalada desde ${url}. Contenido cargado al próximo inicio.)`,
         source: 'installed',
       };
-      skillsRegistry.register(skill);
+      await skillsRegistry.register(skill);
       return { ok: true, skill, message: 'Instalada correctamente' };
     } catch (e) {
       return { ok: false, message: e instanceof Error ? e.message : String(e) };

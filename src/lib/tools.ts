@@ -10,8 +10,14 @@
  * fetch directo (con CORS proxy si hace falta); file ops no disponibles.
  */
 
-import { runtime, keyring } from './tauri';
+import { runtime, keyring, sqlite } from './tauri';
 import { invoke } from '@tauri-apps/api/core';
+
+// Re-usa los wrappers de lib/tauri.ts
+const invokeShellExec = sqlite.shellExec;
+const invokeFileRead = sqlite.fileRead;
+const invokeFileWrite = sqlite.fileWrite;
+const invokeFileList = sqlite.fileList;
 
 export interface ToolDef {
   name: string;
@@ -145,7 +151,7 @@ export async function dispatchAdvancedTool(
 // Shell + filesystem (requieren Tauri)
 // ============================================================================
 
-async function shellExec(command: string, cwd?: string, timeout = 30000): Promise<ToolExecResult> {
+async function shellExec(command: string, _cwd?: string, _timeout = 30000): Promise<ToolExecResult> {
   if (runtime.isBrowser) {
     return {
       ok: false,
@@ -154,9 +160,7 @@ async function shellExec(command: string, cwd?: string, timeout = 30000): Promis
     };
   }
   try {
-    const result = await invoke<{ stdout: string; stderr: string; code: number }>('tools_shell_exec', {
-      args: { command, cwd, timeout },
-    });
+    const result = await invokeShellExec(command, _cwd, _timeout);
     return {
       ok: result.code === 0,
       output: result.stdout + (result.stderr ? `\n[stderr]\n${result.stderr}` : ''),
@@ -172,7 +176,7 @@ async function fileRead(path: string): Promise<ToolExecResult> {
     return { ok: false, output: '', error: 'file_read solo disponible en modo Tauri.' };
   }
   try {
-    const content = await invoke<string>('tools_file_read', { args: { path } });
+    const content = await invokeFileRead(path);
     return { ok: true, output: content };
   } catch (e) {
     return { ok: false, output: '', error: String(e) };
@@ -184,7 +188,7 @@ async function fileWrite(path: string, content: string, createDirs: boolean): Pr
     return { ok: false, output: '', error: 'file_write solo disponible en modo Tauri.' };
   }
   try {
-    await invoke<void>('tools_file_write', { args: { path, content, create_dirs: createDirs } });
+    await invokeFileWrite(path, content, createDirs);
     return { ok: true, output: `Escrito: ${path} (${content.length} bytes)` };
   } catch (e) {
     return { ok: false, output: '', error: String(e) };
@@ -196,9 +200,7 @@ async function fileList(path: string): Promise<ToolExecResult> {
     return { ok: false, output: '', error: 'file_list solo disponible en modo Tauri.' };
   }
   try {
-    const entries = await invoke<Array<{ name: string; is_dir: boolean; size: number }>>('tools_file_list', {
-      args: { path },
-    });
+    const entries = await invokeFileList(path);
     const text = entries
       .map((e) => (e.is_dir ? `📁 ${e.name}/` : `📄 ${e.name} (${e.size} B)`))
       .join('\n');

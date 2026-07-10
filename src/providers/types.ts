@@ -54,6 +54,16 @@ export interface AttachmentRef {
   truncated?: boolean;
 }
 
+/** Imagen embebida como data URL base64 (multimodal real). */
+export interface ImageContent {
+  /** Data URL completa: "data:image/png;base64,iVBOR..." */
+  dataUrl: string;
+  /** MIME: image/png | image/jpeg | image/gif | image/webp */
+  mime: string;
+  /** Nombre original del archivo (para logging/debug). */
+  name: string;
+}
+
 export interface Message {
   role: MessageRole;
   content: string;
@@ -61,6 +71,8 @@ export interface Message {
   tool_calls?: ToolCall[];
   /** Referencias a adjuntos (no el contenido crudo, que vive en attachments[]) */
   attachments?: AttachmentRef[];
+  /** Imágenes embebidas para modelos multimodales (GPT-4o, Gemini, Claude). */
+  images?: ImageContent[];
   /** Razonamiento/chain-of-thought mostrado colapsable. */
   reasoning?: string;
   /** ID único del mensaje (para copy/regenerate). */

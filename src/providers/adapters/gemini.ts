@@ -21,10 +21,26 @@ export class GeminiProvider implements LLMProvider {
     const body = {
       contents: opts.messages
         .filter((m) => m.role !== 'system')
-        .map((m) => ({
-          role: m.role === 'assistant' ? 'model' : 'user',
-          parts: [{ text: m.content }],
-        })),
+        .map((m) => {
+          // Multimodal: Gemini usa parts con inline_data para imágenes.
+          const parts: unknown[] = [];
+          if (m.content) parts.push({ text: m.content });
+          if (m.images) {
+            for (const img of m.images) {
+              const base64 = img.dataUrl.split(',')[1] ?? '';
+              parts.push({
+                inline_data: {
+                  mime_type: img.mime,
+                  data: base64,
+                },
+              });
+            }
+          }
+          return {
+            role: m.role === 'assistant' ? 'model' : 'user',
+            parts,
+          };
+        }),
       systemInstruction: opts.messages.find((m) => m.role === 'system')?.content
         ? { parts: [{ text: opts.messages.find((m) => m.role === 'system')!.content }] }
         : undefined,

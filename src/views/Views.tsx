@@ -19,6 +19,7 @@ import { Badge, Button } from '@/components/common/Button';
 import { runtime } from '@/lib/tauri';
 import { THEMES, type ThemeId } from '@/lib/themes';
 import { useWeaver } from '@/store/weaver';
+import { memory } from '@/agent/memory';
 import {
   IMPORT_PROMPT,
   importMemory,
@@ -344,7 +345,7 @@ export function ConfiguracionView() {
       setTavilyHas(!!k);
       if (k) setTavilyKey(k);
     });
-    setImportedMemories(listImportedMemories());
+    listImportedMemories().then(setImportedMemories);
   }, []);
 
   async function saveTavily() {
@@ -379,7 +380,7 @@ export function ConfiguracionView() {
       const result = await importMemory(importText);
       setImportStatus(`✓ Importadas ${result.saved} entradas desde ${result.source}.`);
       setImportText('');
-      setImportedMemories(listImportedMemories());
+      listImportedMemories().then(setImportedMemories);
     } catch (e) {
       setImportStatus(`❌ Error: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -606,10 +607,12 @@ export function ConfiguracionView() {
               variant="danger"
               onClick={() => {
                 if (confirm('¿Borrar TODA la memoria episódica y semántica (incluida la importada)?')) {
-                  localStorage.removeItem('weaver:episodes');
-                  localStorage.removeItem('weaver:facts');
-                  setImportedMemories([]);
-                  alert('Memoria borrada.');
+                  memory.clearAll().then(() => {
+                    localStorage.removeItem('weaver:episodes');
+                    localStorage.removeItem('weaver:facts');
+                    listImportedMemories().then(setImportedMemories);
+                    alert('Memoria borrada.');
+                  });
                 }
               }}
             >

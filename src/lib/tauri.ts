@@ -250,7 +250,157 @@ export const runtime = {
   /** Devuelve un mensaje explicando el modo actual. Útil para mostrar en UI. */
   describe(): string {
     return isTauri
-      ? 'Tauri webview (acceso completo: AT-SPI, automatización, keyring OS)'
+      ? 'Tauri webview (acceso completo: AT-SPI, automatización, keyring OS, SQLite)'
       : 'Navegador (modo dev: API keys en localStorage, sin AT-SPI ni automatización)';
   },
+};
+
+// ============================================================================
+// SQLite (memoria, proyectos, conversaciones, skills) — sólo en Tauri
+// ============================================================================
+
+export interface EpisodeRow {
+  id: string;
+  objective: string;
+  plan_json: string;
+  started_at: number;
+  finished_at: number | null;
+  outcome: string;
+  lessons_json: string | null;
+  skill_generated: string | null;
+  project_id: string | null;
+}
+
+export interface FactRow {
+  key: string;
+  value: string;
+  source: string;
+  updated_at: number;
+}
+
+export interface ProjectRow {
+  id: string;
+  name: string;
+  color: string | null;
+  created_at: number;
+}
+
+export interface ConversationRow {
+  id: string;
+  project_id: string | null;
+  title: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface MessageRow {
+  id: string;
+  conversation_id: string;
+  role: string;
+  content: string;
+  ts: number;
+  attachments_json: string | null;
+  reasoning: string | null;
+}
+
+export interface SkillRow {
+  name: string;
+  description: string;
+  triggers_json: string;
+  tools_required_json: string;
+  body: string;
+  source: string;
+  file_path: string | null;
+}
+
+export const sqlite = {
+  // --- Episodes ---
+  listEpisodes: () =>
+    isTauri ? tauriInvoke<EpisodeRow[]>('memory_list_episodes') : Promise.resolve([]),
+  saveEpisode: (ep: EpisodeRow) =>
+    isTauri ? tauriInvoke<void>('memory_save_episode', { episode: ep }) : Promise.resolve(),
+  deleteEpisode: (id: string) =>
+    isTauri ? tauriInvoke<void>('memory_delete_episode', { id }) : Promise.resolve(),
+  clearAll: () =>
+    isTauri ? tauriInvoke<void>('memory_clear_all') : Promise.resolve(),
+
+  // --- Facts ---
+  listFacts: () =>
+    isTauri ? tauriInvoke<FactRow[]>('memory_list_facts') : Promise.resolve([]),
+  setFact: (key: string, value: string, source: string) =>
+    isTauri ? tauriInvoke<void>('memory_set_fact', { key, value, source }) : Promise.resolve(),
+  getFact: (key: string) =>
+    isTauri ? tauriInvoke<string | null>('memory_get_fact', { key }) : Promise.resolve(null),
+  deleteFact: (key: string) =>
+    isTauri ? tauriInvoke<void>('memory_delete_fact', { key }) : Promise.resolve(),
+
+  // --- Projects ---
+  listProjects: () =>
+    isTauri ? tauriInvoke<ProjectRow[]>('projects_list') : Promise.resolve([]),
+  createProject: (name: string, color?: string) =>
+    isTauri ? tauriInvoke<ProjectRow>('projects_create', { name, color }) : Promise.resolve(null),
+  deleteProject: (id: string) =>
+    isTauri ? tauriInvoke<void>('projects_delete', { id }) : Promise.resolve(),
+  renameProject: (id: string, name: string) =>
+    isTauri ? tauriInvoke<void>('projects_rename', { id, name }) : Promise.resolve(),
+
+  // --- Conversations ---
+  listConversations: (projectId?: string) =>
+    isTauri
+      ? tauriInvoke<ConversationRow[]>('conversations_list', { projectId })
+      : Promise.resolve([]),
+  createConversation: (id: string, projectId: string | null, title: string) =>
+    isTauri
+      ? tauriInvoke<ConversationRow>('conversations_create', { id, projectId, title })
+      : Promise.resolve(null),
+  setConversationProject: (convId: string, projectId: string | null) =>
+    isTauri
+      ? tauriInvoke<void>('conversations_set_project', { convId, projectId })
+      : Promise.resolve(),
+  renameConversation: (id: string, title: string) =>
+    isTauri ? tauriInvoke<void>('conversations_rename', { id, title }) : Promise.resolve(),
+  deleteConversation: (id: string) =>
+    isTauri ? tauriInvoke<void>('conversations_delete', { id }) : Promise.resolve(),
+
+  // --- Messages ---
+  listMessages: (conversationId: string) =>
+    isTauri
+      ? tauriInvoke<MessageRow[]>('messages_list', { conversationId })
+      : Promise.resolve([]),
+  saveMessage: (msg: MessageRow) =>
+    isTauri ? tauriInvoke<void>('messages_save', { msg }) : Promise.resolve(),
+  deleteMessage: (id: string) =>
+    isTauri ? tauriInvoke<void>('messages_delete', { id }) : Promise.resolve(),
+
+  // --- Skills ---
+  listSkills: () =>
+    isTauri ? tauriInvoke<SkillRow[]>('skills_list') : Promise.resolve([]),
+  saveSkill: (skill: SkillRow) =>
+    isTauri ? tauriInvoke<void>('skills_save', { skill }) : Promise.resolve(),
+  deleteSkill: (name: string) =>
+    isTauri ? tauriInvoke<void>('skills_delete', { name }) : Promise.resolve(),
+
+  // --- Tools (shell/fs) ---
+  shellExec: (command: string, cwd?: string, timeout?: number) =>
+    isTauri
+      ? tauriInvoke<{ stdout: string; stderr: string; code: number }>('tools_shell_exec', {
+          args: { command, cwd, timeout },
+        })
+      : Promise.reject(new Error('shell_exec requiere Tauri')),
+  fileRead: (path: string) =>
+    isTauri
+      ? tauriInvoke<string>('tools_file_read', { args: { path } })
+      : Promise.reject(new Error('file_read requiere Tauri')),
+  fileWrite: (path: string, content: string, createDirs?: boolean) =>
+    isTauri
+      ? tauriInvoke<void>('tools_file_write', {
+          args: { path, content, create_dirs: createDirs },
+        })
+      : Promise.reject(new Error('file_write requiere Tauri')),
+  fileList: (path: string) =>
+    isTauri
+      ? tauriInvoke<Array<{ name: string; is_dir: boolean; size: number }>>('tools_file_list', {
+          args: { path },
+        })
+      : Promise.reject(new Error('file_list requiere Tauri')),
 };

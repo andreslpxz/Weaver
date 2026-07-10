@@ -4,11 +4,15 @@
 //! - [`atspi`]: cliente AT-SPI2 sobre D-Bus (árbol de accesibilidad Linux).
 //! - [`automation`]: emulación de teclado/ratón, portapapeles, gestión de ventanas.
 //! - [`keyring`]: almacenamiento seguro de API keys en el llavero del OS.
+//! - [`db`]: SQLite para memoria episódica/semántica, conversaciones, proyectos, skills.
+//! - [`tools`]: shell_exec, file_read/write/list.
 
 pub mod atspi;
 pub mod automation;
 pub mod commands;
+pub mod db;
 pub mod keyring;
+pub mod tools;
 
 use tauri::Manager;
 
@@ -21,11 +25,25 @@ pub fn run() {
         )
         .init();
 
+    // Abrir SQLite (puede fallar si el HOME no está disponible; en ese caso
+    // dejamos el frontend caer al fallback localStorage).
+    let db_state = match db::open() {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("No se pudo abrir SQLite ({e}); frontend usará localStorage.");
+            // Fallback: en memoria para que los comandos no paniqueen.
+            db::DbState(std::sync::Mutex::new(
+                rusqlite::Connection::open_in_memory().expect("in-memory sqlite"),
+            ))
+        }
+    };
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .manage(commands::AppState::default())
+        .manage(db_state)
         .setup(|app| {
             #[cfg(debug_assertions)]
             {
@@ -61,6 +79,38 @@ pub fn run() {
             commands::keyring_get_api_key_raw,
             commands::keyring_delete_api_key,
             commands::keyring_list_providers,
+            // Tools (shell, fs)
+            tools::tools_shell_exec,
+            tools::tools_file_read,
+            tools::tools_file_write,
+            tools::tools_file_list,
+            // Memory (SQLite)
+            db::memory_list_episodes,
+            db::memory_save_episode,
+            db::memory_delete_episode,
+            db::memory_clear_all,
+            db::memory_list_facts,
+            db::memory_set_fact,
+            db::memory_get_fact,
+            db::memory_delete_fact,
+            // Projects
+            db::projects_list,
+            db::projects_create,
+            db::projects_delete,
+            db::projects_rename,
+            // Conversations + messages
+            db::conversations_list,
+            db::conversations_create,
+            db::conversations_set_project,
+            db::conversations_rename,
+            db::conversations_delete,
+            db::messages_list,
+            db::messages_save,
+            db::messages_delete,
+            // Skills
+            db::skills_list,
+            db::skills_save,
+            db::skills_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Weaver");
