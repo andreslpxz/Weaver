@@ -1,19 +1,32 @@
-import { useEffect, useRef, useState } from 'react';
-import { Plus, Mic, ArrowUp, Square, ChevronDown, Settings2 } from 'lucide-react';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { Plus, Mic, ArrowUp, Square, ChevronDown, Settings2, Paperclip, UploadCloud } from 'lucide-react';
 import { useWeaver } from '@/store/weaver';
 import { getProvider } from '@/providers/registry';
 import { IconButton, Button } from '@/components/common/Button';
 import { ModelPickerPopup } from '@/components/model-picker/ModelPickerPopup';
+import { AttachmentChips } from '@/components/composer/AttachmentChips';
 import { createProvider } from '@/providers';
 import { runAgent } from '@/agent/loop';
 import { streamChat } from '@/lib/chain';
+import {
+  fileToAttachment,
+  buildMessageWithAttachments,
+  getFilesFromDrop,
+  formatSize,
+} from '@/lib/attachments';
+import { runtime } from '@/lib/tauri';
 import type { Message } from '@/providers/types';
+import type { Attachment } from '@/lib/attachments';
 
 export function Composer() {
   const [value, setValue] = useState('');
   const [isRunning, setIsRunning] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragCounterRef = useRef(0);
 
   const {
     providerId,
@@ -26,6 +39,10 @@ export function Composer() {
     handleAgentEvent,
     activeConversationId,
     newConversation,
+    draftAttachments,
+    addDraftAttachments,
+    removeDraftAttachment,
+    clearDraftAttachments,
   } = useWeaver();
 
   // Autosize textarea
@@ -50,15 +67,81 @@ export function Composer() {
   const provider = getProvider(providerId);
   const modelLabel = provider?.models.find((m) => m.id === modelId)?.label ?? modelId;
 
+  // --- Manejo de archivos ----------------------------------------------------
+
+  const addFiles = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return;
+      setAttachmentError(null);
+      const newAtts: Attachment[] = [];
+      const errors: string[] = [];
+      for (const f of files) {
+        try {
+          const att = await fileToAttachment(f);
+          newAtts.push(att);
+        } catch (e) {
+          errors.push(e instanceof Error ? e.message : String(e));
+        }
+      }
+      if (newAtts.length > 0) addDraftAttachments(newAtts);
+      if (errors.length > 0) setAttachmentError(errors.join('\n'));
+    },
+    [addDraftAttachments],
+  );
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    addFiles(files);
+    // Reset para permitir seleccionar el mismo archivo otra vez.
+    e.target.value = '';
+  };
+
+  // --- Drag & Drop global sobre el composer ---------------------------------
+
+  const onDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer?.types?.includes('Files')) {
+      dragCounterRef.current += 1;
+      setIsDragOver(true);
+    }
+  };
+
+  const onDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+    if (dragCounterRef.current === 0) setIsDragOver(false);
+  };
+
+  const onDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  };
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current = 0;
+    setIsDragOver(false);
+    const files = getFilesFromDrop(e);
+    addFiles(files);
+  };
+
+  // --- Envío ---------------------------------------------------------------
+
   async function handleSend() {
-    if (!value.trim() || isRunning) return;
+    if ((!value.trim() && draftAttachments.length === 0) || isRunning) return;
     let convId = activeConversationId;
     if (!convId) convId = newConversation();
 
-    const userMsg: Message = { role: 'user', content: value };
+    const finalText = buildMessageWithAttachments(value, draftAttachments);
+    const userMsg: Message = { role: 'user', content: finalText || '(adjuntos sin texto)' };
     appendMessage(userMsg);
-    const objectiveText = value;
+    const objectiveText = finalText;
     setValue('');
+    clearDraftAttachments();
     setIsRunning(true);
     setAgentState('planning');
 
@@ -68,19 +151,31 @@ export function Composer() {
     try {
       const llm = await createProvider(providerId);
       // Detectar si es una tarea agéntica o un chat simple.
-      // Heurística: si menciona "abre", "escribe en", "copia", "pega", "transfiere" → agéntico.
       const agentive = /\b(abre|escribe en|copia|pega|transfiere|envía|completa|rellena|sube|baja)\b/i.test(
         objectiveText,
       );
 
-      if (agentive) {
+      if (agentive && runtime.isTauri) {
         appendMessage({ role: 'assistant', content: '' });
-        for await (const event of runAgent(llm, modelId, objectiveText, {
+        for await (const _event of runAgent(llm, modelId, objectiveText, {
           signal: ac.signal,
           onEvent: handleAgentEvent,
         })) {
           // los eventos se manejan via handleAgentEvent
         }
+      } else if (agentive && runtime.isBrowser) {
+        appendMessage({
+          role: 'assistant',
+          content:
+            '⚠️ Las tareas agénticas (abre, escribe en, copia, etc.) requieren el backend de Tauri.\n\n' +
+            'Para ejecutarlas:\n' +
+            '1. Instala las dependencias del sistema:\n' +
+            '   `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev xdotool wmctrl`\n' +
+            '2. Habilita accesibilidad AT-SPI:\n' +
+            '   `gsettings set org.gnome.desktop.interface toolkit-accessibility true`\n' +
+            '3. Ejecuta en modo Tauri: `npm run tauri:dev`\n\n' +
+            'Mientras tanto puedo responder como chat normal si reformulas la petición.',
+        });
       } else {
         // Chat simple con streaming y encadenamiento.
         appendMessage({ role: 'assistant', content: '' });
@@ -96,7 +191,6 @@ export function Composer() {
           signal: ac.signal,
           onDelta: (delta) => updateLastAssistantMessage(delta),
         });
-        // Si trae marcador CONTINUE, seguir encadenando.
         if (text.includes('<<CONTINUE>>')) {
           const { streamUntilDone } = await import('@/lib/chain');
           const full = await streamUntilDone(llm, modelId, messages, {
@@ -125,16 +219,103 @@ export function Composer() {
     setIsRunning(false);
   }
 
+  // --- Render --------------------------------------------------------------
+
+  const placeholder =
+    draftAttachments.length > 0
+      ? 'Añade contexto o instrucciones sobre los archivos…'
+      : 'Dime lo que quieres hacer…';
+
   return (
-    <div className="px-4 pb-4 pt-2">
-      <div className="max-w-3xl mx-auto">
-        <div className="codex-input rounded-codex border border-border-accent p-2 flex flex-col gap-2">
-          {/* Top row: + adjuntar (placeholder) */}
+    <div className="px-4 pb-4 pt-2 relative">
+      <div className="max-w-3xl mx-auto relative">
+        {/* Drag overlay */}
+        {isDragOver && (
+          <div
+            className="absolute inset-0 z-20 rounded-codex border-2 border-dashed border-accent bg-accent/10 flex items-center justify-center pointer-events-none"
+            style={{ margin: '-4px' }}
+          >
+            <div className="flex items-center gap-2 text-accent-strong">
+              <UploadCloud size={20} />
+              <span className="font-medium text-sm">
+                Suelta para adjuntar {dragCounterRef.current > 1 ? `${dragCounterRef.current} archivos` : 'el archivo'}
+              </span>
+            </div>
+          </div>
+        )}
+
+        <div
+          onDragEnter={onDragEnter}
+          onDragLeave={onDragLeave}
+          onDragOver={onDragOver}
+          onDrop={onDrop}
+          className={`codex-input rounded-codex border p-2 flex flex-col gap-2 transition-colors ${
+            isDragOver ? 'border-accent bg-accent/5' : 'border-border-accent'
+          }`}
+        >
+          {/* Attachment chips (si hay) */}
+          {draftAttachments.length > 0 && (
+            <div className="px-1 pt-1">
+              <AttachmentChips
+                attachments={draftAttachments}
+                onRemove={removeDraftAttachment}
+              />
+            </div>
+          )}
+
+          {/* Error de adjuntos */}
+          {attachmentError && (
+            <div className="mx-1 px-2 py-1.5 rounded-codex bg-danger/10 border border-danger/30 text-danger text-xs whitespace-pre-wrap">
+              {attachmentError}
+            </div>
+          )}
+
+          {/* Top row: + adjuntar (file picker) */}
           <div className="flex items-center gap-2 px-1">
-            <IconButton title="Adjuntar" className="w-6 h-6">
+            <IconButton
+              title="Adjuntar archivos"
+              className="w-6 h-6"
+              onClick={() => fileInputRef.current?.click()}
+            >
               <Plus size={14} />
             </IconButton>
-            <span className="text-xs text-text-muted">Seleccionar archivo</span>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="text-xs text-text-muted hover:text-text-primary transition-colors cursor-pointer"
+            >
+              {draftAttachments.length > 0
+                ? `Adjuntar más (${draftAttachments.length})`
+                : 'Seleccionar archivo'}
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={handleFileInputChange}
+              accept=".txt,.md,.markdown,.json,.js,.jsx,.ts,.tsx,.py,.rs,.go,.java,.c,.cpp,.h,.hpp,.html,.htm,.css,.scss,.yml,.yaml,.toml,.ini,.cfg,.sh,.bash,.zsh,.sql,.csv,.tsv,.xml,.svg,.log,.env,.png,.jpg,.jpeg,.gif,.webp,.bmp"
+            />
+
+            {/* Indicador de modo runtime */}
+            <span
+              className={`text-[10px] px-1.5 py-0.5 rounded ${
+                runtime.isTauri
+                  ? 'bg-success/15 text-success'
+                  : 'bg-warning/15 text-warning'
+              }`}
+              title={runtime.describe()}
+            >
+              {runtime.isTauri ? 'Tauri' : 'Navegador'}
+            </span>
+
+            <div className="flex-1" />
+            <IconButton
+              title="Adjuntar (alternativa)"
+              className="w-6 h-6"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Paperclip size={12} />
+            </IconButton>
           </div>
 
           {/* Textarea */}
@@ -143,12 +324,24 @@ export function Composer() {
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
+              if (e.key === 'Enter' && !e.shiftKey && !(e.ctrlKey || e.metaKey)) {
                 e.preventDefault();
                 handleSend();
               }
             }}
-            placeholder="Dime lo que quieres hacer…"
+            onPaste={(e) => {
+              const files = e.clipboardData?.files;
+              if (files && files.length > 0) {
+                e.preventDefault();
+                const arr: File[] = [];
+                for (let i = 0; i < files.length; i++) {
+                  const f = files.item(i);
+                  if (f) arr.push(f);
+                }
+                addFiles(arr);
+              }
+            }}
+            placeholder={placeholder}
             className="w-full bg-transparent text-sm text-text-primary placeholder:text-text-muted outline-none resize-none px-1 py-1 min-h-[28px] max-h-[200px]"
             rows={1}
           />
@@ -165,7 +358,11 @@ export function Composer() {
               <ChevronDown size={12} className="opacity-60" />
             </button>
 
-            <IconButton title="Configurar API key" className="w-6 h-6" onClick={() => setModelPickerOpen(true)}>
+            <IconButton
+              title="Configurar API key"
+              className="w-6 h-6"
+              onClick={() => setModelPickerOpen(true)}
+            >
               <Settings2 size={12} />
             </IconButton>
 
@@ -182,7 +379,7 @@ export function Composer() {
             ) : (
               <button
                 onClick={handleSend}
-                disabled={!value.trim()}
+                disabled={!value.trim() && draftAttachments.length === 0}
                 className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-accent text-app-bg hover:bg-accent-strong transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                 title="Enviar (Enter)"
               >
@@ -196,7 +393,9 @@ export function Composer() {
 
         <div className="text-center mt-2">
           <span className="text-xs text-text-muted">
-            Weaver puede equivocarse. Verifica acciones críticas.
+            {draftAttachments.length > 0
+              ? `${draftAttachments.length} adjunto(s) · arrastrar más o pulsar + para añadir`
+              : 'Weaver puede equivocarse. Verifica acciones críticas.'}
           </span>
         </div>
       </div>
