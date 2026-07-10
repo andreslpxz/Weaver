@@ -12,8 +12,11 @@ import {
   Folder,
   Link as LinkIcon,
   Globe,
-  AtSign,
   Brain,
+  Target,
+  Map,
+  Puzzle,
+  Monitor,
 } from 'lucide-react';
 import { useWeaver } from '@/store/weaver';
 import { getProvider, PROVIDERS } from '@/providers/registry';
@@ -70,6 +73,12 @@ export function Composer() {
     addDraftAttachments,
     removeDraftAttachment,
     clearDraftAttachments,
+    planMode,
+    pursueObjective,
+    setPlanMode,
+    setPursueObjective,
+    projects,
+    setView,
   } = useWeaver();
 
   // Cargar skills para el menú @
@@ -101,6 +110,9 @@ export function Composer() {
     if (!plusOpen) return;
     const handler = (e: MouseEvent) => {
       if (plusBtnRef.current && !plusBtnRef.current.contains(e.target as Node)) {
+        // Verificar también si el click fue dentro del popup
+        const popup = document.getElementById('plus-popup');
+        if (popup && popup.contains(e.target as Node)) return;
         setPlusOpen(false);
       }
     };
@@ -117,13 +129,11 @@ export function Composer() {
     if (!ta) return;
     const cursor = ta.selectionStart;
     const before = value.slice(0, cursor);
-    // Buscar último @ que no esté precedido por otro caracter no-espacio
     const atMatch = before.match(/(?:^|\s)@([\w\-/]*)$/);
     if (atMatch) {
       setMentionOpen(true);
       setMentionQuery(atMatch[1]);
       setMentionIndex(0);
-      // Construir items
       const q = atMatch[1].toLowerCase();
       const items: MentionItem[] = [];
       // Skills
@@ -135,6 +145,18 @@ export function Composer() {
             desc: s.description,
             icon: 'brain',
             insert: `@skill:${s.name}`,
+          });
+        }
+      }
+      // Proyectos
+      for (const p of projects) {
+        if (!q || p.name.toLowerCase().includes(q)) {
+          items.push({
+            type: 'project',
+            label: p.name,
+            desc: `Proyecto · ${p.id.slice(0, 8)}`,
+            icon: 'file',
+            insert: `@project:${p.name}`,
           });
         }
       }
@@ -150,7 +172,7 @@ export function Composer() {
           });
         }
       }
-      // Adjuntos recientes (referencias)
+      // Adjuntos recientes
       for (const a of draftAttachments) {
         if (!q || a.name.toLowerCase().includes(q)) {
           items.push({
@@ -164,16 +186,19 @@ export function Composer() {
       }
       // Comandos rápidos
       if (!q || 'web'.includes(q)) {
-        items.push({ type: 'command', label: 'Buscar en internet', desc: 'web_search', icon: 'globe', insert: 'busca en internet ' });
+        items.push({ type: 'command', label: 'Buscar en internet', desc: 'web_search (Tavily)', icon: 'globe', insert: 'busca en internet ' });
       }
       if (!q || 'shell'.includes(q) || 'terminal'.includes(q)) {
         items.push({ type: 'command', label: 'Ejecutar comando shell', desc: 'shell_exec (Tauri)', icon: 'file', insert: 'ejecuta en la terminal: ' });
+      }
+      if (!q || 'plan'.includes(q)) {
+        items.push({ type: 'command', label: 'Modo plan', desc: 'Proponer plan antes de ejecutar', icon: 'brain', insert: 'planea esto paso a paso: ' });
       }
       setMentionItems(items.slice(0, 12));
     } else {
       setMentionOpen(false);
     }
-  }, [value, skills, draftAttachments]);
+  }, [value, skills, draftAttachments, projects]);
 
   const addFiles = useCallback(
     async (files: File[]) => {
@@ -238,7 +263,6 @@ export function Composer() {
     if (!convId) convId = newConversation();
 
     const built = buildMessageWithAttachments(value, draftAttachments);
-    // Construir lista de imágenes (data URLs) para multimodal real.
     const images: ImageContent[] = draftAttachments
       .filter((a) => a.kind === 'image' && a.content)
       .map((a) => ({
@@ -263,7 +287,20 @@ export function Composer() {
       images: images.length > 0 ? images : undefined,
     };
     appendMessage(userMsg);
-    const objectiveText = built.toLLM;
+
+    // Construir prompt: si planMode, añadir instrucción de proponer plan primero.
+    let objectiveText = built.toLLM;
+    if (planMode) {
+      objectiveText =
+        'IMPORTANTE: Estás en MODO PLAN. Antes de ejecutar nada, propón un plan paso a paso y espera mi confirmación antes de proceder.\n\n' +
+        objectiveText;
+    }
+    if (pursueObjective) {
+      objectiveText =
+        'IMPORTANTE: Debes PERSEGUIR EL OBJETIVO hasta completarlo. Si algo falla, replanifica e inténtalo de nuevo (máximo 3 intentos por subtarea). No te rindas al primer error.\n\n' +
+        objectiveText;
+    }
+
     setValue('');
     clearDraftAttachments();
     setIsRunning(true);
@@ -348,9 +385,7 @@ export function Composer() {
         onDelta: (delta) => updateLastAssistantMessage(delta),
       });
 
-      if (result.toolCalls.length === 0) {
-        return;
-      }
+      if (result.toolCalls.length === 0) return;
 
       messages.push({
         role: 'assistant',
@@ -384,21 +419,18 @@ export function Composer() {
     setIsRunning(false);
   }
 
-  // --- Mención seleccionada -------------------------------------------------
   function applyMention(item: MentionItem) {
     const ta = taRef.current;
     if (!ta) return;
     const cursor = ta.selectionStart;
     const before = value.slice(0, cursor);
     const after = value.slice(cursor);
-    // Reemplazar el último @query con el insert del item
     const atIdx = before.search(/(?:^|\s)@[\w\-/]*$/);
     if (atIdx < 0) return;
     const prefix = before.slice(0, atIdx).trimEnd();
     const newValue = (prefix ? prefix + ' ' : '') + item.insert + ' ' + after;
     setValue(newValue);
     setMentionOpen(false);
-    // Posicionar cursor después del insert
     setTimeout(() => {
       if (taRef.current) {
         const pos = (prefix ? prefix.length + 1 : 0) + item.insert.length + 1;
@@ -413,7 +445,7 @@ export function Composer() {
   const placeholder =
     draftAttachments.length > 0
       ? 'Añade contexto o instrucciones sobre los archivos…'
-      : 'Dime lo que quieres hacer… (usa @ para mencionar skills, proveedores, archivos)';
+      : 'Dime lo que quieres hacer… (usa @ para mencionar skills, proyectos, proveedores)';
 
   return (
     <div className="px-4 pb-4 pt-2 relative">
@@ -459,93 +491,14 @@ export function Composer() {
             </div>
           )}
 
-          {/* Top row: botón + con popup (estilo Codex) */}
-          <div className="flex items-center gap-2 px-1 relative">
-            <button
-              ref={plusBtnRef}
-              onClick={() => setPlusOpen((v) => !v)}
-              className="codex-icon-btn w-7 h-7"
-              title="Añadir (archivo, carpeta, URL…)"
-            >
-              <Plus size={16} />
-            </button>
-
-            {plusOpen && (
-              <div className="absolute top-9 left-1 z-30 w-64 bg-app-elevated border border-border-accent rounded-codex shadow-2xl animate-slide-up overflow-hidden">
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
-                >
-                  <FileText size={14} className="text-accent" />
-                  <div>
-                    <div className="font-medium">Subir archivo</div>
-                    <div className="text-[10px] text-text-muted">Texto, imagen o binario</div>
-                  </div>
-                </button>
-                <button
-                  onClick={() => {
-                    // Carpeta: usar input con webkitdirectory
-                    const input = document.createElement('input');
-                    input.type = 'file';
-                    input.setAttribute('webkitdirectory', '');
-                    input.setAttribute('directory', '');
-                    input.multiple = true;
-                    input.onchange = (e) => {
-                      const files = Array.from((e.target as HTMLInputElement).files ?? []);
-                      addFiles(files);
-                      setPlusOpen(false);
-                    };
-                    input.click();
-                  }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
-                >
-                  <Folder size={14} className="text-accent" />
-                  <div>
-                    <div className="font-medium">Subir carpeta</div>
-                    <div className="text-[10px] text-text-muted">Todos los archivos recursivamente</div>
-                  </div>
-                </button>
-                <button
-                  onClick={async () => {
-                    const url = prompt('URL del archivo a descargar:');
-                    if (!url) return;
-                    setPlusOpen(false);
-                    try {
-                      const resp = await fetch(url);
-                      const blob = await resp.blob();
-                      const name = url.split('/').pop()?.split('?')[0] ?? 'download';
-                      const file = new File([blob], name, { type: blob.type });
-                      await addFiles([file]);
-                    } catch (e) {
-                      setAttachmentError(`No se pudo descargar: ${e instanceof Error ? e.message : String(e)}`);
-                    }
-                  }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
-                >
-                  <LinkIcon size={14} className="text-accent" />
-                  <div>
-                    <div className="font-medium">Añadir desde URL</div>
-                    <div className="text-[10px] text-text-muted">Descarga y adjunta</div>
-                  </div>
-                </button>
-                <div className="border-t border-border" />
-                <div className="px-3 py-1.5 text-[10px] text-text-muted uppercase tracking-wider">
-                  También puedes arrastrar archivos
-                </div>
-              </div>
-            )}
-
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              onChange={handleFileInputChange}
-              accept=".txt,.md,.markdown,.json,.js,.jsx,.ts,.tsx,.py,.rs,.go,.java,.c,.cpp,.h,.hpp,.html,.htm,.css,.scss,.yml,.yaml,.toml,.ini,.cfg,.sh,.bash,.zsh,.sql,.csv,.tsv,.xml,.svg,.log,.env,.png,.jpg,.jpeg,.gif,.webp,.bmp"
-            />
-
-            <div className="flex-1" />
-          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={handleFileInputChange}
+            accept=".txt,.md,.markdown,.json,.js,.jsx,.ts,.tsx,.py,.rs,.go,.java,.c,.cpp,.h,.hpp,.html,.htm,.css,.scss,.yml,.yaml,.toml,.ini,.cfg,.sh,.bash,.zsh,.sql,.csv,.tsv,.xml,.svg,.log,.env,.png,.jpg,.jpeg,.gif,.webp,.bmp"
+          />
 
           {/* Textarea con overlay de menciones @ */}
           <div className="relative">
@@ -554,7 +507,6 @@ export function Composer() {
               value={value}
               onChange={(e) => setValue(e.target.value)}
               onKeyDown={(e) => {
-                // Navegación del menú @
                 if (mentionOpen && mentionItems.length > 0) {
                   if (e.key === 'ArrowDown') {
                     e.preventDefault();
@@ -602,7 +554,7 @@ export function Composer() {
             {mentionOpen && mentionItems.length > 0 && (
               <div className="absolute bottom-full left-1 mb-1 z-30 w-80 max-h-64 overflow-y-auto bg-app-elevated border border-border-accent rounded-codex shadow-2xl animate-slide-up">
                 <div className="px-2 py-1 text-[10px] text-text-muted uppercase tracking-wider border-b border-border">
-                  Menciones — skills, proveedores, archivos
+                  Menciones — skills, proyectos, proveedores, archivos
                 </div>
                 {mentionItems.map((item, i) => (
                   <button
@@ -627,8 +579,164 @@ export function Composer() {
             )}
           </div>
 
-          {/* Bottom row: model picker + clip + mic + send */}
-          <div className="flex items-center gap-2 px-1">
+          {/* Bottom row: + popup | model picker | clip | mic | send */}
+          <div className="flex items-center gap-2 px-1 relative">
+            {/* Botón + (abajo, al lado del model picker) — popup tipo Codex/Claude */}
+            <div className="relative">
+              <button
+                ref={plusBtnRef}
+                onClick={() => setPlusOpen((v) => !v)}
+                className="codex-icon-btn w-7 h-7"
+                title="Añadir (archivo, carpeta, URL, modos…)"
+              >
+                <Plus size={16} />
+              </button>
+
+              {plusOpen && (
+                <div
+                  id="plus-popup"
+                  className="absolute bottom-9 left-0 z-30 w-72 bg-app-elevated border border-border-accent rounded-codex shadow-2xl animate-slide-up overflow-hidden"
+                >
+                  {/* Cabecera */}
+                  <div className="px-3 py-2 text-[10px] text-text-muted uppercase tracking-wider border-b border-border">
+                    Añadir
+                  </div>
+
+                  {/* Agregar fotos y archivos */}
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
+                  >
+                    <Paperclip size={15} className="text-accent shrink-0" />
+                    <div className="flex-1">
+                      <div className="font-medium">Agregar fotos y archivos</div>
+                      <div className="text-[10px] text-text-muted">Texto, imagen o binario</div>
+                    </div>
+                  </button>
+
+                  {/* Subir carpeta */}
+                  <button
+                    onClick={() => {
+                      const input = document.createElement('input');
+                      input.type = 'file';
+                      input.setAttribute('webkitdirectory', '');
+                      input.setAttribute('directory', '');
+                      input.multiple = true;
+                      input.onchange = (e) => {
+                        const files = Array.from((e.target as HTMLInputElement).files ?? []);
+                        addFiles(files);
+                        setPlusOpen(false);
+                      };
+                      input.click();
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
+                  >
+                    <Folder size={15} className="text-accent shrink-0" />
+                    <div className="flex-1">
+                      <div className="font-medium">Subir carpeta</div>
+                      <div className="text-[10px] text-text-muted">Todos los archivos recursivamente</div>
+                    </div>
+                  </button>
+
+                  {/* Añadir desde URL */}
+                  <button
+                    onClick={async () => {
+                      const url = prompt('URL del archivo a descargar:');
+                      if (!url) return;
+                      setPlusOpen(false);
+                      try {
+                        const resp = await fetch(url);
+                        const blob = await resp.blob();
+                        const name = url.split('/').pop()?.split('?')[0] ?? 'download';
+                        const file = new File([blob], name, { type: blob.type });
+                        await addFiles([file]);
+                      } catch (e) {
+                        setAttachmentError(`No se pudo descargar: ${e instanceof Error ? e.message : String(e)}`);
+                      }
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
+                  >
+                    <LinkIcon size={15} className="text-accent shrink-0" />
+                    <div className="flex-1">
+                      <div className="font-medium">Añadir desde URL</div>
+                      <div className="text-[10px] text-text-muted">Descarga y adjunta</div>
+                    </div>
+                  </button>
+
+                  {/* Adjuntar app (AT-SPI, solo Tauri) */}
+                  <button
+                    onClick={() => {
+                      setPlusOpen(false);
+                      if (runtime.isBrowser) {
+                        setAttachmentError('Adjuntar app requiere modo Tauri. Ejecuta con npm run tauri:dev.');
+                        return;
+                      }
+                      // En Tauri: disparar vista de complementos o AT-SPI picker (TODO)
+                      setView('complementos');
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
+                  >
+                    <Monitor size={15} className="text-accent shrink-0" />
+                    <div className="flex-1">
+                      <div className="font-medium">Adjuntar app</div>
+                      <div className="text-[10px] text-text-muted">
+                        {runtime.isTauri ? 'Conectar vía AT-SPI' : 'Requiere Tauri'}
+                      </div>
+                    </div>
+                  </button>
+
+                  {/* Separador */}
+                  <div className="border-t border-border" />
+
+                  {/* Modo plan (toggle) */}
+                  <button
+                    onClick={() => setPlanMode(!planMode)}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
+                  >
+                    <Map size={15} className={planMode ? 'text-accent' : 'text-text-muted shrink-0'} />
+                    <div className="flex-1">
+                      <div className="font-medium">Modo plan</div>
+                      <div className="text-[10px] text-text-muted">Proponer plan y esperar confirmación</div>
+                    </div>
+                    <ToggleSwitch on={planMode} />
+                  </button>
+
+                  {/* Perseguir objetivo (toggle) */}
+                  <button
+                    onClick={() => setPursueObjective(!pursueObjective)}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
+                  >
+                    <Target size={15} className={pursueObjective ? 'text-accent' : 'text-text-muted shrink-0'} />
+                    <div className="flex-1">
+                      <div className="font-medium">Perseguir objetivo</div>
+                      <div className="text-[10px] text-text-muted">Iterar hasta completar (3 intentos)</div>
+                    </div>
+                    <ToggleSwitch on={pursueObjective} />
+                  </button>
+
+                  {/* Separador */}
+                  <div className="border-t border-border" />
+
+                  {/* Complementos (ir a vista) */}
+                  <button
+                    onClick={() => {
+                      setPlusOpen(false);
+                      setView('complementos');
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
+                  >
+                    <Puzzle size={15} className="text-accent shrink-0" />
+                    <div className="flex-1">
+                      <div className="font-medium">Complementos</div>
+                      <div className="text-[10px] text-text-muted">Skills y servidores MCP</div>
+                    </div>
+                    <ChevronDown size={12} className="text-text-muted -rotate-90" />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Model picker */}
             <button
               onClick={() => setModelPickerOpen(!modelPickerOpen)}
               className="inline-flex items-center gap-1 px-2 py-1 rounded-codex border border-border-accent text-xs text-text-primary hover:bg-app-elevated transition-colors cursor-pointer"
@@ -639,11 +747,23 @@ export function Composer() {
               <ChevronDown size={12} className="opacity-60" />
             </button>
 
+            {/* Indicadores de modos activos */}
+            {planMode && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent border border-accent/30 inline-flex items-center gap-1">
+                <Map size={9} /> Plan
+              </span>
+            )}
+            {pursueObjective && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent border border-accent/30 inline-flex items-center gap-1">
+                <Target size={9} /> Perseguir
+              </span>
+            )}
+
             <div className="flex-1" />
 
-            {/* Botón 📎 (clip) a la derecha */}
+            {/* Clip (a la derecha, abre el mismo popup) */}
             <IconButton
-              title="Adjuntar archivos"
+              title="Adjuntar"
               className="w-7 h-7"
               onClick={() => setPlusOpen((v) => !v)}
             >
@@ -686,11 +806,31 @@ export function Composer() {
 }
 
 // ============================================================================
+// Toggle Switch (estilo iOS/Codex)
+// ============================================================================
+
+function ToggleSwitch({ on }: { on: boolean }) {
+  return (
+    <span
+      className={`relative inline-block w-8 h-4 rounded-full transition-colors ${
+        on ? 'bg-accent' : 'bg-border-accent'
+      }`}
+    >
+      <span
+        className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
+          on ? 'translate-x-4' : 'translate-x-0'
+        }`}
+      />
+    </span>
+  );
+}
+
+// ============================================================================
 // Tipos y helpers para menciones @
 // ============================================================================
 
 interface MentionItem {
-  type: 'skill' | 'provider' | 'file' | 'command';
+  type: 'skill' | 'provider' | 'file' | 'project' | 'command';
   label: string;
   desc: string;
   icon: 'brain' | 'globe' | 'file' | 'image';
@@ -711,6 +851,3 @@ function MentionIcon({ icon }: { icon: MentionItem['icon'] }) {
       return <FileText {...props} />;
   }
 }
-
-// Evitar import no usado
-void AtSign;
