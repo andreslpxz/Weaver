@@ -1,16 +1,12 @@
 //! Backend macOS: Accessibility API (AXUIElement) + AppKit + CoreGraphics.
 //!
-//! Implementación real del trait [`Backend`] para macOS usando:
+//! Estado: **STUB** — la implementación real requiere iteración en macOS
+//! real para resolver diferencias de API entre versiones de las crates
+//! `accessibility`, `objc2-app-kit`, `objc2-core-graphics` y `enigo`.
 //!
-//! - `ax` module: AXUIElement bindings (accesibilidad).
-//! - `appkit` module: NSPasteboard, NSWorkspace, CGEvent.
-//!
-//! Estado: **implementado** (Fases M2, M3, M4). Ver `PLAN_MACOS.md`.
-//!
-//! IMPORTANTE: macOS requiere permiso de Accessibility en
-//! System Settings → Privacy & Security → Accessibility. Sin este permiso,
-//! los CGEvent se descartan silenciosamente y los AXUIElement devuelven
-//! datos vacíos. Verificar al iniciar con `AxClient::check_accessibility_permission(true)`.
+//! Ver `PLAN_MACOS.md` para el plan completo de implementación.
+//! Los submódulos `ax/` y `appkit/` contienen código estructural que
+//! servirá como base cuando se resuelvan los issues de tipos.
 
 #![cfg(target_os = "macos")]
 
@@ -19,52 +15,26 @@ pub mod ax;
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use tokio::sync::OnceCell;
 
 use crate::backend::shared_types::{AccessibleNode, ApplicationInfo, Rect};
 use crate::backend::{Backend, NodeRef, WindowInfo};
-use crate::backend::macos::ax::AxClient;
 
-/// Backend macOS.
-///
-/// Mantiene una única instancia `AxClient` (inicialización costosa)
-/// vía `OnceCell` para reutilizarla entre llamadas.
-pub struct MacosBackend {
-    client: OnceCell<AxClient>,
-}
+const NOT_IMPLEMENTED: &str = "macOS backend en desarrollo — ver PLAN_MACOS.md. \
+    Los submódulos ax/ y appkit/ tienen código estructural pero requiere \
+    iteración en macOS real para resolver diferencias de API entre versiones \
+    de las crates accessibility/objc2/enigo.";
+
+pub struct MacosBackend;
 
 impl MacosBackend {
     pub fn new() -> Self {
-        Self {
-            client: OnceCell::new(),
-        }
+        Self
     }
 
-    async fn client(&self) -> Result<&AxClient> {
-        self.client
-            .get_or_try_init(|| async {
-                // Verificar permiso de Accessibility al primer uso.
-                if !AxClient::check_accessibility_permission(false) {
-                    tracing::warn!(
-                        "Weaver no tiene permiso de Accessibility. \
-                         Algunas operaciones fallarán silenciosamente. \
-                         Ve a System Settings → Privacy & Security → Accessibility."
-                    );
-                    // Pedir permiso con diálogo nativo.
-                    AxClient::check_accessibility_permission(true);
-                }
-                AxClient::new()
-            })
-            .await
-    }
-
-    /// Extrae el PID de un `NodeRef.bus_name` con formato "pid:NNN".
-    fn pid_from_node(node: &NodeRef) -> Result<u32> {
-        node.bus_name
-            .strip_prefix("pid:")
-            .ok_or_else(|| anyhow!("bus_name inválido (debe ser 'pid:NNN'): {}", node.bus_name))?
-            .parse()
-            .map_err(|e| anyhow!("PID inválido: {e}"))
+    /// Verifica que la app tiene permiso de Accessibility.
+    /// Llamar al iniciar para guiar al usuario si no lo tiene.
+    pub fn check_accessibility_permission(_prompt: bool) -> bool {
+        false
     }
 }
 
@@ -76,129 +46,71 @@ impl Default for MacosBackend {
 
 #[async_trait]
 impl Backend for MacosBackend {
-    // ── Accesibilidad ───────────────────────────────────────────────────
-
     async fn list_applications(&self) -> Result<Vec<ApplicationInfo>> {
-        let client = self.client().await?;
-        client.list_applications()
+        Err(anyhow!(NOT_IMPLEMENTED))
     }
 
     async fn query_tree(
         &self,
-        app: &ApplicationInfo,
-        max_depth: u32,
+        _app: &ApplicationInfo,
+        _max_depth: u32,
     ) -> Result<AccessibleNode> {
-        let client = self.client().await?;
-        let element = client.find_by_path(&app.root_path)?;
-        crate::backend::macos::ax::tree::read_node(&element, max_depth, app.pid as i32)
+        Err(anyhow!(NOT_IMPLEMENTED))
     }
 
-    async fn get_focused_subtree(&self, max_depth: u32) -> Result<Option<AccessibleNode>> {
-        let client = self.client().await?;
-        let focused = client.focused_element().ok();
-        if let Some(element) = focused {
-            // Obtener PID del elemento focused.
-            let pid: i32 = 0; // TODO M2: obtener PID del elemento via AXUIElementGetPid
-            match crate::backend::macos::ax::tree::read_node(&element, max_depth, pid) {
-                Ok(node) => return Ok(Some(node)),
-                Err(e) => {
-                    tracing::debug!("get_focused_subtree: {e}");
-                }
-            }
-        }
-        Ok(None)
+    async fn get_focused_subtree(&self, _max_depth: u32) -> Result<Option<AccessibleNode>> {
+        Err(anyhow!(NOT_IMPLEMENTED))
     }
 
-    async fn click(&self, node: &NodeRef) -> Result<()> {
-        let client = self.client().await?;
-        let element = client.find_by_path(&node.path)?;
-        crate::backend::macos::ax::actions::click(&element)
+    async fn click(&self, _node: &NodeRef) -> Result<()> {
+        Err(anyhow!(NOT_IMPLEMENTED))
     }
 
-    async fn double_click(&self, node: &NodeRef) -> Result<()> {
-        let client = self.client().await?;
-        let element = client.find_by_path(&node.path)?;
-        crate::backend::macos::ax::actions::double_click(&element)
+    async fn double_click(&self, _node: &NodeRef) -> Result<()> {
+        Err(anyhow!(NOT_IMPLEMENTED))
     }
 
-    async fn type_text(&self, node: &NodeRef, text: &str) -> Result<()> {
-        let client = self.client().await?;
-        let element = client.find_by_path(&node.path)?;
-        crate::backend::macos::ax::actions::type_text(&element, text)
+    async fn type_text(&self, _node: &NodeRef, _text: &str) -> Result<()> {
+        Err(anyhow!(NOT_IMPLEMENTED))
     }
 
-    async fn press_key(&self, key: &str) -> Result<()> {
-        let key = key.to_string();
-        tokio::task::spawn_blocking(move || {
-            crate::backend::macos::appkit::input::press_key_combo(&key)
-        })
-        .await?
+    async fn press_key(&self, _key: &str) -> Result<()> {
+        Err(anyhow!(NOT_IMPLEMENTED))
     }
 
-    async fn get_text(&self, node: &NodeRef) -> Result<Option<String>> {
-        let client = self.client().await?;
-        let element = client.find_by_path(&node.path)?;
-        crate::backend::macos::ax::actions::get_text(&element)
+    async fn get_text(&self, _node: &NodeRef) -> Result<Option<String>> {
+        Err(anyhow!(NOT_IMPLEMENTED))
     }
 
-    async fn get_extents(&self, node: &NodeRef) -> Result<Rect> {
-        let client = self.client().await?;
-        let element = client.find_by_path(&node.path)?;
-        crate::backend::macos::ax::actions::get_extents(&element)
+    async fn get_extents(&self, _node: &NodeRef) -> Result<Rect> {
+        Err(anyhow!(NOT_IMPLEMENTED))
     }
 
-    async fn focus(&self, node: &NodeRef) -> Result<()> {
-        let client = self.client().await?;
-        let element = client.find_by_path(&node.path)?;
-        crate::backend::macos::ax::actions::focus(&element)
+    async fn focus(&self, _node: &NodeRef) -> Result<()> {
+        Err(anyhow!(NOT_IMPLEMENTED))
     }
-
-    // ── Automatización ──────────────────────────────────────────────────
 
     async fn clipboard_get(&self) -> Result<String> {
-        let result = tokio::task::spawn_blocking(|| {
-            crate::backend::macos::appkit::clipboard::clipboard_get()
-        })
-        .await??;
-        Ok(result)
+        Err(anyhow!(NOT_IMPLEMENTED))
     }
 
-    async fn clipboard_set(&self, content: &str) -> Result<()> {
-        let content = content.to_string();
-        tokio::task::spawn_blocking(move || {
-            crate::backend::macos::appkit::clipboard::clipboard_set(&content)
-        })
-        .await??;
-        Ok(())
+    async fn clipboard_set(&self, _content: &str) -> Result<()> {
+        Err(anyhow!(NOT_IMPLEMENTED))
     }
 
     async fn list_windows(&self) -> Result<Vec<WindowInfo>> {
-        let windows = tokio::task::spawn_blocking(|| {
-            crate::backend::macos::appkit::workspace::list_windows()
-        })
-        .await??;
-        Ok(windows)
+        Err(anyhow!(NOT_IMPLEMENTED))
     }
 
-    async fn activate_window(&self, id_or_title: &str) -> Result<()> {
-        let id_or_title = id_or_title.to_string();
-        tokio::task::spawn_blocking(move || {
-            crate::backend::macos::appkit::workspace::activate_window(&id_or_title)
-        })
-        .await??;
-        Ok(())
+    async fn activate_window(&self, _id_or_title: &str) -> Result<()> {
+        Err(anyhow!(NOT_IMPLEMENTED))
     }
 
-    async fn key_tap(&self, key: &str) -> Result<()> {
-        self.press_key(key).await
+    async fn key_tap(&self, _key: &str) -> Result<()> {
+        Err(anyhow!(NOT_IMPLEMENTED))
     }
 
-    async fn mouse_click_at(&self, x: i32, y: i32, button: u8) -> Result<()> {
-        tokio::task::spawn_blocking(move || {
-            crate::backend::macos::appkit::input::click_at(x, y, button)
-        })
-        .await?
-        .map_err(|e| anyhow!("mouse_click_at falló: {e}"))?;
-        Ok(())
+    async fn mouse_click_at(&self, _x: i32, _y: i32, _button: u8) -> Result<()> {
+        Err(anyhow!(NOT_IMPLEMENTED))
     }
 }
