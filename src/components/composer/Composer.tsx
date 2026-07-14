@@ -383,32 +383,73 @@ export function Composer() {
         onDelta: (delta) => updateLastAssistantMessage(delta),
       });
 
+      // Si no hay tool calls, el LLM ya respondió → terminamos.
       if (result.toolCalls.length === 0) return;
 
+      // Agregar el mensaje del asistente con tool_calls al historial.
+      // IMPORTANTE: content debe ser null (no string vacío) cuando hay tool_calls,
+      // porque muchos proveedores LLM (OpenAI, Groq, etc.) lo requieren así.
       messages.push({
         role: 'assistant',
-        content: result.text || '',
+        content: result.text || null,
         tool_calls: result.toolCalls,
       });
 
+      // Ejecutar cada tool call y agregar resultados.
       for (const tc of result.toolCalls) {
         let args: Record<string, unknown> = {};
         try {
           args = JSON.parse(tc.function.arguments || '{}');
         } catch {
-          // ignore
+          // ignore parse errors
         }
+
+        // Feedback visual: mostrar qué tool se está ejecutando.
+        // El icono SVG lo renderiza MessageList detectando el patrón [tool <name>:
+        const toolLabel = formatToolLabel(tc.function.name, args);
+        updateLastAssistantMessage(`\n\n[tool ${tc.function.name}: ${toolLabel}]\n`);
+
         const toolResult = await dispatchAdvancedTool(tc.function.name, args);
         const summary = toolResult.ok
           ? toolResult.output.slice(0, 4000)
           : `ERROR: ${toolResult.error ?? 'unknown'}`;
-        updateLastAssistantMessage(`\n\n[tool ${tc.function.name}: ${summary.slice(0, 200)}…]\n`);
+
+        // Actualizar el mensaje visual con el resultado (truncado para no abrumar el UI).
+        // El resultado completo se envía al LLM vía messages.
+        updateLastAssistantMessage(`[result ${tc.function.name}: ${summary.slice(0, 300)}…]\n\n`);
+
         messages.push({
           role: 'tool',
           tool_call_id: tc.id,
           content: summary,
         });
       }
+
+      // Pequeña pausa para que el UI se actualice antes del siguiente round.
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
+    // Si llegamos aquí, se agotaron los rounds. Mostrar aviso.
+    updateLastAssistantMessage('\n\n*(Límite de rondas de tools alcanzado)*');
+  }
+
+  /** Formatea el label de un tool call para mostrar en el UI. */
+  function formatToolLabel(toolName: string, args: Record<string, unknown>): string {
+    switch (toolName) {
+      case 'web_search':
+        return `buscando: "${args.query ?? args.q ?? ''}"`;
+      case 'web_fetch':
+        return `descargando: ${args.url ?? ''}`;
+      case 'shell_exec':
+        return `ejecutando: ${args.command ?? ''}`;
+      case 'file_read':
+        return `leyendo: ${args.path ?? ''}`;
+      case 'file_write':
+        return `escribiendo: ${args.path ?? ''}`;
+      case 'file_list':
+        return `listando: ${args.path ?? ''}`;
+      default:
+        return JSON.stringify(args).slice(0, 80);
     }
   }
 

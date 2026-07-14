@@ -66,7 +66,9 @@ export interface ImageContent {
 
 export interface Message {
   role: MessageRole;
-  content: string;
+  /** Content del mensaje. Puede ser null cuando el asistente hace tool_calls
+   *  (algunos proveedores como OpenAI requieren null explícito, no string vacío). */
+  content: string | null;
   tool_call_id?: string;
   tool_calls?: ToolCall[];
   /** Referencias a adjuntos (no el contenido crudo, que vive en attachments[]) */

@@ -276,7 +276,9 @@ export const useWeaver = create<WeaverState>((set, get) => ({
         const msgs = [...c.messages];
         const last = msgs[msgs.length - 1];
         if (last && last.role === 'assistant') {
-          msgs[msgs.length - 1] = { ...last, content: last.content + delta };
+          // content puede ser null (cuando hay tool_calls), lo tratamos como ''.
+          const prev = last.content ?? '';
+          msgs[msgs.length - 1] = { ...last, content: prev + delta };
         } else {
           msgs.push({ role: 'assistant', content: delta });
         }
@@ -396,7 +398,7 @@ export const useWeaver = create<WeaverState>((set, get) => ({
               if (c.id !== conv.id) return c;
               const msgs = [...c.messages];
               const cur = msgs[idx];
-              msgs[idx] = { ...cur, content: cur.content + delta };
+              msgs[idx] = { ...cur, content: (cur.content ?? '') + delta };
               return { ...c, messages: msgs };
             }),
           }));

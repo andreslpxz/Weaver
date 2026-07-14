@@ -21,6 +21,11 @@ import {
   FileText,
   Image as ImageIcon,
   File as FileIcon,
+  Search,
+  Terminal,
+  Globe,
+  FileCode,
+  Download,
 } from 'lucide-react';
 import { formatSize } from '@/lib/attachments';
 
@@ -100,7 +105,7 @@ function MessageBubble({ msg }: { msg: Message }) {
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(msg.content);
+      await navigator.clipboard.writeText(msg.content ?? '');
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
@@ -163,13 +168,108 @@ function MessageBubble({ msg }: { msg: Message }) {
         </div>
       ) : (
         <div className="max-w-none text-sm leading-relaxed">
-          {msg.content.trim() === '' && isRunning ? (
+          {(msg.content ?? '').trim() === '' && isRunning ? (
             <div className="flex items-center gap-2 text-text-muted text-xs">
               <Loader2 size={12} className="animate-spin" />
               pensando…
             </div>
           ) : (
+            <MessageContent content={msg.content ?? ''} />
+          )}
+
+          {/* Botones de acción bajo el mensaje: copiar + regenerar */}
+          {(msg.content ?? '').trim() !== '' && (
+            <div className="flex items-center gap-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button
+                onClick={handleCopy}
+                className="codex-icon-btn w-6 h-6"
+                title="Copiar mensaje"
+              >
+                {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
+              </button>
+              {msg.id && (
+                <button
+                  onClick={() => regenerate(msg.id!)}
+                  disabled={isRunning}
+                  className="codex-icon-btn w-6 h-6 disabled:opacity-40"
+                  title="Regenerar respuesta"
+                >
+                  <RefreshCw size={11} className={isRunning ? 'animate-spin' : ''} />
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Renderiza el contenido de un mensaje del asistente.
+ *
+ * Detecta los patrones `[tool <name>: <label>]` y `[result <name>: <text>]`
+ * que inserta el bucle de tools, y los renderiza como bloques visuales con
+ * iconos SVG (lupa para web_search, terminal para shell_exec, etc.) en
+ * lugar de texto plano.
+ *
+ * El resto del contenido se renderiza con ReactMarkdown + syntax highlighting.
+ */
+function MessageContent({ content }: { content: string }) {
+  // Split por los patrones [tool ...] y [result ...]
+  const parts = content.split(/(\[(?:tool|result) [^\]]+\])/g);
+
+  return (
+    <>
+      {parts.map((part, i) => {
+        const toolMatch = part.match(/^\[tool (\w+): (.+)\]$/);
+        const resultMatch = part.match(/^\[result (\w+): (.+)\]$/);
+
+        if (toolMatch) {
+          const toolName = toolMatch[1];
+          const label = toolMatch[2];
+          const icon = getToolIcon(toolName);
+          const color = getToolColor(toolName);
+          return (
+            <div
+              key={i}
+              className="flex items-center gap-2 my-2 px-3 py-1.5 rounded-codex bg-app-elevated border border-border text-xs"
+            >
+              <span style={{ color }} className="flex-shrink-0">
+                {icon}
+              </span>
+              <span className="text-text-secondary font-medium">{toolName}</span>
+              <span className="text-text-muted truncate">{label}</span>
+            </div>
+          );
+        }
+
+        if (resultMatch) {
+          const toolName = resultMatch[1];
+          const text = resultMatch[2];
+          const icon = getToolIcon(toolName);
+          const color = getToolColor(toolName);
+          return (
+            <div
+              key={i}
+              className="my-2 px-3 py-2 rounded-codex bg-app-bg border border-border text-xs"
+            >
+              <div className="flex items-center gap-1.5 mb-1 text-text-muted">
+                <span style={{ color }} className="flex-shrink-0">
+                  {icon}
+                </span>
+                <span className="font-medium">resultado de {toolName}</span>
+              </div>
+              <div className="text-text-muted whitespace-pre-wrap line-clamp-3">{text}</div>
+            </div>
+          );
+        }
+
+        // Texto normal: renderizar con markdown.
+        if (part.trim()) {
+          return (
             <ReactMarkdown
+              key={i}
               remarkPlugins={[remarkGfm]}
               components={{
                 code({ className, children, ...props }) {
@@ -222,36 +322,53 @@ function MessageBubble({ msg }: { msg: Message }) {
                 td: ({ children }) => <td className="border border-border p-2">{children}</td>,
               }}
             >
-              {msg.content}
+              {part}
             </ReactMarkdown>
-          )}
-
-          {/* Botones de acción bajo el mensaje: copiar + regenerar */}
-          {msg.content.trim() !== '' && (
-            <div className="flex items-center gap-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button
-                onClick={handleCopy}
-                className="codex-icon-btn w-6 h-6"
-                title="Copiar mensaje"
-              >
-                {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
-              </button>
-              {msg.id && (
-                <button
-                  onClick={() => regenerate(msg.id!)}
-                  disabled={isRunning}
-                  className="codex-icon-btn w-6 h-6 disabled:opacity-40"
-                  title="Regenerar respuesta"
-                >
-                  <RefreshCw size={11} className={isRunning ? 'animate-spin' : ''} />
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
+          );
+        }
+        return null;
+      })}
+    </>
   );
+}
+
+/** Devuelve el icono SVG (lucide-react) correspondiente al tool. */
+function getToolIcon(toolName: string) {
+  const size = 14;
+  switch (toolName) {
+    case 'web_search':
+      return <Search size={size} />;
+    case 'web_fetch':
+      return <Globe size={size} />;
+    case 'shell_exec':
+      return <Terminal size={size} />;
+    case 'file_read':
+      return <FileCode size={size} />;
+    case 'file_write':
+      return <FileCode size={size} />;
+    case 'file_list':
+      return <FileText size={size} />;
+    default:
+      return <Download size={size} />;
+  }
+}
+
+/** Devuelve el color CSS para el icono del tool. */
+function getToolColor(toolName: string): string {
+  switch (toolName) {
+    case 'web_search':
+      return 'var(--accent)';
+    case 'web_fetch':
+      return 'var(--accent)';
+    case 'shell_exec':
+      return 'var(--success, #4ade80)';
+    case 'file_read':
+    case 'file_write':
+    case 'file_list':
+      return 'var(--warning, #fbbf24)';
+    default:
+      return 'var(--text-muted)';
+  }
 }
 
 function PlanCard({ plan }: { plan: { subtasks: Subtask[] } }) {
