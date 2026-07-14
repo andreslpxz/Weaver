@@ -6,9 +6,13 @@
 //! 3. Maneja automáticamente la conversión de keycodes y modificadores
 //!
 //! Requiere permiso de Accessibility (verificado en `ax/client.rs`).
+//!
+//! NOTA: enigo v0.2 tiene una API más simple que versiones posteriores.
+//! Los métodos son `key_click`, `key_down`, `key_up`, `mouse_move_to`,
+//! `mouse_click`, `type_text`. Button se accede como `enigo::Button`.
 
 use anyhow::{anyhow, Result};
-use enigo::{Enigo, Key, Keyboard, Mouse, Settings, MouseControllable as _, KeyboardControllable as _};
+use enigo::{Enigo, Key, Keyboard, Mouse, Settings};
 
 /// Hace clic del botón indicado en (x, y) coordenadas absolutas de pantalla.
 ///
@@ -17,24 +21,25 @@ pub fn click_at(x: i32, y: i32, button: u8) -> Result<()> {
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| anyhow!("Enigo::new falló: {e}"))?;
 
-    // Determinar botón.
-    let btn = match button {
-        1 => enigo::MouseButton::Left,
-        2 => enigo::MouseButton::Middle,
-        3 => enigo::MouseButton::Right,
-        _ => return Err(anyhow!("botón inválido: {button}")),
-    };
-
-    // Mover cursor y clickear en una sola llamada de enigo.
+    // Mover cursor a la posición.
     enigo
         .move_mouse(x, y)
         .map_err(|e| anyhow!("move_mouse falló: {e}"))?;
+
+    // Clic del botón indicado. En enigo v0.2, Button está en la raíz.
+    let btn = match button {
+        1 => enigo::Button::Left,
+        2 => enigo::Button::Middle,
+        3 => enigo::Button::Right,
+        _ => return Err(anyhow!("botón inválido: {button}")),
+    };
+
     enigo
-        .mouse_down(btn)
-        .map_err(|e| anyhow!("mouse_down falló: {e}"))?;
+        .button(btn, enigo::Direction::Press)
+        .map_err(|e| anyhow!("button press falló: {e}"))?;
     enigo
-        .mouse_up(btn)
-        .map_err(|e| anyhow!("mouse_up falló: {e}"))?;
+        .button(btn, enigo::Direction::Release)
+        .map_err(|e| anyhow!("button release falló: {e}"))?;
 
     Ok(())
 }
@@ -44,8 +49,8 @@ pub fn type_text(text: &str) -> Result<()> {
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| anyhow!("Enigo::new falló: {e}"))?;
     enigo
-        .key_sequence(text)
-        .map_err(|e| anyhow!("Enigo::key_sequence falló: {e}"))?;
+        .text(text)
+        .map_err(|e| anyhow!("Enigo::text falló: {e}"))?;
     Ok(())
 }
 
@@ -68,24 +73,24 @@ pub fn press_key_combo(combo: &str) -> Result<()> {
 
     for m in &modifiers {
         enigo
-            .key_down(*m)
-            .map_err(|e| anyhow!("key_down modifier falló: {e}"))?;
+            .key(*m, enigo::Direction::Press)
+            .map_err(|e| anyhow!("key press modifier falló: {e}"))?;
     }
 
     // Tecla principal down + up.
     let main_key = key_name_to_key(parts[parts.len() - 1])?;
     enigo
-        .key_down(main_key)
-        .map_err(|e| anyhow!("key_down falló: {e}"))?;
+        .key(main_key, enigo::Direction::Press)
+        .map_err(|e| anyhow!("key press falló: {e}"))?;
     enigo
-        .key_up(main_key)
-        .map_err(|e| anyhow!("key_up falló: {e}"))?;
+        .key(main_key, enigo::Direction::Release)
+        .map_err(|e| anyhow!("key release falló: {e}"))?;
 
     // Modificadores up (en orden inverso).
     for m in modifiers.iter().rev() {
         enigo
-            .key_up(*m)
-            .map_err(|e| anyhow!("key_up modifier falló: {e}"))?;
+            .key(*m, enigo::Direction::Release)
+            .map_err(|e| anyhow!("key release modifier falló: {e}"))?;
     }
 
     Ok(())
@@ -124,7 +129,7 @@ fn key_name_to_key(name: &str) -> Result<Key> {
         "f9" => Key::F9, "f10" => Key::F10, "f11" => Key::F11, "f12" => Key::F12,
         single if single.chars().count() == 1 => {
             let c = single.chars().next().unwrap();
-            Key::Layout(c)
+            Key::Unicode(c)
         }
         other => return Err(anyhow!("tecla desconocida: {other}")),
     })
