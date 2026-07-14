@@ -311,13 +311,20 @@ export function Composer() {
 
     try {
       const llm = await createProvider(providerId);
-      // Regex ampliada: detecta más formas verbales (infinitivos, conjugaciones,
-      // preguntas sobre capacidades) para activar el modo agéntico.
-      const agentive = /\b(abre|abrir|escribe en|escribir|copia|copiar|pega|pegar|transfiere|transferir|envía|enviar|completa|completar|rellena|rellenar|sube|subir|baja|bajar|ejecuta|ejecutar|instala|instalar|busca en internet|buscar|lee el archivo|leer|crea el archivo|crear|puedes|poder|tienes capacidad|tienes acceso)\b/i.test(
+
+      // Detección de tipo de tarea:
+      // 1. desktopAgentive: tareas que requieren operar apps de escritorio
+      //    vía AT-SPI (abrir gedit, escribir en una ventana, clickear botones).
+      //    → Usa runAgent (bucle planner → executor → critic con tools AT-SPI).
+      //
+      // 2. Cualquier otra cosa (búsqueda web, ejecutar comandos shell, leer
+      //    archivos, preguntas generales) → Usa runChatWithTools que tiene
+      //    web_search, shell_exec, file_read, etc.
+      const desktopAgentive = /\b(abre|abrir|escribe en|escribir en|copia|copiar|pega|pegar|transfiere|transferir|envía|enviar|completa|completar|rellena|rellenar|click|clic|presiona|pulsa)\b/i.test(
         objectiveText,
       );
 
-      if (agentive && runtime.isTauri) {
+      if (desktopAgentive && runtime.isTauri) {
         appendMessage({ role: 'assistant', content: '' });
         for await (const _event of runAgent(llm, modelId, objectiveText, {
           signal: ac.signal,
