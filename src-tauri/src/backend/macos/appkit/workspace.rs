@@ -13,7 +13,8 @@ use crate::backend::WindowInfo;
 /// Lista los PIDs de las aplicaciones con UI visible.
 ///
 /// Filtra por `NSApplicationActivationPolicy::Regular` (apps con dock icon).
-pub fn list_running_application_pids() -> Result<Vec<u32>> {
+/// Devuelve PIDs como `i32` (formato de macOS `pid_t`).
+pub fn list_running_application_pids() -> Result<Vec<i32>> {
     unsafe {
         let workspace = NSWorkspace::sharedWorkspace();
         let apps: Retained<NSArray<NSRunningApplication>> =
@@ -22,7 +23,10 @@ pub fn list_running_application_pids() -> Result<Vec<u32>> {
         for i in 0..apps.count() {
             let app = apps.objectAtIndex(i);
             if app.activationPolicy() == NSApplicationActivationPolicy::Regular {
-                pids.push(app.processIdentifier() as u32);
+                // En objc2-app-kit, processIdentifier es una property, no un método.
+                // Se accede como `app.processIdentifier` sin paréntesis.
+                let pid = app.processIdentifier;
+                pids.push(pid);
             }
         }
         Ok(pids)
@@ -81,7 +85,6 @@ pub fn list_windows() -> Result<Vec<WindowInfo>> {
                     }
                     let win = AXUIElement::wrap_under_get_rule(win_raw as *mut _);
 
-                    // Título de la ventana.
                     let title = win
                         .attribute(&AXUIElementAttributes::title)
                         .ok()
@@ -122,7 +125,6 @@ pub fn activate_window(id_or_title: &str) -> Result<()> {
         return activate_app_by_pid(pid);
     }
 
-    // Buscar por título (substring match case-insensitive).
     let target_lower = id_or_title.to_lowercase();
     let windows = list_windows()?;
     let found = windows

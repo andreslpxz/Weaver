@@ -5,7 +5,6 @@
 
 use anyhow::{anyhow, Result};
 use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
 use objc2_foundation::NSString;
 
@@ -13,9 +12,10 @@ use objc2_foundation::NSString;
 pub fn clipboard_get() -> Result<String> {
     unsafe {
         let pb = NSPasteboard::generalPasteboard();
-        let type_string = NSPasteboardTypeString;
+        // Crear el NSString del type name.
+        let type_string = NSString::from_str("public.utf8-plain-text");
         let string: Option<Retained<NSString>> =
-            pb.stringForType(&type_string.into());
+            pb.stringForType(&type_string);
         match string {
             Some(s) => Ok(s.to_string()),
             None => Ok(String::new()),
@@ -29,8 +29,8 @@ pub fn clipboard_set(content: &str) -> Result<()> {
         let pb = NSPasteboard::generalPasteboard();
         pb.clearContents();
         let ns_string = NSString::from_str(content);
-        let type_string = NSPasteboardTypeString;
-        let ok = pb.setString_forType(&ns_string, &type_string.into());
+        let type_string = NSString::from_str("public.utf8-plain-text");
+        let ok = pb.setString_forType(&ns_string, &type_string);
         if !ok {
             return Err(anyhow!("NSPasteboard::setString falló"));
         }

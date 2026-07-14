@@ -13,7 +13,7 @@ use crate::backend::shared_types::{AccessibleNode, Rect, StateSet};
 use crate::backend::macos::ax::types::{ax_role_to_role, build_state_set};
 
 /// Lee recursivamente un elemento y sus hijos hasta `max_depth`.
-pub fn read_node(element: &AXUIElement, depth_left: u32, pid: u32) -> Result<AccessibleNode> {
+pub fn read_node(element: &AXUIElement, depth_left: u32, pid: i32) -> Result<AccessibleNode> {
     // Rol.
     let role_raw = element
         .attribute(&AXUIElementAttributes::role)
@@ -114,7 +114,7 @@ pub fn read_node(element: &AXUIElement, depth_left: u32, pid: u32) -> Result<Acc
 /// kAXValueCGPointType y kAXValueCGSizeType respectivamente.
 /// Como no podemos acceder a la API sys directamente sin importar
 /// el submódulo sys, los casteamos a CFTypeRef y usamos FFI manual.
-fn read_rect(element: &AXUIElement) -> Result<Rect> {
+pub fn read_rect(element: &AXUIElement) -> Result<Rect> {
     let position_cf = element
         .attribute(&AXUIElementAttributes::position)
         .map_err(|e| anyhow!("AXPosition falló: {e:?}"))?;
@@ -166,16 +166,25 @@ fn cf_type_to_string(value: &core_foundation::base::CFType) -> Option<String> {
 }
 
 fn cf_type_to_bool(value: &core_foundation::base::CFType) -> Option<bool> {
+    // En lugar de castear a __CFBoolean (que es privado en algunas versiones
+    // de core-foundation), usamos FFI directo a CFBooleanGetValue.
     unsafe {
-        let cf_bool = value.as_CFTypeRef() as *const core_foundation::boolean::__CFBoolean;
-        if cf_bool.is_null() {
-            return None;
-        }
-        // Usar CFBooleanGetValue via FFI directo para evitar errores de tipo.
         extern "C" {
             fn CFBooleanGetValue(bool_ref: *const std::ffi::c_void) -> bool;
         }
-        Some(CFBooleanGetValue(cf_bool as *const _))
+        let raw = value.as_CFTypeRef() as *const std::ffi::c_void;
+        if raw.is_null() {
+            return None;
+        }
+        // Validar que es un CFBoolean comparando el typeID.
+        extern "C" {
+            fn CFGetTypeID(cf: *const std::ffi::c_void) -> usize;
+            fn CFBooleanGetTypeID() -> usize;
+        }
+        if CFGetTypeID(raw) != CFBooleanGetTypeID() {
+            return None;
+        }
+        Some(CFBooleanGetValue(raw))
     }
 }
 

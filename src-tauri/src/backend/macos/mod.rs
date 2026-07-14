@@ -90,7 +90,7 @@ impl Backend for MacosBackend {
     ) -> Result<AccessibleNode> {
         let client = self.client().await?;
         let element = client.find_by_path(&app.root_path)?;
-        crate::backend::macos::ax::tree::read_node(&element, max_depth, app.pid)
+        crate::backend::macos::ax::tree::read_node(&element, max_depth, app.pid as i32)
     }
 
     async fn get_focused_subtree(&self, max_depth: u32) -> Result<Option<AccessibleNode>> {
@@ -98,7 +98,7 @@ impl Backend for MacosBackend {
         let focused = client.focused_element().ok();
         if let Some(element) = focused {
             // Obtener PID del elemento focused.
-            let pid = 0; // TODO M2: obtener PID del elemento via AXUIElementGetPid
+            let pid: i32 = 0; // TODO M2: obtener PID del elemento via AXUIElementGetPid
             match crate::backend::macos::ax::tree::read_node(&element, max_depth, pid) {
                 Ok(node) => return Ok(Some(node)),
                 Err(e) => {

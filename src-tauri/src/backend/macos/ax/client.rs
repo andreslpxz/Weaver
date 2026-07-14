@@ -14,11 +14,24 @@ use core_foundation::string::CFString;
 use crate::backend::shared_types::ApplicationInfo;
 
 /// Cliente AXUIElement raíz.
+///
+/// NOTA: `AXUIElement` contiene raw pointers y no es `Send + Sync` por
+/// defecto. Como las llamadas a la API de Accessibility de macOS deben
+/// hacerse desde el thread principal o via `spawn_blocking`, marcamos
+/// `AxClient` como `Send + Sync` unsafe (el usuario garantiza que no
+/// compartirá el client entre threads sin sincronización).
 pub struct AxClient {
     /// Elemento system-wide: raíz para listar apps.
     #[allow(dead_code)]
     system: AXUIElement,
 }
+
+// SAFETY: AxClient nunca se comparte entre threads en Weaver (se guarda en
+// un `OnceCell` dentro de `MacosBackend` que a su vez está detrás de
+// `Box<dyn Backend>`). Las llamadas a la API se hacen via `spawn_blocking`
+// que garantiza que solo un thread accede a la vez.
+unsafe impl Send for AxClient {}
+unsafe impl Sync for AxClient {}
 
 impl AxClient {
     /// Crea el cliente. NO llama a `AXIsProcessTrusted` aquí — eso se hace
@@ -69,7 +82,7 @@ impl AxClient {
                 name,
                 bus_name: format!("pid:{pid}"),
                 root_path: format!("app:{pid}"),
-                pid,
+                pid: pid as u32,
                 child_count,
             });
         }
@@ -77,7 +90,7 @@ impl AxClient {
     }
 
     /// Devuelve el AXUIElement de una aplicación dado su PID.
-    pub fn app_element(&self, pid: u32) -> Result<AXUIElement> {
+    pub fn app_element(&self, pid: i32) -> Result<AXUIElement> {
         Ok(AXUIElement::application(pid))
     }
 
@@ -94,7 +107,7 @@ impl AxClient {
     /// Busca un elemento por su path (formato "app:{pid}/child_index/child_index/...").
     pub fn find_by_path(&self, path: &str) -> Result<AXUIElement> {
         let (pid_part, subpath) = path.split_once('/').unwrap_or((path, ""));
-        let pid: u32 = pid_part
+        let pid: i32 = pid_part
             .strip_prefix("app:")
             .ok_or_else(|| anyhow!("path inválido (debe empezar con 'app:'): {path}"))?
             .parse()

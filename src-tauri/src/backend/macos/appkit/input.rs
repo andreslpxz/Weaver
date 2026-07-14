@@ -8,8 +8,7 @@
 //! Requiere permiso de Accessibility (verificado en `ax/client.rs`).
 
 use anyhow::{anyhow, Result};
-use enigo::{Enigo, Key, Keyboard, Mouse, Settings};
-use enigo::{Coordinate, MouseButton};
+use enigo::{Enigo, Key, Keyboard, Mouse, Settings, MouseControllable as _, KeyboardControllable as _};
 
 /// Hace clic del botón indicado en (x, y) coordenadas absolutas de pantalla.
 ///
@@ -18,47 +17,40 @@ pub fn click_at(x: i32, y: i32, button: u8) -> Result<()> {
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| anyhow!("Enigo::new falló: {e}"))?;
 
-    // Mover cursor.
-    enigo
-        .move_mouse(Coordinate::Abs(x as f64), Coordinate::Abs(y as f64))
-        .map_err(|e| anyhow!("move_mouse falló: {e}"))?;
-
     // Determinar botón.
     let btn = match button {
-        1 => MouseButton::Left,
-        2 => MouseButton::Middle,
-        3 => MouseButton::Right,
+        1 => enigo::MouseButton::Left,
+        2 => enigo::MouseButton::Middle,
+        3 => enigo::MouseButton::Right,
         _ => return Err(anyhow!("botón inválido: {button}")),
     };
 
-    // Click down + up.
+    // Mover cursor y clickear en una sola llamada de enigo.
     enigo
-        .button(btn, enigo::Direction::Press)
-        .map_err(|e| anyhow!("button press falló: {e}"))?;
+        .move_mouse(x, y)
+        .map_err(|e| anyhow!("move_mouse falló: {e}"))?;
     enigo
-        .button(btn, enigo::Direction::Release)
-        .map_err(|e| anyhow!("button release falló: {e}"))?;
+        .mouse_down(btn)
+        .map_err(|e| anyhow!("mouse_down falló: {e}"))?;
+    enigo
+        .mouse_up(btn)
+        .map_err(|e| anyhow!("mouse_up falló: {e}"))?;
 
     Ok(())
 }
 
 /// Escribe una cadena de texto vía enigo.
-///
-/// Usa `key_sequence` que internamente envía eventos Unicode.
 pub fn type_text(text: &str) -> Result<()> {
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| anyhow!("Enigo::new falló: {e}"))?;
     enigo
-        .text(text)
-        .map_err(|e| anyhow!("Enigo::text falló: {e}"))?;
+        .key_sequence(text)
+        .map_err(|e| anyhow!("Enigo::key_sequence falló: {e}"))?;
     Ok(())
 }
 
 /// Presiona una combinación de teclas estilo xdotool: "cmd+c", "Return",
 /// "alt+Tab", "ctrl+s".
-///
-/// En macOS, "cmd" es el modificador principal (equivalente a "win" en Linux).
-/// "ctrl" en macOS es el Control real (no el Cmd).
 pub fn press_key_combo(combo: &str) -> Result<()> {
     let parts: Vec<&str> = combo.split('+').map(|s| s.trim()).collect();
     if parts.is_empty() {
@@ -76,24 +68,24 @@ pub fn press_key_combo(combo: &str) -> Result<()> {
 
     for m in &modifiers {
         enigo
-            .key(*m, enigo::Direction::Press)
-            .map_err(|e| anyhow!("key press modifier falló: {e}"))?;
+            .key_down(*m)
+            .map_err(|e| anyhow!("key_down modifier falló: {e}"))?;
     }
 
     // Tecla principal down + up.
     let main_key = key_name_to_key(parts[parts.len() - 1])?;
     enigo
-        .key(main_key, enigo::Direction::Press)
-        .map_err(|e| anyhow!("key press falló: {e}"))?;
+        .key_down(main_key)
+        .map_err(|e| anyhow!("key_down falló: {e}"))?;
     enigo
-        .key(main_key, enigo::Direction::Release)
-        .map_err(|e| anyhow!("key release falló: {e}"))?;
+        .key_up(main_key)
+        .map_err(|e| anyhow!("key_up falló: {e}"))?;
 
     // Modificadores up (en orden inverso).
     for m in modifiers.iter().rev() {
         enigo
-            .key(*m, enigo::Direction::Release)
-            .map_err(|e| anyhow!("key release modifier falló: {e}"))?;
+            .key_up(*m)
+            .map_err(|e| anyhow!("key_up modifier falló: {e}"))?;
     }
 
     Ok(())
@@ -132,13 +124,7 @@ fn key_name_to_key(name: &str) -> Result<Key> {
         "f9" => Key::F9, "f10" => Key::F10, "f11" => Key::F11, "f12" => Key::F12,
         single if single.chars().count() == 1 => {
             let c = single.chars().next().unwrap();
-            if c.is_ascii_alphabetic() {
-                Key::Unicode(c.to_ascii_lowercase())
-            } else if c.is_ascii_digit() {
-                Key::Unicode(c)
-            } else {
-                Key::Unicode(c)
-            }
+            Key::Layout(c)
         }
         other => return Err(anyhow!("tecla desconocida: {other}")),
     })
