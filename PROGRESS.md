@@ -157,6 +157,150 @@
 
 ---
 
+## Sesión 6 — Fase 7 + scaffold Windows/macOS + MCP runtime real (PR #6)
+
+### Tareas
+
+#### Plan multiplataforma
+- [x] **`PLAN_WINDOWS.md`** — arquitectura completa Windows (UIAutomation + Win32 + enigo)
+  - 6 fases W1-W6, ~12-14 sesiones estimadas
+  - Tablas comparativas Linux vs Windows
+  - Riesgos (UAC Secure Desktop, Electron accessibility, code signing)
+  - Criterios de MVP Windows
+- [x] **`PLAN_MACOS.md`** — arquitectura completa macOS (AXUIElement + AppKit + CGEvent)
+  - 6 fases M1-M6, ~14-16 sesiones estimadas
+  - Sección dedicada a permisos macOS (Accessibility TCC, Screen Recording)
+  - Code signing + Notarización con `xcrun notarytool`
+  - Estrategia de release conjunto Linux+Windows+macOS
+
+#### Trait Backend común (refactor)
+- [x] **`backend/mod.rs`** — trait `Backend` con 16 métodos async (accesibilidad + automatización)
+- [x] **`backend/linux.rs`** — `LinuxBackend` que envuelve `AtspiClient` + `automation` existentes
+- [x] **`backend/windows.rs`** — stub `WindowsBackend` bajo `cfg(target_os = "windows")` con TODOs por fase
+- [x] **`backend/macos.rs`** — stub `MacosBackend` bajo `cfg(target_os = "macos")` con TODOs por fase
+- [x] `NodeRef` cross-platform (bus_name + path, formato string opaco)
+- [x] `WindowInfo` cross-platform (id, title, class_name, process_name, rect)
+- [x] Factory `create_backend()` con `cfg!` que devuelve el backend correcto
+
+#### Fase 7 — MCP runtime real (Rust)
+- [x] **`src-tauri/src/mcp.rs`** — runtime MCP completo (300+ LOC):
+  - `McpProcess`: lanza servidores MCP como subprocesos stdio
+  - JSON-RPC 2.0 handshake: `initialize` → `notifications/initialized` → `tools/list` → `tools/call`
+  - `McpRegistry`: registry de servidores activos con `Arc<Mutex<HashMap>>`
+  - 7 comandos Tauri: `mcp_list_servers`, `mcp_add_server`, `mcp_remove_server`, `mcp_start_server`, `mcp_list_tools`, `mcp_call_tool`, `mcp_generate_id`
+  - Soporte para protocol version `2024-11-05`
+  - Tipos MCP: `McpServerDef`, `McpTool`, `McpCallResult`, `McpContent` (text/image/resource)
+- [x] **`src/lib/tauri.ts`** — wrappers tipados para los 7 comandos MCP con fallback navegador
+
+#### Fase 7 — Soporte Wayland
+- [x] **`src-tauri/src/wayland/mod.rs`** — detección y guía para Wayland:
+  - `is_pure_wayland()`, `has_xwayland()`, `detect_input_backend()`
+  - Enum `InputBackend` (X11, WaylandWithWtype, WaylandPortal, None)
+  - Stub `PortalSession` para futuro `xdg-desktop-portal` RemoteDesktop
+  - `wayland_help_message()` con instrucciones de instalación para el usuario
+
+#### Fase 7 — CI + empaquetado multiplataforma
+- [x] **`.github/workflows/build-linux.yml`** — runner ubuntu-22.04, produce `.deb` + `.AppImage` + `.rpm`
+- [x] **`.github/workflows/build-windows.yml`** — runner windows-latest, produce `.msi` + `.exe` NSIS
+- [x] **`.github/workflows/build-macos.yml`** — runner macos-14, universal binary (aarch64 + x86_64), produce `.dmg` + `.app`
+- [x] **`tauri.conf.json`** actualizado:
+  - `targets: "all"` (todos los formatos en cada OS)
+  - Sección `linux` con depends del paquete .deb
+  - Sección `windows` con NSIS (English + Spanish) y WiX
+  - Sección `macOS` con minimumSystemVersion 13.0
+
+#### Cargo.toml — dependencias multiplataforma
+- [x] `[target.'cfg(target_os = "windows")'.dependencies]`:
+  - `uiautomation = "0.16"` — wrapper Microsoft UIAutomation
+  - `windows = "0.58"` con features Win32 (SendInput, clipboard, EnumWindows)
+  - `enigo = "0.2"` — input sintético cross-platform
+- [x] `[target.'cfg(target_os = "macos")'.dependencies]`:
+  - `accessibility = "0.2"` — AXUIElement bindings
+  - `objc2 = "0.5"` + `objc2-app-kit` con features NSPasteboard/NSWorkspace/NSRunningApplication
+  - `objc2-core-graphics = "0.3"` — CGEvent para input
+  - `core-foundation = "0.10"`
+  - `enigo = "0.2"`
+
+---
+
+## Sesión 7 — Windows Fases W2-W4 + reorganización por OS (PR #7)
+
+### Tareas
+
+#### Reorganización del backend por OS
+- [x] Movidos `atspi/`, `automation/`, `wayland/` a `backend/linux/`
+- [x] Creadas carpetas `backend/windows/{uiautomation,win32}/` y `backend/macos/{ax,appkit}/`
+- [x] Cada OS tiene su propio `mod.rs` con implementación del trait `Backend`
+- [x] `backend/shared_types.rs` con tipos compartidos (AccessibleNode, Role, Rect, etc.)
+  para que Windows/macOS no dependan del código Linux
+- [x] `commands.rs` envuelto en `#![cfg(target_os = "linux")]`
+- [x] `lib.rs` refactorizado con ramas `cfg` para registrar comandos solo en Linux
+- [x] Frontend TS sigue compilando sin cambios
+- [x] UI sigue funcionando (test con Playwright pasó sin errores)
+
+#### Windows Fase W2 — UIAutomation wrapper (implementado)
+- [x] **`backend/windows/uiautomation/types.rs`** — mapeo `ControlType` → `Role`
+  canónico (35+ tipos mapeados), helper `build_state_set` para propiedades booleanas
+- [x] **`backend/windows/uiautomation/client.rs`** — `UiaClient`:
+  - Inicializa COM via `UIAutomation::new()`
+  - `list_applications()`: enumera ventanas top-level del desktop
+  - `find_by_path()`: BFS con límite de 10,000 nodos para buscar elemento por RuntimeId
+  - `runtime_id_to_path()`: serializa RuntimeId Vec<i32> como "42:1234567"
+  - `focused_element()` via `automation.get_focused_element()`
+- [x] **`backend/windows/uiautomation/tree.rs`** — `read_node()` recursivo:
+  - Lee Name, HelpText, ControlType, BoundingRectangle
+  - Construye StateSet desde IsEnabled, HasKeyboardFocus, IsKeyboardFocusable, IsPassword, IsOffscreen
+  - Lee texto via ValuePattern o TextPattern (visible ranges)
+  - Lista acciones desde patterns disponibles (invoke, toggle, select, expand, collapse)
+  - Limita a 200 hijos por nodo y respeta `max_depth`
+
+#### Windows Fase W3 — Acciones sobre elementos (implementado)
+- [x] **`backend/windows/uiautomation/actions.rs`**:
+  - `click()`: InvokePattern::Invoke, fallback SendInput en centro de BoundingRectangle
+  - `double_click()`: dos click() con pausa 80ms
+  - `type_text()`: ValuePattern::SetValue, fallback focus + SendInput Unicode
+  - `get_text()`: ValuePattern::CurrentValue, fallback TextPattern::GetVisibleRanges
+  - `get_extents()`: CurrentBoundingRectangle → Rect
+  - `focus()`: element.set_focus()
+
+#### Windows Fase W4 — Automation Win32 (implementado)
+- [x] **`backend/windows/win32/clipboard.rs`**:
+  - `clipboard_get()`: OpenClipboard + GetClipboardData(CF_UNICODETEXT) + GlobalLock
+  - `clipboard_set()`: EmptyClipboard + GlobalAlloc + SetClipboardData
+- [x] **`backend/windows/win32/windows.rs`**:
+  - `list_windows()`: EnumWindows callback filtrando IsWindowVisible
+  - `activate_window()`: por HWND ("hwnd:NNN") o por título (substring case-insensitive)
+  - `process_name_by_pid()`: CreateToolhelp32Snapshot + Process32FirstW/NextW
+  - `activate_hwnd()`: AllowSetForegroundWindow(ASFW_ANY) + SetForegroundWindow
+- [x] **`backend/windows/win32/input.rs`**:
+  - `click_at(x, y, button)`: SetCursorPos + SendInput con MOUSEINPUT (down/up)
+  - `type_text(text)`: KEYEVENTF_UNICODE para cada caracter UTF-16 (down + up)
+  - `press_key_combo(combo)`: parsea "ctrl+s", "alt+Tab", "win+d" → SendInput con vk codes
+  - Mapeo completo de key names: Return, Tab, Escape, BackSpace, Delete, F1-F12, flechas, etc.
+
+#### Windows Fase W2-W4 — Backend integrado
+- [x] **`backend/windows/mod.rs`** — `WindowsBackend` real:
+  - Mantiene `UiaClient` via `OnceCell` (inicialización COM costosa)
+  - 16/16 métodos del trait `Backend` implementados
+  - Operaciones síncronas (SendInput, clipboard) envueltas en `tokio::task::spawn_blocking`
+
+#### Cargo.toml — features adicionales Win32
+- [x] Añadidas features `Win32_System_Memory`, `Win32_System_Threading`,
+  `Win32_System_Diagnostics_ToolHelp` para soportar GlobalAlloc, OpenProcess,
+  CreateToolhelp32Snapshot
+
+#### Validación
+- [x] Script `scripts/validate_rust_structure.py` — verifica módulos, cfg, estructura, Cargo.toml
+  - Resultado: ✅ sin errores estructurales
+  - 10 anotaciones `cfg(target_os = "linux")`, 3 `"windows"`, 3 `"macos"`
+- [x] Script `scripts/validate_backend_coverage.py` — verifica cobertura del trait
+  - Linux: 16/16 (100%)
+  - Windows: 16/16 (100%)
+  - macOS: 0/16 (stub pendiente de Fase M2)
+- [x] Test funcional con Playwright — UI carga sin errores tras reorganización
+
+---
+
 ## Estado actual por módulo
 
 ### Backend Rust (src-tauri/)
@@ -216,16 +360,23 @@
 | 3 — Proveedores IA (22) | [x] 22/22 | #1, #4 |
 | 4 — UI Codex-style | [x] Hecho | #1, #3, #5 |
 | 5 — Bucle agéntico | [x] Completo | #1 |
-| 6 — MCP + skills.sh | [~] Esqueleto, runtime real TBD | #1 |
-| 7 — Pulido Linux + empaquetado | [ ] Pendiente | — |
+| 6 — MCP + skills.sh | [x] MCP runtime real + esqueleto skills.sh | #6 |
+| 7 — Pulido Linux + empaquetado | [~] Wayland detection + CI multiplataforma; portal TBD | #6 |
+| W1-W6 — Windows | [~] W2-W4 implementados, W1+W5+W6 pendientes | #6, #7 |
+| M1-M6 — macOS | [ ] Scaffold listo, implementación TBD | #6+ |
 
 ### Pendiente para próximas iteraciones
 
 - [ ] **Adjuntar app** real: picker AT-SPI que liste ventanas abiertas (estilo Codex "Adjuntar Google Chrome")
 - [ ] Persistir conversaciones completas a SQLite al cambiar entre ellas (ahora solo al crearse)
 - [ ] Comando Tauri `bedrock_invoke` con SigV4 nativo
-- [ ] MCP runtime real (lanzar subprocesos stdio JSON-RPC)
-- [ ] Soporte Wayland vía `xdg-desktop-portal`
-- [ ] Empaquetado `.deb`, `.AppImage`, `.rpm` y CI
-- [ ] Soporte multimodal en Bedrock y VertexAI adapters
 - [ ] Skills auto-aprendidas: persistir a `~/.weaver/skills/learned/` tras reflexión exitosa
+- [ ] **Fase 7 — xdg-desktop-portal RemoteDesktop**: implementar `PortalSession` real para Wayland puro
+- [ ] **Windows Fase W2**: implementar `WindowsBackend` con `uiautomation` crate
+- [ ] **Windows Fase W3**: acciones InvokePattern / ValuePattern / TextPattern
+- [ ] **Windows Fase W4**: Win32 clipboard + EnumWindows + SendInput
+- [ ] **Windows Fase W5**: code signing con certificado EV
+- [ ] **macOS Fase M2**: implementar `MacosBackend` con `accessibility` crate
+- [ ] **macOS Fase M3**: AXPress / AXSetValue / CGEvent
+- [ ] **macOS Fase M4**: NSPasteboard + NSWorkspace + NSRunningApplication
+- [ ] **macOS Fase M5**: code signing + notarización con `xcrun notarytool`

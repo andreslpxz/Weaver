@@ -404,3 +404,70 @@ export const sqlite = {
         })
       : Promise.reject(new Error('file_list requiere Tauri')),
 };
+
+// ============================================================================
+// MCP (Model Context Protocol) — runtime real vía Rust en Fase 7
+// ============================================================================
+
+export interface McpServerDef {
+  id: string;
+  name: string;
+  transport: 'stdio' | 'sse';
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: Record<string, string>;
+  enabled: boolean;
+}
+
+export interface McpTool {
+  server_id: string;
+  server_name: string;
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+}
+
+export interface McpContent {
+  type: 'text' | 'image' | 'resource';
+  text?: string;
+  data?: string;
+  mime_type?: string;
+  resource?: unknown;
+}
+
+export interface McpCallResult {
+  content: McpContent[];
+  is_error: boolean;
+}
+
+export const mcp = {
+  listServers: (): Promise<McpServerDef[]> =>
+    isTauri
+      ? tauriInvoke<McpServerDef[]>('mcp_list_servers')
+      : Promise.resolve([]),
+  addServer: (server: McpServerDef): Promise<void> =>
+    isTauri
+      ? tauriInvoke<void>('mcp_add_server', { server })
+      : Promise.resolve(),
+  removeServer: (id: string): Promise<void> =>
+    isTauri
+      ? tauriInvoke<void>('mcp_remove_server', { id })
+      : Promise.resolve(),
+  startServer: (id: string): Promise<void> =>
+    isTauri
+      ? tauriInvoke<void>('mcp_start_server', { id })
+      : Promise.reject(new Error('mcp_start_server requiere Tauri')),
+  listTools: (): Promise<McpTool[]> =>
+    isTauri
+      ? tauriInvoke<McpTool[]>('mcp_list_tools')
+      : Promise.resolve([]),
+  callTool: (serverId: string, name: string, args: Record<string, unknown>): Promise<McpCallResult> =>
+    isTauri
+      ? tauriInvoke<McpCallResult>('mcp_call_tool', { serverId, name, args })
+      : Promise.reject(new Error('mcp_call_tool requiere Tauri')),
+  generateId: (): Promise<string> =>
+    isTauri
+      ? tauriInvoke<string>('mcp_generate_id')
+      : Promise.resolve(crypto.randomUUID()),
+};

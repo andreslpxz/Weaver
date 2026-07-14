@@ -31,7 +31,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["deb", "appimage", "rpm"],
+    "targets": "all",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -42,7 +42,31 @@
     "publisher": "Weaver",
     "category": "Utility",
     "shortDescription": "Desktop agent that operates any app via Accessibility APIs",
-    "longDescription": "Weaver is a desktop agent that uses the system's Accessibility APIs (AT-SPI on Linux) to read and control any application, allowing an LLM-driven agent loop to plan, execute, verify and reflect on multi-step tasks across programs."
+    "longDescription": "Weaver is a desktop agent that uses the system's Accessibility APIs (AT-SPI on Linux, UIAutomation on Windows, AXUIElement on macOS) to read and control any application, allowing an LLM-driven agent loop to plan, execute, verify and reflect on multi-step tasks across programs.",
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+      },
+      "appimage": {
+        "bundleMediaFramework": true
+      }
+    },
+    "windows": {
+      "nsis": {
+        "displayLanguageSelector": false,
+        "languages": ["English", "Spanish"]
+      },
+      "wix": {
+        "language": "en-US"
+      }
+    },
+    "macOS": {
+      "signingIdentity": null,
+      "entitlements": null,
+      "exceptionDomain": "",
+      "frameworks": [],
+      "minimumSystemVersion": "13.0"
+    }
   },
   "plugins": {}
 }

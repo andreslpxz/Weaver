@@ -1,9 +1,16 @@
 //! Comandos IPC expuestos al frontend Tauri.
 //!
 //! Todos los comandos que el frontend puede invocar con `invoke('name', args)`.
+//!
+//! NOTA: este archivo es específico de Linux. Cuando se implementen los
+//! backends de Windows y macOS, será reemplazado por una versión que delega
+//! al trait `Backend` (ver `backend/mod.rs`). Por ahora, los comandos Tauri
+//! llaman directamente a `backend::linux::atspi` y `backend::linux::automation`.
 
-use crate::atspi::{AtspiClient, AccessibleNode, ApplicationInfo, Rect};
-use crate::automation::{self, WindowInfo};
+#![cfg(target_os = "linux")]
+
+use crate::backend::linux::atspi::{AtspiClient, AccessibleNode, ApplicationInfo, Rect};
+use crate::backend::linux::automation::{self, WindowInfo};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -75,7 +82,7 @@ pub struct NodeRef {
 #[tauri::command]
 pub async fn atspi_click(node: NodeRef, state: State<'_, AppState>) -> Result<(), String> {
     let client = atspi(&state).await?;
-    crate::atspi::actions::click(client.connection(), &node.bus_name, &node.path)
+    crate::backend::linux::atspi::actions::click(client.connection(), &node.bus_name, &node.path)
         .await
         .map_err(|e| e.to_string())
 }
@@ -83,7 +90,7 @@ pub async fn atspi_click(node: NodeRef, state: State<'_, AppState>) -> Result<()
 #[tauri::command]
 pub async fn atspi_double_click(node: NodeRef, state: State<'_, AppState>) -> Result<(), String> {
     let client = atspi(&state).await?;
-    crate::atspi::actions::double_click(client.connection(), &node.bus_name, &node.path)
+    crate::backend::linux::atspi::actions::double_click(client.connection(), &node.bus_name, &node.path)
         .await
         .map_err(|e| e.to_string())
 }
@@ -98,14 +105,14 @@ pub struct TypeTextArgs {
 #[tauri::command]
 pub async fn atspi_type_text(args: TypeTextArgs, state: State<'_, AppState>) -> Result<(), String> {
     let client = atspi(&state).await?;
-    crate::atspi::actions::type_text(client.connection(), &args.bus_name, &args.path, &args.text)
+    crate::backend::linux::atspi::actions::type_text(client.connection(), &args.bus_name, &args.path, &args.text)
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn atspi_press_key(key: String) -> Result<(), String> {
-    crate::atspi::actions::press_key(&key)
+    crate::backend::linux::atspi::actions::press_key(&key)
         .await
         .map_err(|e| e.to_string())
 }
@@ -113,7 +120,7 @@ pub async fn atspi_press_key(key: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn atspi_get_text(node: NodeRef, state: State<'_, AppState>) -> Result<Option<String>, String> {
     let client = atspi(&state).await?;
-    crate::atspi::actions::get_text(client.connection(), &node.bus_name, &node.path)
+    crate::backend::linux::atspi::actions::get_text(client.connection(), &node.bus_name, &node.path)
         .await
         .map_err(|e| e.to_string())
 }
@@ -121,7 +128,7 @@ pub async fn atspi_get_text(node: NodeRef, state: State<'_, AppState>) -> Result
 #[tauri::command]
 pub async fn atspi_get_extents(node: NodeRef, state: State<'_, AppState>) -> Result<Rect, String> {
     let client = atspi(&state).await?;
-    let (x, y, w, h) = crate::atspi::actions::get_extents(client.connection(), &node.bus_name, &node.path)
+    let (x, y, w, h) = crate::backend::linux::atspi::actions::get_extents(client.connection(), &node.bus_name, &node.path)
         .await
         .map_err(|e| e.to_string())?;
     Ok(Rect { x, y, width: w, height: h })
@@ -130,7 +137,7 @@ pub async fn atspi_get_extents(node: NodeRef, state: State<'_, AppState>) -> Res
 #[tauri::command]
 pub async fn atspi_focus(node: NodeRef, state: State<'_, AppState>) -> Result<(), String> {
     let client = atspi(&state).await?;
-    crate::atspi::actions::focus(client.connection(), &node.bus_name, &node.path)
+    crate::backend::linux::atspi::actions::focus(client.connection(), &node.bus_name, &node.path)
         .await
         .map_err(|e| e.to_string())
 }

@@ -23,6 +23,8 @@ export const PROVIDERS: ProviderInfo[] = [
       { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro', contextWindow: 2_097_152, supportsTools: true, supportsStreaming: true },
       { id: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash', contextWindow: 1_048_576, supportsTools: true, supportsStreaming: true },
       { id: 'gemini-2.0-flash-exp', label: 'Gemini 2.0 Flash (exp)', contextWindow: 1_048_576, supportsTools: true, supportsStreaming: true },
+      { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', contextWindow: 1_048_576, supportsTools: true, supportsStreaming: true },
+      { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', contextWindow: 2_097_152, supportsTools: true, supportsStreaming: true },
     ],
   },
   {

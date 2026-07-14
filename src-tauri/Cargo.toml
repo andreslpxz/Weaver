@@ -56,6 +56,42 @@ which = "7"
 [target.'cfg(target_os = "linux")'.dependencies]
 # X11 raw protocol for synthetic input events (keyboard/mouse)
 x11rb = "0.13"
+# xdg-desktop-portal: Wayland-compatible screen capture and remote desktop (Fase 7)
+# zbus ya está incluido en deps comunes; reusamos para portal D-Bus.
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# UIAutomation wrapper (Microsoft COM API for accessibility)
+uiautomation = "0.16"
+# Win32 APIs: SendInput, clipboard, EnumWindows, SetForegroundWindow, ToolHelp
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_DataExchange",
+    "Win32_System_Ole",
+    "Win32_System_Com",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_ToolHelp",
+] }
+# Cross-platform input synth (uses SendInput on Windows)
+enigo = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# AXUIElement bindings (ApplicationServices.framework)
+accessibility = "0.2"
+# Objective-C runtime + AppKit
+objc2 = "0.5"
+objc2-app-kit = { version = "0.2", features = [
+    "NSPasteboard",
+    "NSWorkspace",
+    "NSRunningApplication",
+    "NSScreen",
+] }
+objc2-core-graphics = "0.3"
+core-foundation = "0.10"
+# Cross-platform input synth (uses CGEvent on macOS)
+enigo = "0.2"
 
 [features]
 # This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!
