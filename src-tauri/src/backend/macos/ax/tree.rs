@@ -56,7 +56,7 @@ pub fn read_node(element: &AXUIElement, depth_left: u32, pid: u32) -> Result<Acc
     let states: StateSet =
         build_state_set(is_enabled, is_focused, is_focusable, is_password);
 
-    // Bounding box: AXPosition + AXSize.
+    // Bounding box: AXPosition + AXSize (en formato CFValue/AXValue).
     let rect = read_rect(element).ok();
 
     // Texto: AXValue.
@@ -76,9 +76,9 @@ pub fn read_node(element: &AXUIElement, depth_left: u32, pid: u32) -> Result<Acc
             .ok()
             .and_then(|v| cf_type_to_array(&v))
         {
-            // Limitar a 200 hijos por nodo (mismo límite que Linux/Windows).
             for i in 0..child_array.count().min(200) {
-                if let Some(child) = cf_type_to_ax_ui_element(child_array.get(i)) {
+                let child_cf = child_array.get(i);
+                if let Some(child) = cf_type_to_ax_ui_element(&child_cf) {
                     match read_node(&child, depth_left - 1, pid) {
                         Ok(n) => children.push(n),
                         Err(e) => {
@@ -90,10 +90,7 @@ pub fn read_node(element: &AXUIElement, depth_left: u32, pid: u32) -> Result<Acc
         }
     }
 
-    // Generar path jerárquico "app:PID/0/1/2/...".
-    // En macOS no hay RuntimeId; usamos el índice en el padre (requiere
-    // pasar el index desde el padre, pero para simplicidad generamos
-    // un path único con el hash del puntero del elemento).
+    // Path jerárquico "app:PID/ptr:0xNNN..." (formato opaco para NodeRef).
     let path = format!("app:{pid}/ptr:{:p}", element);
 
     Ok(AccessibleNode {
@@ -111,19 +108,23 @@ pub fn read_node(element: &AXUIElement, depth_left: u32, pid: u32) -> Result<Acc
     })
 }
 
-/// Lee el bounding box del elemento: AXPosition (CGPoint) + AXSize (CGSize).
+/// Lee el bounding box del elemento: AXPosition + AXSize.
+///
+/// En macOS, AXPosition y AXSize son AXValueRef con tipos
+/// kAXValueCGPointType y kAXValueCGSizeType respectivamente.
+/// Como no podemos acceder a la API sys directamente sin importar
+/// el submódulo sys, los casteamos a CFTypeRef y usamos FFI manual.
 fn read_rect(element: &AXUIElement) -> Result<Rect> {
-    use core_foundation::dictionary::CFDictionary;
-
-    let position = element
+    let position_cf = element
         .attribute(&AXUIElementAttributes::position)
         .map_err(|e| anyhow!("AXPosition falló: {e:?}"))?;
-    let size = element
+    let size_cf = element
         .attribute(&AXUIElementAttributes::size)
         .map_err(|e| anyhow!("AXSize falló: {e:?}"))?;
 
-    let (x, y) = cf_value_to_point(&position)?;
-    let (w, h) = cf_value_to_size(&size)?;
+    // Usar FFI directo a AXValueGetValue (declaraciones extern "C").
+    let (x, y) = cf_to_point(&position_cf)?;
+    let (w, h) = cf_to_size(&size_cf)?;
 
     Ok(Rect {
         x: x as i32,
@@ -134,8 +135,6 @@ fn read_rect(element: &AXUIElement) -> Result<Rect> {
 }
 
 /// Lista las acciones disponibles en el elemento.
-///
-/// macOS expone `AXActionNames` que es un array de strings.
 fn list_actions(element: &AXUIElement) -> Vec<String> {
     if let Some(actions_val) = element
         .attribute(&AXUIElementAttributes::action_names)
@@ -172,8 +171,11 @@ fn cf_type_to_bool(value: &core_foundation::base::CFType) -> Option<bool> {
         if cf_bool.is_null() {
             return None;
         }
-        let b = core_foundation::boolean::CFBoolean::wrap_under_get_rule(cf_bool as *mut _);
-        Some(b == true)
+        // Usar CFBooleanGetValue via FFI directo para evitar errores de tipo.
+        extern "C" {
+            fn CFBooleanGetValue(bool_ref: *const std::ffi::c_void) -> bool;
+        }
+        Some(CFBooleanGetValue(cf_bool as *const _))
     }
 }
 
@@ -190,30 +192,46 @@ fn cf_type_to_array(
 }
 
 fn cf_type_to_ax_ui_element(
-    value: core_foundation::base::CFType,
+    value: &core_foundation::base::CFType,
 ) -> Option<AXUIElement> {
     unsafe {
-        let ptr = value.as_CFTypeRef() as *const accessibility::sys::AXUIElement;
-        if ptr.is_null() {
+        let raw = value.as_CFTypeRef() as *mut std::ffi::c_void;
+        if raw.is_null() {
             return None;
         }
-        Some(AXUIElement::wrap_under_get_rule(ptr as *mut _))
+        Some(AXUIElement::wrap_under_get_rule(raw as *mut _))
     }
 }
 
-/// Convierte un CFValue (AXValueRef con tipo kAXValueCGPointType) a (x, y).
-fn cf_value_to_point(value: &core_foundation::base::CFType) -> Result<(f64, f64)> {
-    // CGPoint es {x: f64, y: f64}.
-    // accessibility crate expone AXValueRef; aquí hacemos cast inseguro.
+/// Convierte un AXValue (CGPoint) a (x, y) usando FFI directo.
+fn cf_to_point(value: &core_foundation::base::CFType) -> Result<(f64, f64)> {
+    #[repr(C)]
+    #[derive(Copy, Clone, Default)]
+    struct CGPoint {
+        x: f64,
+        y: f64,
+    }
+
     unsafe {
-        let ptr = value.as_CFTypeRef() as *const accessibility::sys::AXValueRef;
-        if ptr.is_null() {
+        extern "C" {
+            fn AXValueGetValue(
+                value_ref: *const std::ffi::c_void,
+                the_type: u32,
+                value_ptr: *mut std::ffi::c_void,
+            ) -> bool;
+        }
+
+        // kAXValueCGPointType = 1 en AXValueType enum.
+        const K_AX_VALUE_CG_POINT_TYPE: u32 = 1;
+
+        let mut point: CGPoint = CGPoint::default();
+        let raw = value.as_CFTypeRef() as *const std::ffi::c_void;
+        if raw.is_null() {
             return Err(anyhow!("AXValue NULL"));
         }
-        let mut point: CGPoint = std::mem::zeroed();
-        let ok = accessibility::sys::AXValueGetValue(
-            ptr,
-            accessibility::sys::AXValueType_kAXValueCGPointType,
+        let ok = AXValueGetValue(
+            raw,
+            K_AX_VALUE_CG_POINT_TYPE,
             &mut point as *mut _ as *mut _,
         );
         if !ok {
@@ -223,37 +241,40 @@ fn cf_value_to_point(value: &core_foundation::base::CFType) -> Result<(f64, f64)
     }
 }
 
-/// Convierte un CFValue (AXValueRef con tipo kAXValueCGSizeType) a (w, h).
-fn cf_value_to_size(value: &core_foundation::base::CFType) -> Result<(f64, f64)> {
+/// Convierte un AXValue (CGSize) a (w, h) usando FFI directo.
+fn cf_to_size(value: &core_foundation::base::CFType) -> Result<(f64, f64)> {
+    #[repr(C)]
+    #[derive(Copy, Clone, Default)]
+    struct CGSize {
+        width: f64,
+        height: f64,
+    }
+
     unsafe {
-        let ptr = value.as_CFTypeRef() as *const accessibility::sys::AXValueRef;
-        if ptr.is_null() {
+        extern "C" {
+            fn AXValueGetValue(
+                value_ref: *const std::ffi::c_void,
+                the_type: u32,
+                value_ptr: *mut std::ffi::c_void,
+            ) -> bool;
+        }
+
+        // kAXValueCGSizeType = 2 en AXValueType enum.
+        const K_AX_VALUE_CG_SIZE_TYPE: u32 = 2;
+
+        let mut size: CGSize = CGSize::default();
+        let raw = value.as_CFTypeRef() as *const std::ffi::c_void;
+        if raw.is_null() {
             return Err(anyhow!("AXValue NULL"));
         }
-        let mut size: CGSize = std::mem::zeroed();
-        let ok = accessibility::sys::AXValueGetValue(
-            ptr,
-            accessibility::sys::AXValueType_kAXValueCGSizeType,
+        let ok = AXValueGetValue(
+            raw,
+            K_AX_VALUE_CG_SIZE_TYPE,
             &mut size as *mut _ as *mut _,
         );
         if !ok {
-            return Err(anyhow!("AXValueGetSize CGSize falló"));
+            return Err(anyhow!("AXValueGetValue CGSize falló"));
         }
         Ok((size.width, size.height))
     }
-}
-
-// Re-declaraciones para evitar imports complejos.
-#[repr(C)]
-#[derive(Copy, Clone)]
-struct CGPoint {
-    x: f64,
-    y: f64,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-struct CGSize {
-    width: f64,
-    height: f64,
 }

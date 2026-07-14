@@ -3,18 +3,9 @@
 //! macOS requiere que la app tenga permiso de Accessibility en
 //! System Settings → Privacy & Security → Accessibility. Sin este permiso,
 //! las llamadas a AXUIElement devuelven datos vacíos o errores silentes.
-//!
-//! Verificación de permiso:
-//! ```text
-//! use accessibility::AXIsProcessTrustedWithOptions;
-//! let options = CFDictionary::from_CFType_pairs(&[
-//!     (CFString::new("AXTrustedCheckOptionPrompt"), true.into())
-//! ]);
-//! AXIsProcessTrustedWithOptions(Some(&options));
-//! ```
 
-use anyhow::{anyhow, Context, Result};
-use accessibility::{AXUIElement, AXUIElementAttributes};
+use anyhow::{anyhow, Result};
+use accessibility::AXUIElement;
 use core_foundation::base::{CFType, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::CFDictionary;
@@ -23,10 +14,9 @@ use core_foundation::string::CFString;
 use crate::backend::shared_types::ApplicationInfo;
 
 /// Cliente AXUIElement raíz.
-///
-/// Mantiene una referencia al system-wide element para listar aplicaciones.
 pub struct AxClient {
     /// Elemento system-wide: raíz para listar apps.
+    #[allow(dead_code)]
     system: AXUIElement,
 }
 
@@ -41,15 +31,11 @@ impl AxClient {
     /// Verifica si la app tiene permiso de Accessibility.
     /// Si `prompt` es true, muestra diálogo nativo pidiendo el permiso.
     pub fn check_accessibility_permission(prompt: bool) -> bool {
-        // Construir options dict con kAXTrustedCheckOptionPrompt = prompt.
         let key = CFString::new("AXTrustedCheckOptionPrompt");
         let value = CFBoolean::from(prompt);
         let options = CFDictionary::from_CFType_pairs(&[(&key, &value)]);
 
-        // AXIsProcessTrustedWithOptions está en accessibility crate.
         unsafe {
-            // Llamada directa via FFI — la crate `accessibility` no expone
-            // esta función directamente, así que usamos el raw binding.
             extern "C" {
                 fn AXIsProcessTrustedWithOptions(
                     options: *const core_foundation::base::CFTypeRef,
@@ -60,33 +46,25 @@ impl AxClient {
     }
 
     /// Lista las aplicaciones en ejecución vía NSWorkspace.
-    ///
-    /// En macOS no hay un "registry" como AT-SPI; usamos
-    /// `NSWorkspace::runningApplications` para obtener la lista, y luego
-    /// `AXUIElementCreateApplication(pid)` para crear el elemento accessible
-    /// de cada una.
     pub fn list_applications(&self) -> Result<Vec<ApplicationInfo>> {
-        // Obtener lista de PIDs de apps visibles via NSWorkspace.
-        let pids = list_running_application_pids()?;
+        let pids = crate::backend::macos::appkit::workspace::list_running_application_pids()?;
 
         let mut apps = Vec::with_capacity(pids.len());
         for pid in pids {
             let app_element = AXUIElement::application(pid);
 
-            // Nombre de la app.
+            // Nombre de la app (AXTitle attribute).
             let name = app_element
-                .attribute(&AXUIElementAttributes::title)
+                .attribute(&accessibility::AXUIElementAttributes::title)
                 .ok()
-                .and_then(|v| cfstring_to_string(&v))
+                .and_then(|v| cf_type_to_string(&v))
                 .unwrap_or_else(|| format!("pid:{pid}"));
 
             // Count de ventanas top-level.
             let child_count = app_element
-                .attribute_count(&AXUIElementAttributes::windows)
+                .attribute_count(&accessibility::AXUIElementAttributes::windows)
                 .unwrap_or(0) as i32;
 
-            // En macOS, "bus_name" es el PID como string y "root_path" es
-            // un identificador interno (típicamente "app:{pid}").
             apps.push(ApplicationInfo {
                 name,
                 bus_name: format!("pid:{pid}"),
@@ -107,27 +85,20 @@ impl AxClient {
     pub fn focused_element(&self) -> Result<AXUIElement> {
         let system = AXUIElement::system_wide();
         let focused = system
-            .attribute(&AXUIElementAttributes::focused_ui_element)
+            .attribute(&accessibility::AXUIElementAttributes::focused_ui_element)
             .map_err(|e| anyhow!("AXFocusedUIElement falló: {e:?}"))?;
-        // focused es un CFType que contiene un AXUIElement ref.
         cf_type_to_ax_ui_element(&focused)
             .ok_or_else(|| anyhow!("no se pudo obtener focused element"))
     }
 
-    /// Busca un elemento por su path (formato "app:{pid}" + subpath interno).
-    ///
-    /// En macOS no hay un "RuntimeId" como en Windows; usamos una
-    /// codificación jerárquica "app:PID/child_index/child_index/...".
+    /// Busca un elemento por su path (formato "app:{pid}/child_index/child_index/...").
     pub fn find_by_path(&self, path: &str) -> Result<AXUIElement> {
-        // Parsear "app:PID/0/1/2/..."
-        let (pid_part, subpath) = path
-            .split_once('/')
-            .unwrap_or((path, ""));
+        let (pid_part, subpath) = path.split_once('/').unwrap_or((path, ""));
         let pid: u32 = pid_part
             .strip_prefix("app:")
             .ok_or_else(|| anyhow!("path inválido (debe empezar con 'app:'): {path}"))?
             .parse()
-            .with_context(|| format!("PID inválido en path: {path}"))?;
+            .map_err(|e| anyhow!("PID inválido: {e}"))?;
 
         let app = AXUIElement::application(pid);
 
@@ -135,27 +106,33 @@ impl AxClient {
             return Ok(app);
         }
 
-        // Navegar por índices.
         let mut current = app;
         for index_str in subpath.split('/') {
+            // Saltarse segmentos tipo "ptr:0x123" (no navegables por índice).
+            if index_str.starts_with("ptr:") {
+                continue;
+            }
             let index: usize = index_str
                 .parse()
-                .with_context(|| format!("índice inválido en path: {index_str}"))?;
+                .map_err(|e| anyhow!("índice inválido en path: {e}"))?;
             let children = current
-                .attribute(&AXUIElementAttributes::children)
+                .attribute(&accessibility::AXUIElementAttributes::children)
                 .map_err(|e| anyhow!("AXChildren falló: {e:?}"))?;
             let array = cf_type_to_array(&children)
                 .ok_or_else(|| anyhow!("AXChildren no es un array"))?;
+            if index >= array.count() {
+                return Err(anyhow!("índice {index} fuera de rango (count={})", array.count()));
+            }
             current = cf_type_to_ax_ui_element(&array.get(index))
-                .ok_or_else(|| anyhow!("índice {index} fuera de rango"))?;
+                .ok_or_else(|| anyhow!("elemento hijo no es AXUIElement"))?;
         }
         Ok(current)
     }
 }
 
-// ── Helpers para CFType ↔ AXUIElement ─────────────────────────────────────
+// ── Helpers para CFType ───────────────────────────────────────────────────
 
-fn cfstring_to_string(value: &CFType) -> Option<String> {
+fn cf_type_to_string(value: &CFType) -> Option<String> {
     unsafe {
         let cf_str = value.as_CFTypeRef() as *const core_foundation::string::__CFString;
         if cf_str.is_null() {
@@ -167,14 +144,22 @@ fn cfstring_to_string(value: &CFType) -> Option<String> {
 }
 
 fn cf_type_to_ax_ui_element(value: &CFType) -> Option<AXUIElement> {
-    // AXUIElement es un toll-free bridged con CFTypeRef.
-    // Casting directo es seguro según la documentación de macOS.
+    // AXUIElement es toll-free bridged con CFTypeRef.
+    // Casting directo es seguro según documentación de macOS.
     unsafe {
-        let ptr = value.as_CFTypeRef() as *const accessibility::sys::AXUIElement;
-        if ptr.is_null() {
+        // Usamos el método `wrap_under_create_rule` para tomar ownership
+        // del CFType sin incrementar el refcount (que ya fue retenido por
+        // la llamada a `attribute`).
+        let cf_type = value.clone();
+        // AXUIElement en `accessibility` crate tiene From<CFType> implícito.
+        // Hacemos un cast inseguro al tipo interno.
+        let raw = cf_type.as_CFTypeRef() as *mut std::ffi::c_void;
+        if raw.is_null() {
             return None;
         }
-        Some(AXUIElement::wrap_under_get_rule(ptr as *mut _))
+        // AXUIElement::wrap_under_get_rule espera *mut AXUIElementRef.
+        // El cast desde *mut c_void es válido porque son toll-free bridged.
+        Some(AXUIElement::wrap_under_get_rule(raw as *mut _))
     }
 }
 
@@ -186,14 +171,4 @@ fn cf_type_to_array(value: &CFType) -> Option<core_foundation::array::CFArray> {
         }
         Some(core_foundation::array::CFArray::wrap_under_get_rule(ptr as *mut _))
     }
-}
-
-/// Lista los PIDs de las aplicaciones en ejecución vía NSWorkspace.
-///
-/// Implementación simplificada usando `NSRunningApplication::runningApplicationsWithActivationPolicy:`
-/// con `NSApplicationActivationPolicyRegular` (apps con UI visible).
-fn list_running_application_pids() -> Result<Vec<u32>> {
-    // Esta función requiere bindings objc2-app-kit que están en `appkit/workspace.rs`.
-    // Para mantener `ax/` enfocado en Accessibility, delegamos a appkit.
-    crate::backend::macos::appkit::workspace::list_running_application_pids()
 }

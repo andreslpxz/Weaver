@@ -8,6 +8,10 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+# Necesario para que tauri-action pueda crear releases y subir artifacts.
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-22.04
