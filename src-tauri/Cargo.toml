@@ -80,6 +80,7 @@ enigo = "0.2"
 [target.'cfg(target_os = "macos")'.dependencies]
 # AXUIElement bindings (ApplicationServices.framework)
 accessibility = "0.2"
+accessibility-sys = "0.2"
 # Objective-C runtime + AppKit
 objc2 = "0.5"
 objc2-app-kit = { version = "0.2", features = [
@@ -88,6 +89,7 @@ objc2-app-kit = { version = "0.2", features = [
     "NSRunningApplication",
     "NSScreen",
 ] }
+objc2-foundation = { version = "0.2", features = ["NSString"] }
 objc2-core-graphics = "0.3"
 core-foundation = "0.10"
 # Cross-platform input synth (uses CGEvent on macOS)

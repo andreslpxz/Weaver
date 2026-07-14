@@ -80,7 +80,7 @@ pub struct McpProcess {
     child: Child,
     /// ID counter for JSON-RPC requests.
     next_id: u32,
-    /// Buffer de respuestas pendientes (muy simple: una sola en flight).
+    // Buffer de respuestas pendientes (muy simple: una sola en flight).
 }
 
 impl McpProcess {

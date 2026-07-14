@@ -86,7 +86,7 @@ pub async fn type_text(
     {
         let _ = c.grab_focus().await;
     }
-    crate::automation::keyboard::type_text(text)
+    crate::backend::linux::automation::keyboard::type_text(text)
         .await
         .map_err(|e| anyhow!("type_text fallback falló: {e}"))?;
     Ok(())
@@ -95,7 +95,7 @@ pub async fn type_text(
 /// Presiona una tecla o combinación (formato xdotool-like: "ctrl+s", "Return",
 /// "alt+Tab"). Implementación: delega al módulo de automation.
 pub async fn press_key(key_combo: &str) -> Result<()> {
-    crate::automation::keyboard::press_key_combo(key_combo)
+    crate::backend::linux::automation::keyboard::press_key_combo(key_combo)
         .await
         .map_err(|e| anyhow!("press_key falló: {e}"))?;
     Ok(())

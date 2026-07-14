@@ -1,9 +1,13 @@
 //! APIs AppKit que no cubre Accessibility.
 //!
-//! Módulo placeholder — la implementación real vivirá aquí cuando se ejecute
-//! la Fase M4 (ver `PLAN_MACOS.md`).
-//!
-//! Contendrá:
-//! - `input.rs`: `CGEvent` (keyboard/mouse) — fallback de `enigo`
-//! - `clipboard.rs`: `NSPasteboard::generalPasteboard` + `stringForType:`
-//! - `workspace.rs`: `NSWorkspace::runningApplications` + `NSRunningApplication::activateWithOptions`
+//! - `clipboard.rs`: NSPasteboard para portapapeles.
+//! - `workspace.rs`: NSWorkspace + NSRunningApplication para listar/activar apps.
+//! - `input.rs`: CGEvent para emular teclado y ratón (fallback de AXPress/AXValue).
+
+pub mod clipboard;
+pub mod input;
+pub mod workspace;
+
+pub use clipboard::{clipboard_get, clipboard_set};
+pub use input::{click_at, press_key_combo, type_text};
+pub use workspace::{activate_window, list_windows, list_running_application_pids};

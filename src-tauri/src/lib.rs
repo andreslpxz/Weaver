@@ -19,8 +19,6 @@ pub mod keyring;
 pub mod mcp;
 pub mod tools;
 
-use tauri::Manager;
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()

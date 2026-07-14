@@ -38,31 +38,60 @@ jobs:
           prerelease: false
           args: --target x86_64-pc-windows-msvc
 
-      - name: Upload .msi + .exe artifacts
+      - name: Upload unsigned artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: weaver-windows
+          name: weaver-windows-unsigned
           path: |
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
           if-no-files-found: warn
 
-  # Code signing opcional — requiere secrets con certificado EV
-  # Descomentar cuando se tenga el certificado:
-  #
-  # sign:
-  #   needs: build
-  #   runs-on: windows-latest
-  #   steps:
-  #     - uses: actions/download-artifact@v4
-  #       with:
-  #         name: weaver-windows
-  #     - name: Sign with signtool
-  #       env:
-  #         CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
-  #         CERT_PASS: ${{ secrets.WINDOWS_CERT_PASS }}
-  #       run: |
-  #         echo $env:CERT_PFX | base64 -d > cert.pfx
-  #         signtool sign /f cert.pfx /p $env:CERT_PASS \
-  #           /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 \
-  #           *.exe *.msi
+  # ── Code signing job (solo en tags v* y cuando el cert está disponible) ──
+  sign:
+    needs: build
+    runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/v') && secrets.WINDOWS_CERT_PFX != ''
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: weaver-windows-unsigned
+          path: artifacts/
+
+      - name: Decode certificate from base64
+        shell: pwsh
+        env:
+          CERT_PFX_B64: ${{ secrets.WINDOWS_CERT_PFX }}
+        run: |
+          [System.IO.File]::WriteAllBytes("cert.pfx", `
+            [System.Convert]::FromBase64String($env:CERT_PFX_B64))
+
+      - name: Sign MSI + EXE with signtool
+        shell: pwsh
+        env:
+          CERT_PASS: ${{ secrets.WINDOWS_CERT_PASS }}
+          TIMESTAMP_URL: http://timestamp.digicert.com
+        run: |
+          # Find signtool (Visual Studio Build Tools)
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" `
+            -Recurse -Filter "signtool.exe" | Select-Object -First 1
+          if (-not $signtool) {
+            Write-Error "signtool.exe no encontrado"
+            exit 1
+          }
+          & $signtool.FullName sign /f cert.pfx /p $env:CERT_PASS `
+            /fd SHA256 /tr $env:TIMESTAMP_URL /td SHA256 `
+            /d "Weaver — Desktop agent" `
+            (Get-ChildItem artifacts\*.msi, artifacts\*.exe)
+
+      - name: Upload signed artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: weaver-windows-signed
+          path: artifacts/*
+          if-no-files-found: warn
+
+      - name: Cleanup certificate
+        if: always()
+        shell: pwsh
+        run: Remove-Item cert.pfx -Force -ErrorAction SilentlyContinue
