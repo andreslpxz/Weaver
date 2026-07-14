@@ -311,7 +311,9 @@ export function Composer() {
 
     try {
       const llm = await createProvider(providerId);
-      const agentive = /\b(abre|escribe en|copia|pega|transfiere|envía|completa|rellena|sube|baja|ejecuta|instala|busca en internet|lee el archivo|crea el archivo)\b/i.test(
+      // Regex ampliada: detecta más formas verbales (infinitivos, conjugaciones,
+      // preguntas sobre capacidades) para activar el modo agéntico.
+      const agentive = /\b(abre|abrir|escribe en|escribir|copia|copiar|pega|pegar|transfiere|transferir|envía|enviar|completa|completar|rellena|rellenar|sube|subir|baja|bajar|ejecuta|ejecutar|instala|instalar|busca en internet|buscar|lee el archivo|leer|crea el archivo|crear|puedes|poder|tienes capacidad|tienes acceso)\b/i.test(
         objectiveText,
       );
 
@@ -323,23 +325,12 @@ export function Composer() {
         })) {
           void _event;
         }
-      } else if (agentive && runtime.isBrowser) {
-        await runChatWithTools(llm, objectiveText, images, ac.signal);
       } else {
-        appendMessage({ role: 'assistant', content: '', id: newMsgId(), ts: Date.now() });
-        const messages: Message[] = [
-          {
-            role: 'system',
-            content:
-              'Eres Weaver, un asistente de escritorio amable y conciso. Si tu respuesta se acerca al límite de tokens, termina con la línea exacta <<CONTINUE>>. Al terminar del todo, emite <<END>>.',
-          },
-          { role: 'user', content: objectiveText, images: images.length > 0 ? images : undefined },
-        ];
-        await streamUntilDone(llm, modelId, messages, {
-          maxChains: 5,
-          signal: ac.signal,
-          onDelta: (delta) => updateLastAssistantMessage(delta),
-        });
+        // Chat con tools: SIEMPRE pasamos tools al LLM para que sepa que
+        // tiene capacidades de agente de escritorio, incluso si la pregunta
+        // no es directamente agentiva. Así puede responder "sí, puedo
+        // ejecutar comandos" en lugar de "no puedo".
+        await runChatWithTools(llm, objectiveText, images, ac.signal);
       }
     } catch (e) {
       appendMessage({
@@ -368,8 +359,15 @@ export function Composer() {
       {
         role: 'system',
         content:
-          'Eres Weaver, un asistente de escritorio. Tienes acceso a tools para buscar en internet, ejecutar comandos shell y leer/escribir archivos. ' +
-          'Si el usuario pide algo que requiere una tool, úsala. Si no, responde normal.\n' +
+          'Eres Weaver, un agente de escritorio Linux que opera cualquier aplicación a través de APIs de Accesibilidad (AT-SPI). ' +
+          'TIENES ACCESO A HERRAMIENTAS REALES para:\n' +
+          '- Ejecutar comandos shell (shell_exec)\n' +
+          '- Leer y escribir archivos (file_read, file_write, file_list)\n' +
+          '- Buscar en internet (web_search)\n' +
+          '- Descargar contenido de URLs (web_fetch)\n' +
+          '- Operar aplicaciones vía AT-SPI (click, type_text, press_key, get_text)\n\n' +
+          'Cuando el usuario te pida algo que requiera estas herramientas, ÚSALAS. No digas que no puedes hacer algo si tienes una herramienta para hacerlo.\n' +
+          'Si el usuario pregunta si puedes hacer algo, responde HONESTAMENTE sobre tus capacidades basándote en las herramientas disponibles.\n' +
           'Si tu respuesta se acerca al límite de tokens, termina con <<CONTINUE>>. Al terminar del todo, emite <<END>>.',
       },
       { role: 'user', content: userText, images: images.length > 0 ? images : undefined },
