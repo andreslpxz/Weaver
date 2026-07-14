@@ -105,7 +105,7 @@
     background: var(--bg-elevated);
   }
   .sidebar-item {
-    @apply flex items-center gap-2 px-2 py-1.5 rounded-codex text-sm cursor-pointer;
+    @apply flex items-center gap-2 px-2.5 py-2 rounded-codex text-sm cursor-pointer;
     color: var(--text-secondary);
     transition: background-color 0.15s, color 0.15s;
   }
@@ -118,8 +118,11 @@
     color: var(--text-primary);
   }
   .sidebar-section-title {
-    @apply text-xs uppercase tracking-wider font-medium px-2 mt-3 mb-1;
+    @apply text-xs uppercase tracking-wider font-medium px-2.5 mt-4 mb-1.5;
     color: var(--text-muted);
+  }
+  .sidebar-conversation {
+    @apply px-2.5 py-1.5;
   }
 }
 

@@ -149,9 +149,13 @@ export function ComplementosView() {
         <section className="mb-8">
           <h2 className="text-sm font-semibold mb-3">Skills instaladas ({skills.length})</h2>
           {skills.length === 0 ? (
-            <div className="text-sm text-text-muted p-4 border border-dashed border-border rounded-codex text-center">
-              Aún no hay skills instaladas.
-            </div>
+            <EmptyStateCard
+              icon={<Puzzle size={32} className="text-accent" />}
+              title="Aún no hay skills instaladas"
+              description="Las skills son procedimientos reutilizables que Weaver puede aprender de tareas exitosas o instalar desde la comunidad. Prueba instalando find-skills arriba para descubrir skills de la comunidad."
+              actionLabel="Instalar find-skills"
+              onAction={installFindSkills}
+            />
           ) : (
             <div className="grid grid-cols-2 gap-2">
               {skills.map((s) => (
@@ -747,10 +751,16 @@ export function HabilidadesView() {
           automáticamente cuando un objetivo coincide con los triggers.
         </p>
         {skills.length === 0 ? (
-          <div className="text-sm text-text-muted p-8 border border-dashed border-border rounded-codex text-center">
-            Aún no hay habilidades auto-aprendidas. Ejecuta tareas complejas y Weaver
-            extraerá procedimientos reutilizables.
-          </div>
+          <EmptyStateCard
+            icon={<Brain size={32} className="text-accent" />}
+            title="Aún no hay habilidades auto-aprendidas"
+            description="Weaver extrae procedimientos reutilizables de tareas exitosas. Cuando completes una tarea compleja (ej: 'abre gedit y escribe Hola'), Weaver guardará los pasos para reutilizarlos en objetivos similares."
+            actionLabel="Empezar una tarea"
+            onAction={() => {
+              useWeaver.getState().setView('chat');
+              useWeaver.getState().newConversation();
+            }}
+          />
         ) : (
           <div className="space-y-2">
             {skills.map((s) => (
@@ -766,6 +776,37 @@ export function HabilidadesView() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// EmptyStateCard — estado vacío descriptivo con CTA
+// ============================================================================
+
+function EmptyStateCard({
+  icon,
+  title,
+  description,
+  actionLabel,
+  onAction,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}) {
+  return (
+    <div className="codex-card p-8 text-center">
+      <div className="flex justify-center mb-4">{icon}</div>
+      <h3 className="text-base font-medium text-text-primary mb-2">{title}</h3>
+      <p className="text-sm text-text-muted max-w-md mx-auto mb-4">{description}</p>
+      {actionLabel && onAction && (
+        <Button variant="primary" onClick={onAction}>
+          <Plus size={12} /> {actionLabel}
+        </Button>
+      )}
     </div>
   );
 }
@@ -795,9 +836,16 @@ export function AutomatizacionesView() {
           registrado en la memoria episódica.
         </p>
         {episodes.length === 0 ? (
-          <div className="text-sm text-text-muted p-8 border border-dashed border-border rounded-codex text-center">
-            Sin automatizaciones aún.
-          </div>
+          <EmptyStateCard
+            icon={<Sparkles size={32} className="text-accent" />}
+            title="Sin automatizaciones aún"
+            description="Aquí verás el historial de tareas que Weaver ha ejecutado. Cada episodio queda registrado en la memoria episódica con su plan, pasos y resultado."
+            actionLabel="Probar con un comando"
+            onAction={() => {
+              useWeaver.getState().setView('chat');
+              useWeaver.getState().newConversation();
+            }}
+          />
         ) : (
           <div className="space-y-2">
             {episodes.map((e) => (
@@ -1105,9 +1153,12 @@ export function ConfiguracionView() {
         </SettingCard>
 
         <SettingCard title="Memoria" desc="Episodios y hechos persistidos localmente.">
-          <div className="flex gap-2">
-            <Button
-              variant="danger"
+          <div className="flex gap-2 items-center justify-between">
+            <p className="text-xs text-text-muted flex-1">
+              La memoria incluye episodios pasados, hechos semánticos y memoria
+              importada de otras IAs. Esta acción no se puede deshacer.
+            </p>
+            <button
               onClick={() => {
                 if (confirm('¿Borrar TODA la memoria episódica y semántica (incluida la importada)?')) {
                   memory.clearAll().then(() => {
@@ -1118,9 +1169,11 @@ export function ConfiguracionView() {
                   });
                 }
               }}
+              className="codex-btn border border-danger/30 text-danger hover:bg-danger/10 px-3 py-1.5 rounded-codex text-sm"
+              title="Acción destructiva — borra toda la memoria"
             >
               <Trash2 size={12} /> Borrar memoria
-            </Button>
+            </button>
           </div>
         </SettingCard>
 

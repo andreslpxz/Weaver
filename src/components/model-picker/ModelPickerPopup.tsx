@@ -112,44 +112,48 @@ export function ModelPickerPopup({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Search */}
-        <div className="p-3 border-b border-border">
+        <div className="p-4 border-b border-border">
           <div className="relative">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder={tab === 'models' ? 'Buscar modelo o proveedor…' : 'Buscar proveedor…'}
-              className="codex-input w-full pl-9 pr-3 py-2 text-sm"
+              className="codex-input w-full pl-9 pr-3 py-2.5 text-sm"
               autoFocus
             />
           </div>
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-3">
+        <div className="flex-1 overflow-y-auto p-4">
           {tab === 'models' ? (
-            <div className="space-y-4">
+            <div className="space-y-5">
               {filtered.map((p) => {
                 const isActive = p.id === providerId;
                 const hasApiKey = p.noApiKey || hasKey[p.id];
                 return (
                   <div key={p.id}>
-                    <div className="flex items-center gap-2 mb-1.5">
+                    <div className="flex items-center gap-2 mb-2">
                       <span className="text-sm font-medium text-text-primary">{p.label}</span>
                       <span className="text-xs text-text-muted">{p.desc}</span>
-                      {p.noApiKey && <Badge color="accent">local</Badge>}
+                      {p.noApiKey && (
+                        <Badge color="accent">
+                          <span className="px-0.5">local</span>
+                        </Badge>
+                      )}
                       {hasApiKey && !p.noApiKey && (
                         <Badge color="success">
-                          <Check size={10} /> key
+                          <Check size={10} /> <span className="px-0.5">key</span>
                         </Badge>
                       )}
                       {!hasApiKey && !p.noApiKey && (
                         <Badge color="warning">
-                          <AlertCircle size={10} /> sin key
+                          <AlertCircle size={10} /> <span className="px-0.5">sin key</span>
                         </Badge>
                       )}
                     </div>
-                    <div className="grid grid-cols-2 gap-1">
+                    <div className="grid grid-cols-2 gap-1.5">
                       {p.models.map((m) => (
                         <button
                           key={m.id}
@@ -164,7 +168,7 @@ export function ModelPickerPopup({ onClose }: { onClose: () => void }) {
                             }
                           }}
                           className={cn(
-                            'text-left px-2 py-1.5 rounded-codex text-xs transition-colors',
+                            'text-left px-2.5 py-2 rounded-codex text-xs transition-colors',
                             'hover:bg-app-input',
                             isActive && m.id === modelId
                               ? 'bg-accent/15 text-accent border border-accent/30'
@@ -176,7 +180,7 @@ export function ModelPickerPopup({ onClose }: { onClose: () => void }) {
                             <span className="font-medium">{m.label}</span>
                             {m.isReasoning && <Badge color="default">reasoning</Badge>}
                           </div>
-                          <div className="text-[10px] text-text-muted">
+                          <div className="text-[10px] text-text-muted mt-0.5">
                             {(m.contextWindow / 1000).toFixed(0)}k ctx
                             {m.supportsTools ? ' · tools' : ''}
                           </div>

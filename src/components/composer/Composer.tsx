@@ -737,35 +737,6 @@ export function Composer() {
                   {/* Separador */}
                   <div className="border-t border-border" />
 
-                  {/* Modo plan (toggle) */}
-                  <button
-                    onClick={() => setPlanMode(!planMode)}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
-                  >
-                    <Map size={15} className={planMode ? 'text-accent' : 'text-text-muted shrink-0'} />
-                    <div className="flex-1">
-                      <div className="font-medium">Modo plan</div>
-                      <div className="text-[10px] text-text-muted">Proponer plan y esperar confirmación</div>
-                    </div>
-                    <ToggleSwitch on={planMode} />
-                  </button>
-
-                  {/* Perseguir objetivo (toggle) */}
-                  <button
-                    onClick={() => setPursueObjective(!pursueObjective)}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
-                  >
-                    <Target size={15} className={pursueObjective ? 'text-accent' : 'text-text-muted shrink-0'} />
-                    <div className="flex-1">
-                      <div className="font-medium">Perseguir objetivo</div>
-                      <div className="text-[10px] text-text-muted">Iterar hasta completar (3 intentos)</div>
-                    </div>
-                    <ToggleSwitch on={pursueObjective} />
-                  </button>
-
-                  {/* Separador */}
-                  <div className="border-t border-border" />
-
                   {/* Complementos (ir a vista) */}
                   <button
                     onClick={() => {
@@ -794,6 +765,30 @@ export function Composer() {
               <span className="opacity-70">{provider?.label.split(' ')[0]}</span>
               <span className="font-medium">{modelLabel}</span>
               <ChevronDown size={12} className="opacity-60" />
+            </button>
+
+            {/* Toggles de modo directamente en la barra (visibles siempre) */}
+            <button
+              onClick={() => setPlanMode(!planMode)}
+              className={`inline-flex items-center gap-1 px-2 py-1 rounded-codex border text-xs transition-colors cursor-pointer ${
+                planMode
+                  ? 'bg-accent/15 text-accent border-accent/30'
+                  : 'border-border text-text-muted hover:text-text-primary hover:bg-app-elevated'
+              }`}
+              title="Modo plan: proponer plan y esperar confirmación antes de ejecutar"
+            >
+              <Map size={12} /> Plan
+            </button>
+            <button
+              onClick={() => setPursueObjective(!pursueObjective)}
+              className={`inline-flex items-center gap-1 px-2 py-1 rounded-codex border text-xs transition-colors cursor-pointer ${
+                pursueObjective
+                  ? 'bg-accent/15 text-accent border-accent/30'
+                  : 'border-border text-text-muted hover:text-text-primary hover:bg-app-elevated'
+              }`}
+              title="Perseguir objetivo: iterar hasta completar (máx 3 intentos por subtarea)"
+            >
+              <Target size={12} /> Perseguir
             </button>
 
             {/* Indicadores de modos activos */}
