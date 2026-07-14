@@ -33,7 +33,7 @@ pub async fn tools_shell_exec(args: ShellExecArgs) -> Result<ShellExecResult, St
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
-    let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
+    let child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
 
     // wait_with_output no es Future directamente; usar tokio::task::spawn_blocking.
     let wait_fut = async move { child.wait_with_output() };

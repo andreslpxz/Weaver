@@ -50,6 +50,7 @@ pub fn run() {
         .setup(|app| {
             #[cfg(debug_assertions)]
             {
+                use tauri::Manager;
                 if let Some(win) = app.get_webview_window("main") {
                     win.open_devtools();
                 }
