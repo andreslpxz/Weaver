@@ -370,9 +370,12 @@ export function Composer() {
           'TIENES ACCESO A HERRAMIENTAS REALES para:\n' +
           '- Ejecutar comandos shell (shell_exec)\n' +
           '- Leer y escribir archivos (file_read, file_write, file_list)\n' +
-          '- Buscar en internet (web_search)\n' +
-          '- Descargar contenido de URLs (web_fetch)\n' +
-          '- Operar aplicaciones vía AT-SPI (click, type_text, press_key, get_text)\n\n' +
+          '- Buscar en internet (web_search) — usa esta tool para obtener información actualizada\n' +
+          '- Descargar contenido de URLs (web_fetch) — puede fallar en algunos sitios por CORS\n\n' +
+          'IMPORTANTE sobre web_fetch:\n' +
+          '- Si web_fetch falla para una URL, NO insistas con la misma URL. Intenta otra URL o usa solo el resultado de web_search.\n' +
+          '- web_search ya devuelve una "Respuesta rápida" con el resumen. Usa esa información directamente.\n' +
+          '- Máximo 1 intento de web_fetch por URL. Si falla, continúa con lo que tengas.\n\n' +
           'Cuando el usuario te pida algo que requiera estas herramientas, ÚSALAS. No digas que no puedes hacer algo si tienes una herramienta para hacerlo.\n' +
           'Si el usuario pregunta si puedes hacer algo, responde HONESTAMENTE sobre tus capacidades basándote en las herramientas disponibles.\n' +
           'Si tu respuesta se acerca al límite de tokens, termina con <<CONTINUE>>. Al terminar del todo, emite <<END>>.',

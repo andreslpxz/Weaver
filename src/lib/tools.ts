@@ -304,29 +304,94 @@ async function webSearch(query: string, maxResults: number): Promise<ToolExecRes
 // Web fetch — funciona en navegador y Tauri (con proxy CORS si hace falta)
 // ============================================================================
 
+/**
+ * Lista de proxies CORS públicos. Si uno falla, se intenta el siguiente.
+ * En Tauri (backend Rust), no se necesita proxy — se hace fetch directo.
+ */
+const CORS_PROXIES = [
+  (url: string) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+  (url: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  (url: string) => `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(url)}`,
+];
+
 async function webFetch(url: string, maxChars: number): Promise<ToolExecResult> {
+  // En Tauri, fetch directo sin proxy (no hay restricciones CORS).
+  if (runtime.isTauri) {
+    return webFetchDirect(url, maxChars);
+  }
+
+  // En navegador, intentar con cada proxy CORS hasta que uno funcione.
+  const errors: string[] = [];
+  for (const proxy of CORS_PROXIES) {
+    const proxyUrl = proxy(url);
+    try {
+      const result = await webFetchWithTimeout(proxyUrl, maxChars, 8000);
+      if (result.ok && result.output.length > 100) {
+        return result;
+      }
+      if (result.error) errors.push(`${proxyUrl.slice(0, 40)}: ${result.error}`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`${proxyUrl.slice(0, 40)}: ${msg}`);
+    }
+  }
+
+  return {
+    ok: false,
+    output: '',
+    error: `Todos los proxies CORS fallaron. Detalles:\n${errors.join('\n')}`,
+  };
+}
+
+/** Fetch directo (para Tauri o entornos sin CORS). */
+async function webFetchDirect(url: string, maxChars: number): Promise<ToolExecResult> {
   try {
-    // En navegador, evitar CORS usando un proxy público como fallback.
-    const target = runtime.isBrowser
-      ? `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`
-      : url;
-    const resp = await fetch(target);
+    return await webFetchWithTimeout(url, maxChars, 15000);
+  } catch (e) {
+    return { ok: false, output: '', error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Fetch con timeout y limpieza básica de HTML. */
+async function webFetchWithTimeout(
+  target: string,
+  maxChars: number,
+  timeoutMs: number,
+): Promise<ToolExecResult> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const resp = await fetch(target, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Weaver/0.1)' },
+    });
     if (!resp.ok) {
-      return { ok: false, output: '', error: `HTTP ${resp.status}` };
+      return { ok: false, output: '', error: `HTTP ${resp.status} ${resp.statusText}` };
     }
     const text = await resp.text();
     // Strip HTML básico si la respuesta es HTML.
     let clean = text;
-    if (resp.headers.get('content-type')?.includes('text/html')) {
+    const contentType = resp.headers.get('content-type') || '';
+    if (contentType.includes('text/html') || text.trimStart().startsWith('<')) {
       clean = text
         .replace(/<script[\s\S]*?<\/script>/gi, '')
         .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+        .replace(/<footer[\s\S]*?<\/footer>/gi, '')
+        .replace(/<header[\s\S]*?<\/header>/gi, '')
         .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
         .replace(/\s+/g, ' ')
         .trim();
     }
     return { ok: true, output: clean.slice(0, maxChars) };
-  } catch (e) {
-    return { ok: false, output: '', error: e instanceof Error ? e.message : String(e) };
+  } finally {
+    clearTimeout(timeout);
   }
 }
