@@ -11,8 +11,17 @@ import {
   Search,
   Terminal,
   FileText,
+  Check,
+  X,
+  Shield,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  Power,
+  Circle,
 } from 'lucide-react';
-import { mcpClient, type McpServer } from '@/mcp/client';
+import { mcpClient, listPresets, type McpServer, type ToolApproval } from '@/mcp/client';
+import { type McpPreset } from '@/mcp/presets';
 import { skillsRegistry, type Skill } from '@/skills/registry';
 import { skillsInstaller } from '@/skills/installer';
 import { Badge, Button } from '@/components/common/Button';
@@ -58,6 +67,7 @@ export function ComplementosView() {
       command: 'npx',
       args: ['-y', url.trim() || name.trim()],
       enabled: true,
+      status: 'installed',
     };
     mcpClient.saveServer(server);
     setServers(mcpClient.listServers());
@@ -166,10 +176,13 @@ export function ComplementosView() {
           )}
         </section>
 
-        {/* MCP servers */}
-        <section>
+        {/* MCP servers — catálogo de presets + instalados */}
+        <McpSection servers={servers} setServers={setServers} />
+
+        {/* MCP servers — custom (avanzado) */}
+        <section className="mt-8">
           <h2 className="text-sm font-semibold mb-3 flex items-center gap-2">
-            <SettingsIcon size={14} /> Servidores MCP
+            <Plus size={14} /> Añadir servidor MCP personalizado
           </h2>
           <div className="flex gap-2 mb-3">
             <input
@@ -188,41 +201,531 @@ export function ComplementosView() {
               <Plus size={12} /> Añadir
             </Button>
           </div>
-          {servers.length === 0 ? (
-            <div className="text-sm text-text-muted p-4 border border-dashed border-border rounded-codex text-center">
-              Sin servidores MCP. Añade el primero arriba.
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {servers.map((s) => (
-                <div key={s.id} className="flex items-center justify-between p-3 codex-card">
-                  <div>
-                    <div className="text-sm font-medium">{s.name}</div>
-                    <div className="text-xs text-text-muted font-mono">
-                      {s.transport}: {s.command} {(s.args ?? []).join(' ')}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Badge color={s.enabled ? 'success' : 'default'}>
-                      {s.enabled ? 'activo' : 'pausado'}
-                    </Badge>
-                    <button
-                      onClick={() => {
-                        mcpClient.removeServer(s.id);
-                        setServers(mcpClient.listServers());
-                      }}
-                      className="codex-icon-btn w-7 h-7"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          <p className="text-xs text-text-muted">
+            Para servidores MCP no incluidos en el catálogo de arriba.
+          </p>
         </section>
       </div>
     </div>
+  );
+}
+
+// ============================================================================
+// McpSection — catálogo de presets + servidores instalados
+// ============================================================================
+
+function McpSection({
+  servers,
+  setServers,
+}: {
+  servers: McpServer[];
+  setServers: (s: McpServer[]) => void;
+}) {
+  const presets = listPresets();
+  const [installing, setInstalling] = useState<string | null>(null);
+  const [configuringServer, setConfiguringServer] = useState<string | null>(null);
+
+  function installPreset(preset: McpPreset, envValues: Record<string, string>) {
+    setInstalling(preset.id);
+    try {
+      mcpClient.installPreset(preset, envValues);
+      setServers(mcpClient.listServers());
+    } catch (e) {
+      alert(`Error instalando ${preset.name}: ${e}`);
+    } finally {
+      setInstalling(null);
+    }
+  }
+
+  function removeServer(id: string) {
+    if (!confirm('¿Eliminar este servidor MCP? Se perderán las aprobaciones de tools.')) return;
+    mcpClient.removeServer(id);
+    setServers(mcpClient.listServers());
+  }
+
+  function toggleEnabled(server: McpServer) {
+    mcpClient.saveServer({ ...server, enabled: !server.enabled });
+    setServers(mcpClient.listServers());
+  }
+
+  return (
+    <section>
+      <h2 className="text-sm font-semibold mb-3 flex items-center gap-2">
+        <Sparkles size={14} /> Servidores MCP — Catálogo
+      </h2>
+      <p className="text-xs text-text-muted mb-4">
+        Instala servidores MCP oficiales con un solo click. Cada uno requiere
+        credenciales que se te pedirán al instalar.
+      </p>
+
+      {/* Grid de presets */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6">
+        {presets.map((preset) => {
+          const isInstalled = mcpClient.isPresetInstalled(preset.id);
+          return (
+            <McpPresetCard
+              key={preset.id}
+              preset={preset}
+              installed={isInstalled}
+              installing={installing === preset.id}
+              onInstall={(env) => installPreset(preset, env)}
+              onRemove={() => {
+                const server = servers.find((s) => s.presetId === preset.id);
+                if (server) removeServer(server.id);
+              }}
+            />
+          );
+        })}
+      </div>
+
+      {/* Servidores instalados con config de tools */}
+      {servers.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-sm font-semibold mb-2 flex items-center gap-2">
+            <SettingsIcon size={14} /> Instalados ({servers.length})
+          </h3>
+          {servers.map((s) => (
+            <McpServerRow
+              key={s.id}
+              server={s}
+              onRemove={() => removeServer(s.id)}
+              onToggle={() => toggleEnabled(s)}
+              onConfigure={() =>
+                setConfiguringServer(
+                  configuringServer === s.id ? null : s.id,
+                )
+              }
+              showConfig={configuringServer === s.id}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ============================================================================
+// McpPresetCard — card de preset con logo SVG + form de credenciales
+// ============================================================================
+
+function McpPresetCard({
+  preset,
+  installed,
+  installing,
+  onInstall,
+  onRemove,
+}: {
+  preset: McpPreset;
+  installed: boolean;
+  installing: boolean;
+  onInstall: (env: Record<string, string>) => void;
+  onRemove: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [envValues, setEnvValues] = useState<Record<string, string>>({});
+
+  const canInstall = preset.envVars.every(
+    (v) => !v.required || (envValues[v.name] && envValues[v.name].trim()),
+  );
+
+  function handleInstall() {
+    onInstall(envValues);
+    setExpanded(false);
+    setEnvValues({});
+  }
+
+  return (
+    <div
+      className="codex-card p-4 transition-all hover:border-border-accent"
+      style={{ borderColor: installed ? preset.color : undefined }}
+    >
+      <div className="flex items-start gap-3">
+        {/* Logo SVG */}
+        <div
+          className="flex-shrink-0 w-10 h-10 rounded-codex flex items-center justify-center"
+          style={{ backgroundColor: `${preset.color}15` }}
+          dangerouslySetInnerHTML={{
+            __html: preset.logo.replace(
+              /<svg/,
+              `<svg width="24" height="24" style="color: ${preset.color}"`,
+            ),
+          }}
+        />
+
+        {/* Info */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <h3 className="font-medium text-sm">{preset.name}</h3>
+            {installed && (
+              <Badge color="success">
+                <Check size={9} className="inline mr-0.5" /> instalado
+              </Badge>
+            )}
+          </div>
+          <p className="text-xs text-text-muted line-clamp-2">{preset.description}</p>
+        </div>
+
+        {/* Acción */}
+        <div className="flex-shrink-0">
+          {installed ? (
+            <button
+              onClick={onRemove}
+              className="codex-icon-btn w-8 h-8 text-danger"
+              title="Desinstalar"
+            >
+              <Trash2 size={14} />
+            </button>
+          ) : (
+            <Button
+              variant="primary"
+              onClick={() => setExpanded(!expanded)}
+              disabled={installing}
+            >
+              {installing ? (
+                <Loader2 size={12} className="animate-spin" />
+              ) : (
+                <Plus size={12} />
+              )}
+              Instalar
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* Form de credenciales (expandible) */}
+      {expanded && !installed && (
+        <div className="mt-4 pt-4 border-t border-border space-y-3">
+          {preset.envVars.length > 0 && (
+            <>
+              <p className="text-xs font-medium text-text-secondary">
+                Configuración requerida:
+              </p>
+              {preset.envVars.map((envVar) => (
+                <div key={envVar.name}>
+                  <label className="text-xs text-text-secondary flex items-center gap-1 mb-1">
+                    {envVar.label}
+                    {envVar.required && <span className="text-danger">*</span>}
+                  </label>
+                  <input
+                    type={envVar.type}
+                    value={envValues[envVar.name] ?? ''}
+                    onChange={(e) =>
+                      setEnvValues({ ...envValues, [envVar.name]: e.target.value })
+                    }
+                    placeholder={envVar.name}
+                    className="codex-input w-full px-2 py-1.5 text-xs font-mono"
+                  />
+                  <div className="flex items-center gap-1 mt-1">
+                    <p className="text-[10px] text-text-muted flex-1">{envVar.helpText}</p>
+                    {envVar.obtainUrl && (
+                      <a
+                        href={envVar.obtainUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[10px] text-accent hover:underline flex items-center gap-0.5"
+                      >
+                        Obtener <ExternalLink size={9} />
+                      </a>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+
+          {/* Tools de ejemplo */}
+          <div>
+            <p className="text-xs font-medium text-text-secondary mb-1">
+              Tools que expone:
+            </p>
+            <div className="flex flex-wrap gap-1">
+              {preset.exampleTools.map((tool) => (
+                <span
+                  key={tool}
+                  className="text-[10px] px-1.5 py-0.5 rounded bg-app-elevated border border-border font-mono text-text-muted"
+                >
+                  {tool}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex gap-2 pt-1">
+            <Button variant="primary" onClick={handleInstall} disabled={!canInstall}>
+              <Check size={12} /> Confirmar instalación
+            </Button>
+            <Button variant="ghost" onClick={() => setExpanded(false)}>
+              Cancelar
+            </Button>
+            <a
+              href={preset.docsUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs text-accent hover:underline flex items-center gap-1 ml-auto self-center"
+            >
+              Docs <ExternalLink size={10} />
+            </a>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// McpServerRow — fila de servidor instalado con toggle + config de tools
+// ============================================================================
+
+function McpServerRow({
+  server,
+  onRemove,
+  onToggle,
+  onConfigure,
+  showConfig,
+}: {
+  server: McpServer;
+  onRemove: () => void;
+  onToggle: () => void;
+  onConfigure: () => void;
+  showConfig: boolean;
+}) {
+  const preset = server.presetId
+    ? listPresets().find((p) => p.id === server.presetId)
+    : null;
+
+  return (
+    <div className="codex-card">
+      <div className="flex items-center justify-between p-3">
+        <div className="flex items-center gap-3 flex-1 min-w-0">
+          {/* Logo */}
+          {preset ? (
+            <div
+              className="flex-shrink-0 w-8 h-8 rounded-codex flex items-center justify-center"
+              style={{ backgroundColor: `${preset.color}15` }}
+              dangerouslySetInnerHTML={{
+                __html: preset.logo.replace(
+                  /<svg/,
+                  `<svg width="18" height="18" style="color: ${preset.color}"`,
+                ),
+              }}
+            />
+          ) : (
+            <div className="flex-shrink-0 w-8 h-8 rounded-codex bg-app-elevated flex items-center justify-center">
+              <Puzzle size={16} className="text-text-muted" />
+            </div>
+          )}
+
+          {/* Info */}
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium">{server.name}</div>
+            <div className="text-xs text-text-muted font-mono truncate">
+              {server.transport}: {server.command} {(server.args ?? []).join(' ')}
+            </div>
+          </div>
+        </div>
+
+        {/* Acciones */}
+        <div className="flex items-center gap-1">
+          <Badge color={server.enabled ? 'success' : 'default'}>
+            {server.enabled ? 'activo' : 'pausado'}
+          </Badge>
+          <button
+            onClick={onToggle}
+            className="codex-icon-btn w-7 h-7"
+            title={server.enabled ? 'Pausar' : 'Activar'}
+          >
+            <Power size={12} />
+          </button>
+          <button
+            onClick={onConfigure}
+            className="codex-icon-btn w-7 h-7"
+            title="Configurar tools"
+          >
+            {showConfig ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          </button>
+          <button
+            onClick={onRemove}
+            className="codex-icon-btn w-7 h-7 text-danger"
+            title="Eliminar"
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
+      </div>
+
+      {/* Panel de configuración de tools (expandible) */}
+      {showConfig && <McpToolConfigPanel server={server} />}
+    </div>
+  );
+}
+
+// ============================================================================
+// McpToolConfigPanel — panel de aprobación de tools
+// ============================================================================
+
+function McpToolConfigPanel({ server }: { server: McpServer }) {
+  const [autoApprove, setAutoApprove] = useState(
+    mcpClient.getApprovals(server.id).autoApproveAll,
+  );
+  const [, forceUpdate] = useState({});
+
+  // Tools conocidas: si es preset, usar las exampleTools; si no, vacío.
+  const preset = server.presetId
+    ? listPresets().find((p) => p.id === server.presetId)
+    : null;
+  const knownTools = preset?.exampleTools ?? [];
+
+  function setApproval(toolName: string, approval: ToolApproval) {
+    if (approval === 'approved') mcpClient.approveTool(server.id, toolName);
+    else if (approval === 'denied') mcpClient.denyTool(server.id, toolName);
+    else mcpClient.resetTool(server.id, toolName);
+    forceUpdate({});
+  }
+
+  function toggleAutoApprove() {
+    const newVal = !autoApprove;
+    setAutoApprove(newVal);
+    mcpClient.setAutoApproveAll(server.id, newVal);
+    forceUpdate({});
+  }
+
+  const approvals = mcpClient.getApprovals(server.id);
+
+  return (
+    <div className="border-t border-border p-3 bg-app-bg/50">
+      {/* Auto-approve toggle */}
+      <div className="flex items-center justify-between mb-3 pb-3 border-b border-border">
+        <div className="flex items-center gap-2">
+          <Shield size={14} className="text-accent" />
+          <div>
+            <div className="text-sm font-medium">Aprobar todas las tools automáticamente</div>
+            <div className="text-xs text-text-muted">
+              Si está activado, cualquier tool del servidor se ejecutará sin pedir confirmación.
+            </div>
+          </div>
+        </div>
+        <button
+          onClick={toggleAutoApprove}
+          className={`relative w-10 h-5 rounded-full transition-colors ${
+            autoApprove ? 'bg-accent' : 'bg-border'
+          }`}
+          title={autoApprove ? 'Auto-approve ON' : 'Auto-approve OFF'}
+        >
+          <span
+            className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
+              autoApprove ? 'translate-x-5' : ''
+            }`}
+          />
+        </button>
+      </div>
+
+      {/* Lista de tools con aprobación individual */}
+      {knownTools.length > 0 ? (
+        <div>
+          <p className="text-xs font-medium text-text-secondary mb-2">
+            Tools del servidor ({knownTools.length}):
+          </p>
+          <div className="space-y-1.5">
+            {knownTools.map((toolName) => {
+              const approval = autoApprove
+                ? 'approved'
+                : approvals.tools[toolName] ?? 'pending';
+              return (
+                <div
+                  key={toolName}
+                  className="flex items-center justify-between text-xs"
+                >
+                  <code className="font-mono text-text-secondary">{toolName}</code>
+                  <div className="flex items-center gap-1">
+                    {autoApprove ? (
+                      <Badge color="success">
+                        <Check size={9} className="inline" /> auto
+                      </Badge>
+                    ) : (
+                      <>
+                        <ApprovalButton
+                          active={approval === 'approved'}
+                          onClick={() => setApproval(toolName, 'approved')}
+                          color="success"
+                          icon={<Check size={10} />}
+                          label="Permitir"
+                        />
+                        <ApprovalButton
+                          active={approval === 'denied'}
+                          onClick={() => setApproval(toolName, 'denied')}
+                          color="danger"
+                          icon={<X size={10} />}
+                          label="Prohibir"
+                        />
+                        <ApprovalButton
+                          active={approval === 'pending'}
+                          onClick={() => setApproval(toolName, 'pending')}
+                          color="default"
+                          icon={<Circle size={8} />}
+                          label="Preguntar"
+                        />
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <p className="text-xs text-text-muted">
+          Las tools aparecerán aquí cuando el servidor esté corriendo en Tauri.
+          En modo navegador solo se puede configurar la aprobación automática.
+        </p>
+      )}
+
+      {/* Leyenda */}
+      <div className="mt-3 pt-3 border-t border-border flex flex-wrap gap-3 text-[10px] text-text-muted">
+        <span className="flex items-center gap-1">
+          <Check size={9} className="text-success" /> Permitir
+        </span>
+        <span className="flex items-center gap-1">
+          <X size={9} className="text-danger" /> Prohibir
+        </span>
+        <span className="flex items-center gap-1">
+          <Circle size={6} /> Preguntar antes de ejecutar
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function ApprovalButton({
+  active,
+  onClick,
+  color,
+  icon,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  color: 'success' | 'danger' | 'default';
+  icon: React.ReactNode;
+  label: string;
+}) {
+  const colorClass =
+    color === 'success'
+      ? 'text-success border-success'
+      : color === 'danger'
+        ? 'text-danger border-danger'
+        : 'text-text-muted border-border';
+  return (
+    <button
+      onClick={onClick}
+      title={label}
+      className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-[10px] transition-all ${
+        active
+          ? `${colorClass} bg-current/10`
+          : 'border-border text-text-muted opacity-50 hover:opacity-100'
+      }`}
+    >
+      {icon}
+    </button>
   );
 }
 
