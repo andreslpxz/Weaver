@@ -87,6 +87,20 @@ export const ADVANCED_TOOLS: ToolDef[] = [
       max_chars: { type: 'number', description: 'Máximo de caracteres (default 20000)' },
     },
   },
+  {
+    name: 'save_file',
+    description:
+      'Genera un archivo con el contenido proporcionado y lo hace disponible para que el usuario lo descargue. ' +
+      'Útil cuando el usuario pide "crea un archivo", "genera un script", "hazme un resumen en un documento", etc. ' +
+      'En modo Tauri, pregunta al usuario dónde guardarlo. En modo navegador, lo descarga directamente. ' +
+      'El archivo aparece como un botón de descarga en el chat.',
+    category: 'fs',
+    parameters: {
+      filename: { type: 'string', description: 'Nombre del archivo (ej. "resumen.md", "script.py")' },
+      content: { type: 'string', description: 'Contenido completo del archivo' },
+      mime_type: { type: 'string', description: 'Tipo MIME opcional (ej. "text/markdown", "application/json")' },
+    },
+  },
 ];
 
 /** Lista de tools para exponer al LLM (formato OpenAI function calling). */
@@ -100,7 +114,7 @@ export function buildAdvancedToolsList() {
         type: 'object',
         properties: t.parameters,
         required: Object.keys(t.parameters).filter(
-          (k) => k !== 'cwd' && k !== 'timeout' && k !== 'max_results' && k !== 'create_dirs' && k !== 'max_chars',
+          (k) => k !== 'cwd' && k !== 'timeout' && k !== 'max_results' && k !== 'create_dirs' && k !== 'max_chars' && k !== 'mime_type',
         ),
       },
     },
@@ -135,6 +149,12 @@ export async function dispatchAdvancedTool(
         return await webSearch(String(args.query), Number(args.max_results ?? 5));
       case 'web_fetch':
         return await webFetch(String(args.url), Number(args.max_chars ?? 20000));
+      case 'save_file':
+        return await saveFile(
+          String(args.filename),
+          String(args.content),
+          args.mime_type ? String(args.mime_type) : undefined,
+        );
       default:
         return { ok: false, output: '', error: `Tool desconocida: ${name}` };
     }
@@ -394,4 +414,109 @@ async function webFetchWithTimeout(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+// ============================================================================
+// Save file — genera archivos descargables en el chat
+// ============================================================================
+
+/**
+ * Genera un archivo con el contenido proporcionado y lo hace disponible
+ * para que el usuario lo descargue.
+ *
+ * - En navegador: descarga directa vía Blob + anchor.
+ * - En Tauri: usa file picker dialog para elegir dónde guardar, luego
+ *   escribe el archivo con el comando file_write.
+ *
+ * Devuelve un resultado especial con el formato [file:filename:size]
+ * que el MessageList detecta y renderiza como botón de descarga.
+ */
+async function saveFile(
+  filename: string,
+  content: string,
+  mimeType?: string,
+): Promise<ToolExecResult> {
+  const sizeBytes = new Blob([content]).size;
+  const sizeLabel = formatBytes(sizeBytes);
+
+  // En Tauri: usar file picker para elegir dónde guardar.
+  if (runtime.isTauri) {
+    try {
+      const { save } = await import('@tauri-apps/plugin-dialog');
+      const filePath = await save({
+        defaultPath: filename,
+        filters: [{ name: filename.split('.').pop()?.toUpperCase() || 'File', extensions: [filename.split('.').pop() || 'txt'] }],
+      });
+      if (!filePath) {
+        return { ok: false, output: '', error: 'El usuario canceló el guardado.' };
+      }
+      await invokeFileWrite(filePath, content, true);
+      return {
+        ok: true,
+        output: `[file:${filename}:${sizeBytes}:${filePath}]`,
+      };
+    } catch (e) {
+      // Si falla el dialog, hacer descarga directa como fallback.
+      console.warn('[save_file] Tauri dialog falló, usando descarga directa:', e);
+    }
+  }
+
+  // En navegador (o fallback de Tauri): descarga directa vía Blob.
+  const mime = mimeType || guessMime(filename);
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Limpiar el URL después de 1s (tiempo para que inicie la descarga).
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+  return {
+    ok: true,
+    output: `[file:${filename}:${sizeBytes}:${sizeLabel}]`,
+  };
+}
+
+/** Infiere el MIME type desde la extensión del archivo. */
+function guessMime(filename: string): string {
+  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
+  const map: Record<string, string> = {
+    txt: 'text/plain',
+    md: 'text/markdown',
+    html: 'text/html',
+    css: 'text/css',
+    js: 'application/javascript',
+    ts: 'application/typescript',
+    json: 'application/json',
+    xml: 'application/xml',
+    csv: 'text/csv',
+    py: 'text/x-python',
+    rs: 'text/x-rust',
+    go: 'text/x-go',
+    java: 'text/x-java',
+    c: 'text/x-c',
+    cpp: 'text/x-c++',
+    sh: 'application/x-sh',
+    yaml: 'application/x-yaml',
+    yml: 'application/x-yaml',
+    toml: 'application/x-toml',
+    pdf: 'application/pdf',
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    svg: 'image/svg+xml',
+    zip: 'application/zip',
+  };
+  return map[ext] ?? 'application/octet-stream';
+}
+
+/** Formatea bytes a string legible (ej. 1234 → "1.2 KB"). */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

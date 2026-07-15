@@ -371,11 +371,16 @@ export function Composer() {
           '- Ejecutar comandos shell (shell_exec)\n' +
           '- Leer y escribir archivos (file_read, file_write, file_list)\n' +
           '- Buscar en internet (web_search) — usa esta tool para obtener información actualizada\n' +
-          '- Descargar contenido de URLs (web_fetch) — puede fallar en algunos sitios por CORS\n\n' +
+          '- Descargar contenido de URLs (web_fetch) — puede fallar en algunos sitios por CORS\n' +
+          '- Generar archivos descargables (save_file) — crea archivos que el usuario puede descargar\n\n' +
           'IMPORTANTE sobre web_fetch:\n' +
           '- Si web_fetch falla para una URL, NO insistas con la misma URL. Intenta otra URL o usa solo el resultado de web_search.\n' +
           '- web_search ya devuelve una "Respuesta rápida" con el resumen. Usa esa información directamente.\n' +
           '- Máximo 1 intento de web_fetch por URL. Si falla, continúa con lo que tengas.\n\n' +
+          'IMPORTANTE sobre save_file:\n' +
+          '- Cuando el usuario pida "crea un archivo", "genera un script", "hazme un resumen en un documento", etc., USA save_file.\n' +
+          '- save_file genera el archivo y lo hace descargable automáticamente. No necesitas file_write para esto.\n' +
+          '- El usuario verá el archivo como un botón de descarga en el chat.\n\n' +
           'Cuando el usuario te pida algo que requiera estas herramientas, ÚSALAS. No digas que no puedes hacer algo si tienes una herramienta para hacerlo.\n' +
           'Si el usuario pregunta si puedes hacer algo, responde HONESTAMENTE sobre tus capacidades basándote en las herramientas disponibles.\n' +
           'Si tu respuesta se acerca al límite de tokens, termina con <<CONTINUE>>. Al terminar del todo, emite <<END>>.',

@@ -216,14 +216,15 @@ function MessageBubble({ msg }: { msg: Message }) {
  * El resto del contenido se renderiza con ReactMarkdown + syntax highlighting.
  */
 function MessageContent({ content }: { content: string }) {
-  // Split por los patrones [tool ...] y [result ...]
-  const parts = content.split(/(\[(?:tool|result) [^\]]+\])/g);
+  // Split por los patrones [tool ...], [result ...] y [file:...]
+  const parts = content.split(/(\[(?:tool|result) [^\]]+\]|\[file:[^\]]+\])/g);
 
   return (
     <>
       {parts.map((part, i) => {
         const toolMatch = part.match(/^\[tool (\w+): (.+)\]$/);
         const resultMatch = part.match(/^\[result (\w+): (.+)\]$/);
+        const fileMatch = part.match(/^\[file:([^:]+):(\d+):([^\]]+)\]$/);
 
         if (toolMatch) {
           const toolName = toolMatch[1];
@@ -241,6 +242,20 @@ function MessageContent({ content }: { content: string }) {
               <span className="text-text-secondary font-medium">{toolName}</span>
               <span className="text-text-muted truncate">{label}</span>
             </div>
+          );
+        }
+
+        if (fileMatch) {
+          const filename = fileMatch[1];
+          const sizeBytes = parseInt(fileMatch[2], 10);
+          const pathOrLabel = fileMatch[3];
+          return (
+            <FileDownloadBlock
+              key={i}
+              filename={filename}
+              sizeBytes={sizeBytes}
+              pathOrLabel={pathOrLabel}
+            />
           );
         }
 
@@ -330,6 +345,76 @@ function MessageContent({ content }: { content: string }) {
       })}
     </>
   );
+}
+
+// ============================================================================
+// FileDownloadBlock — botón de descarga para archivos generados
+// ============================================================================
+
+/**
+ * Renderiza un archivo generado por el agente como un botón de descarga.
+ *
+ * El formato es [file:filename:sizeBytes:pathOrLabel]
+ * - filename: nombre del archivo (ej. "resumen.md")
+ * - sizeBytes: tamaño en bytes
+ * - pathOrLabel: en Tauri es la ruta donde se guardó, en navegador es un label legible (ej. "1.2 KB")
+ */
+function FileDownloadBlock({
+  filename,
+  sizeBytes,
+  pathOrLabel,
+}: {
+  filename: string;
+  sizeBytes: number;
+  pathOrLabel: string;
+}) {
+  // Determinar si pathOrLabel es una ruta (Tauri) o un label (navegador).
+  const isPath = pathOrLabel.startsWith('/') || pathOrLabel.includes('\\');
+  const sizeLabel = formatFileSize(sizeBytes);
+
+  return (
+    <div className="my-2 px-3 py-2.5 rounded-codex bg-app-elevated border border-border-accent flex items-center gap-3">
+      {/* Icono de archivo */}
+      <div className="flex-shrink-0 w-9 h-9 rounded-codex bg-accent/15 flex items-center justify-center">
+        <Download size={16} className="text-accent" />
+      </div>
+
+      {/* Info del archivo */}
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium text-text-primary truncate">{filename}</div>
+        <div className="text-xs text-text-muted truncate">
+          {sizeLabel}
+          {isPath && <span className="ml-1">· {pathOrLabel}</span>}
+        </div>
+      </div>
+
+      {/* Botón de descarga (solo en navegador; en Tauri ya se guardó) */}
+      {!isPath && (
+        <button
+          onClick={() => {
+            // En navegador, el archivo ya se descargó automáticamente.
+            // Este botón es feedback visual.
+          }}
+          className="flex-shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-codex bg-accent text-bg-app text-xs font-medium hover:bg-accent-strong transition-colors"
+          title="Archivo descargado"
+        >
+          <Check size={12} /> Descargado
+        </button>
+      )}
+      {isPath && (
+        <span className="flex-shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-codex bg-success/15 text-success text-xs font-medium">
+          <Check size={12} /> Guardado
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** Formatea bytes a string legible. */
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 /** Devuelve el icono SVG (lucide-react) correspondiente al tool. */
