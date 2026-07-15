@@ -228,13 +228,41 @@ function MessageContent({ content }: { content: string }) {
         if (toolMatch) {
           const toolName = toolMatch[1];
           const label = toolMatch[2];
-          return <ToolBlock key={i} type="tool" toolName={toolName} label={label} />;
+          const icon = getToolIcon(toolName);
+          const color = getToolColor(toolName);
+          return (
+            <div
+              key={i}
+              className="flex items-center gap-2 my-2 px-3 py-1.5 rounded-codex bg-app-elevated border border-border text-xs"
+            >
+              <span style={{ color }} className="flex-shrink-0">
+                {icon}
+              </span>
+              <span className="text-text-secondary font-medium">{toolName}</span>
+              <span className="text-text-muted truncate">{label}</span>
+            </div>
+          );
         }
 
         if (resultMatch) {
           const toolName = resultMatch[1];
           const text = resultMatch[2];
-          return <ToolBlock key={i} type="result" toolName={toolName} label={text} />;
+          const icon = getToolIcon(toolName);
+          const color = getToolColor(toolName);
+          return (
+            <div
+              key={i}
+              className="my-2 px-3 py-2 rounded-codex bg-app-bg border border-border text-xs"
+            >
+              <div className="flex items-center gap-1.5 mb-1 text-text-muted">
+                <span style={{ color }} className="flex-shrink-0">
+                  {icon}
+                </span>
+                <span className="font-medium">resultado de {toolName}</span>
+              </div>
+              <div className="text-text-muted whitespace-pre-wrap line-clamp-3">{text}</div>
+            </div>
+          );
         }
 
         // Texto normal: renderizar con markdown.
@@ -301,59 +329,6 @@ function MessageContent({ content }: { content: string }) {
         return null;
       })}
     </>
-  );
-}
-
-/**
- * Bloque colapsable para mostrar tool calls y sus resultados.
- * Cuando está colapsado solo muestra el icono + nombre + label.
- * Al expandir muestra el contenido completo.
- */
-function ToolBlock({
-  type,
-  toolName,
-  label,
-}: {
-  type: 'tool' | 'result';
-  toolName: string;
-  label: string;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const icon = getToolIcon(toolName);
-  const color = getToolColor(toolName);
-
-  const isResult = type === 'result';
-  const headerText = isResult ? `resultado de ${toolName}` : toolName;
-
-  return (
-    <div
-      className={`my-2 rounded-codex border text-xs overflow-hidden ${
-        isResult
-          ? 'bg-app-bg border-border'
-          : 'bg-app-elevated border-border'
-      }`}
-    >
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-app-input transition-colors"
-      >
-        <span style={{ color }} className="flex-shrink-0">
-          {icon}
-        </span>
-        <span className="text-text-secondary font-medium">{headerText}</span>
-        <span className="text-text-muted truncate flex-1 text-left">{label}</span>
-        {expanded ? (
-          <ChevronDown size={12} className="text-text-muted flex-shrink-0" />
-        ) : (
-          <ChevronRight size={12} className="text-text-muted flex-shrink-0" />
-        )}
-      </button>
-      {expanded && isResult && (
-        <div className="px-3 pb-2 pt-1 text-text-muted whitespace-pre-wrap border-t border-border">
-          {label}
-        </div>
-      )}
-    </div>
   );
 }
 

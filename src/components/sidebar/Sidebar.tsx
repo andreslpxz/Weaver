@@ -264,8 +264,8 @@ export function Sidebar() {
         )}
       </nav>
 
-      {/* Footer — Configuración con separador visual claro */}
-      <div className="border-t border-border p-2 mt-auto">
+      {/* Footer */}
+      <div className="border-t border-border p-2">
         <button
           onClick={() => setView('configuracion')}
           className={cn('sidebar-item w-full text-left', view === 'configuracion' && 'active')}
@@ -299,7 +299,7 @@ function ConversationRow({
   return (
     <div
       className={cn(
-        'group flex items-center gap-2 px-2.5 py-2 rounded-codex text-sm cursor-pointer',
+        'group flex items-center gap-2 px-2 py-1.5 rounded-codex text-sm cursor-pointer',
         'text-text-secondary hover:text-text-primary hover:bg-app-elevated transition-colors',
         active && 'bg-app-elevated text-text-primary',
       )}
