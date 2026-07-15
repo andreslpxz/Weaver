@@ -25,6 +25,16 @@ export default defineConfig({
       // don't watch the rust source
       ignored: ['**/src-tauri/**'],
     },
+    // Proxy para Ollama: evita problemas de CORS cuando Weaver corre en
+    // el navegador (localhost:1420) y Ollama en localhost:11434.
+    // Las requests a /ollama-api/* se redirigen a http://localhost:11434/*
+    proxy: {
+      '/ollama-api': {
+        target: 'http://localhost:11434',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/ollama-api/, ''),
+      },
+    },
   },
   envPrefix: ['VITE_', 'TAURI_ENV_*'],
   build: {

@@ -196,38 +196,59 @@ async function fetchDeepSeekModels(apiKey: string, signal?: AbortSignal): Promis
  * el navegador bloquea el request por CORS.
  *
  * Solución: intentar fetch directo primero, y si falla por CORS,
- * usar un proxy CORS público como fallback.
+ * usar el proxy de Vite (vite.config.ts) que redirige /ollama-api/*
+ * a http://localhost:11434/* evitando el problema de CORS.
  *
  * Alternativa para el usuario: configurar OLLAMA_ORIGINS=* al arrancar Ollama:
  *   OLLAMA_ORIGINS="*" ollama serve
  */
 async function fetchOllamaModels(baseUrl: string, signal?: AbortSignal): Promise<ModelInfo[]> {
-  // Intentar fetch directo primero.
+  // Intentar fetch directo primero (funciona si OLLAMA_ORIGINS=* está configurado).
   try {
     const resp = await fetch(`${baseUrl}/api/tags`, { signal });
     if (resp.ok) {
       const json = (await resp.json()) as OllamaTagsResponse;
-      return parseOllamaModels(json);
+      const models = parseOllamaModels(json);
+      if (models.length > 0) return models;
     }
   } catch (e) {
-    // Probablemente CORS. Intentar con proxy.
-    console.warn('[ollama] fetch directo falló (¿CORS?), intentando proxy:', e);
+    // Probablemente CORS. Intentar con proxy de Vite.
+    console.warn('[ollama] fetch directo falló (¿CORS?), intentando proxy Vite:', e);
   }
 
-  // Fallback: usar proxy CORS público.
-  const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(`${baseUrl}/api/tags`)}`;
+  // Fallback 1: proxy de Vite (configurado en vite.config.ts).
+  // Redirige /ollama-api/* → http://localhost:11434/*
+  try {
+    const resp = await fetch('/ollama-api/api/tags', { signal });
+    if (resp.ok) {
+      const json = (await resp.json()) as OllamaTagsResponse;
+      const models = parseOllamaModels(json);
+      if (models.length > 0) return models;
+    }
+  } catch (e) {
+    console.warn('[ollama] proxy Vite falló:', e);
+  }
+
+  // Fallback 2: proxy CORS público (allorigins.win soporta localhost).
+  const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(`${baseUrl}/api/tags`)}`;
   try {
     const resp = await fetch(proxyUrl, { signal });
-    if (!resp.ok) throw new Error(`proxy ${resp.status}`);
-    const json = (await resp.json()) as OllamaTagsResponse;
-    return parseOllamaModels(json);
+    if (resp.ok) {
+      const json = (await resp.json()) as OllamaTagsResponse;
+      const models = parseOllamaModels(json);
+      if (models.length > 0) return models;
+    }
   } catch (e) {
-    console.warn('[ollama] proxy también falló:', e);
-    throw new Error(
-      'No se pudo conectar a Ollama. Verifica que esté corriendo en ' +
-      baseUrl + '. Si el problema es CORS, ejecuta: OLLAMA_ORIGINS="*" ollama serve',
-    );
+    console.warn('[ollama] proxy allorigins falló:', e);
   }
+
+  // Si todos los métodos fallan, devolver array vacío (el UI mostrará los curados).
+  console.error(
+    '[ollama] No se pudo conectar a Ollama en',
+    baseUrl,
+    '. Verifica que esté corriendo y que OLLAMA_ORIGINS="*" esté configurado.',
+  );
+  return [];
 }
 
 interface OllamaTagsResponse {

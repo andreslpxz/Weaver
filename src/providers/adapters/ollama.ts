@@ -1,6 +1,10 @@
 /**
  * Adaptador para Ollama local (POST /api/chat con NDJSON streaming).
  * Cubre: ollama, huggingface (vía Ollama).
+ *
+ * CORS: en modo navegador (npm run dev), Ollama no permite CORS desde
+ * localhost:1420. Usamos el proxy de Vite (/ollama-api/*) como fallback.
+ * En Tauri, no hay restricciones CORS.
  */
 
 import type {
@@ -10,15 +14,25 @@ import type {
   ProviderInfo,
   StreamChunk,
 } from '../types';
+import { runtime } from '@/lib/tauri';
 
 export class OllamaProvider implements LLMProvider {
   constructor(public info: ProviderInfo) {}
 
+  /** Devuelve la URL base a usar: directa (Tauri) o vía proxy Vite (navegador). */
+  private get baseUrl(): string {
+    if (runtime.isBrowser) {
+      // En navegador, usar el proxy de Vite para evitar CORS.
+      return '/ollama-api';
+    }
+    return this.info.baseUrl;
+  }
+
   async stream(opts: ChatOptions): Promise<AsyncIterable<StreamChunk>> {
-    const url = `${this.info.baseUrl}/api/chat`;
+    const url = `${this.baseUrl}/api/chat`;
     const body = {
       model: opts.model,
-      messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
+      messages: opts.messages.map((m) => ({ role: m.role, content: m.content ?? '' })),
       stream: true,
       options: {
         temperature: opts.temperature ?? 0.7,
@@ -40,13 +54,18 @@ export class OllamaProvider implements LLMProvider {
 
   async listModels(): Promise<ModelInfo[]> {
     try {
-      const resp = await fetch(`${this.info.baseUrl}/api/tags`);
+      const resp = await fetch(`${this.baseUrl}/api/tags`);
       if (!resp.ok) return this.info.models;
-      const json = (await resp.json()) as { models?: Array<{ name: string; details?: { parameter_size?: string } }> };
+      const json = (await resp.json()) as {
+        models?: Array<{
+          name: string;
+          details?: { parameter_size?: string; context_length?: number; family?: string };
+        }>;
+      };
       return (json.models ?? []).map((m) => ({
         id: m.name,
         label: m.name,
-        contextWindow: 128_000,
+        contextWindow: m.details?.context_length ?? 8192,
         supportsStreaming: true,
       }));
     } catch {
