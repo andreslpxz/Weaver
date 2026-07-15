@@ -41,6 +41,24 @@ export interface ModelInfo {
   supportsTools?: boolean;
   supportsStreaming?: boolean;
   isReasoning?: boolean;
+  /** Metadata enriquecida opcional (de OpenRouter o fetch individual). */
+  pricing?: ModelPricing;
+  supportsVision?: boolean;
+  modality?: string; // ej. "text->text", "text+image->text"
+  /** Proveedor real si viene de un agregador como OpenRouter. */
+  sourceProvider?: string;
+}
+
+/** Pricing de un modelo (en USD por token). */
+export interface ModelPricing {
+  /** USD por token de prompt (entrada). */
+  prompt?: number;
+  /** USD por token de completion (salida). */
+  completion?: number;
+  /** USD por token de cache read (si aplica). */
+  inputCacheRead?: number;
+  /** USD por request (si aplica, algunos modelos cobran por request). */
+  request?: number;
 }
 
 export type MessageRole = 'system' | 'user' | 'assistant' | 'tool';

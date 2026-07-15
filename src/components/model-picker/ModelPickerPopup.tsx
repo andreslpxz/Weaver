@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Search, Check, AlertCircle, X, ExternalLink, Trash2, KeyRound } from 'lucide-react';
+import { Search, Check, AlertCircle, X, ExternalLink, Trash2, KeyRound, RefreshCw, Eye, DollarSign, Wrench, Zap } from 'lucide-react';
 import { PROVIDERS, getProvider } from '@/providers/registry';
 import { useWeaver } from '@/store/weaver';
 import { apiKeyStore, maskKey } from '@/providers/store';
 import { keyring } from '@/lib/tauri';
-import type { ProviderId } from '@/providers/types';
+import type { ModelInfo, ProviderId } from '@/providers/types';
+import { fetchProviderModels } from '@/providers/provider-models';
+import { formatContextWindow, formatPricing, getOpenRouterCacheTimestamp } from '@/providers/openrouter-models';
 import { cn, Badge } from '@/components/common/Button';
 
 export function ModelPickerPopup({ onClose }: { onClose: () => void }) {
@@ -23,9 +25,15 @@ export function ModelPickerPopup({ onClose }: { onClose: () => void }) {
   const [keyInput, setInput] = useState('');
   const [keyStatus, setKeyStatus] = useState<{ ok: boolean; message: string } | null>(null);
   const [hasKey, setHasKey] = useState<Record<string, boolean>>({});
+  // Modelos remotos por proveedor (fetch en tiempo real).
+  const [remoteModels, setRemoteModels] = useState<Record<string, ModelInfo[]>>({});
+  const [refreshing, setRefreshing] = useState<ProviderId | null>(null);
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
   useEffect(() => {
     refreshProvidersWithKey();
+    // Cargar timestamp del cache de OpenRouter al abrir.
+    setLastUpdate(getOpenRouterCacheTimestamp());
   }, [refreshProvidersWithKey]);
 
   // Cargar estado de API keys
@@ -37,6 +45,31 @@ export function ModelPickerPopup({ onClose }: { onClose: () => void }) {
       }),
     ).then((entries) => setHasKey(Object.fromEntries(entries)));
   }, [tab]);
+
+  // Auto-cargar modelos remotos para OpenRouter al abrir (es público, sin key).
+  useEffect(() => {
+    if (tab === 'models' && !remoteModels['openrouter']) {
+      refreshProviderModels('openrouter');
+    }
+  }, [tab]);
+
+  async function refreshProviderModels(pid: ProviderId) {
+    setRefreshing(pid);
+    try {
+      const models = await fetchProviderModels(pid);
+      setRemoteModels((prev) => ({ ...prev, [pid]: models }));
+      setLastUpdate(new Date());
+    } catch (e) {
+      console.warn(`[model-picker] refresh falló para ${pid}:`, e);
+    } finally {
+      setRefreshing(null);
+    }
+  }
+
+  /** Obtiene los modelos a mostrar para un proveedor: remotos si hay, si no los curados. */
+  function getModelsForProvider(pid: ProviderId): ModelInfo[] {
+    return remoteModels[pid] ?? getProvider(pid)?.models ?? [];
+  }
 
   const filtered = PROVIDERS.filter(
     (p) =>
@@ -129,9 +162,29 @@ export function ModelPickerPopup({ onClose }: { onClose: () => void }) {
         <div className="flex-1 overflow-y-auto p-3">
           {tab === 'models' ? (
             <div className="space-y-4">
+              {/* Banner de actualización con botón refresh */}
+              <div className="flex items-center justify-between px-2 py-1.5 text-[10px] text-text-muted">
+                <span>
+                  {lastUpdate
+                    ? `Actualizado: ${lastUpdate.toLocaleTimeString()}`
+                    : 'Sin datos remotos aún'}
+                </span>
+                <button
+                  onClick={() => refreshProviderModels('openrouter')}
+                  disabled={refreshing === 'openrouter'}
+                  className="inline-flex items-center gap-1 text-accent hover:underline disabled:opacity-50"
+                  title="Refrescar catálogo de modelos desde OpenRouter"
+                >
+                  <RefreshCw size={10} className={refreshing === 'openrouter' ? 'animate-spin' : ''} />
+                  Actualizar modelos
+                </button>
+              </div>
+
               {filtered.map((p) => {
                 const isActive = p.id === providerId;
                 const hasApiKey = p.noApiKey || hasKey[p.id];
+                const models = getModelsForProvider(p.id);
+                const isRemote = !!remoteModels[p.id];
                 return (
                   <div key={p.id}>
                     <div className="flex items-center gap-2 mb-1.5">
@@ -148,9 +201,19 @@ export function ModelPickerPopup({ onClose }: { onClose: () => void }) {
                           <AlertCircle size={10} /> sin key
                         </Badge>
                       )}
+                      {isRemote && (
+                        <button
+                          onClick={() => refreshProviderModels(p.id)}
+                          disabled={refreshing === p.id}
+                          className="ml-auto codex-icon-btn w-5 h-5"
+                          title="Refrescar modelos de este proveedor"
+                        >
+                          <RefreshCw size={9} className={refreshing === p.id ? 'animate-spin' : ''} />
+                        </button>
+                      )}
                     </div>
                     <div className="grid grid-cols-2 gap-1">
-                      {p.models.map((m) => (
+                      {models.map((m) => (
                         <button
                           key={m.id}
                           onClick={() => {
@@ -170,15 +233,32 @@ export function ModelPickerPopup({ onClose }: { onClose: () => void }) {
                               ? 'bg-accent/15 text-accent border border-accent/30'
                               : 'text-text-secondary border border-transparent',
                           )}
-                          title={`${m.contextWindow.toLocaleString()} tokens`}
+                          title={`${m.contextWindow.toLocaleString()} tokens${m.pricing?.prompt ? ` · $${m.pricing.prompt}/tok` : ''}`}
                         >
-                          <div className="flex items-center justify-between">
-                            <span className="font-medium">{m.label}</span>
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="font-medium truncate">{m.label}</span>
                             {m.isReasoning && <Badge color="default">reasoning</Badge>}
                           </div>
-                          <div className="text-[10px] text-text-muted">
-                            {(m.contextWindow / 1000).toFixed(0)}k ctx
-                            {m.supportsTools ? ' · tools' : ''}
+                          {/* Badges de metadata */}
+                          <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                            <span className="text-[9px] text-text-muted flex items-center gap-0.5">
+                              <Zap size={8} /> {formatContextWindow(m.contextWindow)}
+                            </span>
+                            {m.supportsTools && (
+                              <span className="text-[9px] text-accent flex items-center gap-0.5" title="Soporta function calling / tools">
+                                <Wrench size={8} /> tools
+                              </span>
+                            )}
+                            {m.supportsVision && (
+                              <span className="text-[9px] text-warning flex items-center gap-0.5" title="Soporta imágenes / visión">
+                                <Eye size={8} /> vision
+                              </span>
+                            )}
+                            {m.pricing?.prompt !== undefined && (
+                              <span className="text-[9px] text-text-muted flex items-center gap-0.5" title="Precio por millón de tokens">
+                                <DollarSign size={8} /> {formatPricing(m.pricing.prompt)}
+                              </span>
+                            )}
                           </div>
                         </button>
                       ))}
