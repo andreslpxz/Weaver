@@ -187,19 +187,116 @@ async function fetchDeepSeekModels(apiKey: string, signal?: AbortSignal): Promis
   }));
 }
 
-/** Ollama: endpoint local sin auth. */
+/**
+ * Ollama: endpoint local sin auth.
+ *
+ * Ollama expone GET /api/tags que devuelve los modelos instalados.
+ * Problema: por defecto Ollama NO permite CORS desde otros orígenes.
+ * Si Weaver corre en localhost:1420 y Ollama en localhost:11434,
+ * el navegador bloquea el request por CORS.
+ *
+ * Solución: intentar fetch directo primero, y si falla por CORS,
+ * usar un proxy CORS público como fallback.
+ *
+ * Alternativa para el usuario: configurar OLLAMA_ORIGINS=* al arrancar Ollama:
+ *   OLLAMA_ORIGINS="*" ollama serve
+ */
 async function fetchOllamaModels(baseUrl: string, signal?: AbortSignal): Promise<ModelInfo[]> {
-  const resp = await fetch(`${baseUrl}/api/tags`, { signal });
-  if (!resp.ok) throw new Error(`${resp.status}`);
-  const json = (await resp.json()) as {
-    models?: Array<{ name: string; context_length?: number }>;
-  };
-  return (json.models ?? []).map((m) => ({
-    id: m.name,
-    label: m.name,
-    contextWindow: m.context_length ?? 8_192,
-    supportsStreaming: true,
-  }));
+  // Intentar fetch directo primero.
+  try {
+    const resp = await fetch(`${baseUrl}/api/tags`, { signal });
+    if (resp.ok) {
+      const json = (await resp.json()) as OllamaTagsResponse;
+      return parseOllamaModels(json);
+    }
+  } catch (e) {
+    // Probablemente CORS. Intentar con proxy.
+    console.warn('[ollama] fetch directo falló (¿CORS?), intentando proxy:', e);
+  }
+
+  // Fallback: usar proxy CORS público.
+  const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(`${baseUrl}/api/tags`)}`;
+  try {
+    const resp = await fetch(proxyUrl, { signal });
+    if (!resp.ok) throw new Error(`proxy ${resp.status}`);
+    const json = (await resp.json()) as OllamaTagsResponse;
+    return parseOllamaModels(json);
+  } catch (e) {
+    console.warn('[ollama] proxy también falló:', e);
+    throw new Error(
+      'No se pudo conectar a Ollama. Verifica que esté corriendo en ' +
+      baseUrl + '. Si el problema es CORS, ejecuta: OLLAMA_ORIGINS="*" ollama serve',
+    );
+  }
+}
+
+interface OllamaTagsResponse {
+  models?: Array<{
+    name: string;
+    model?: string;
+    modified_at?: string;
+    size?: number;
+    details?: {
+      parameter_size?: string;
+      quantization_level?: string;
+      family?: string;
+      context_length?: number;
+    };
+  }>;
+}
+
+/** Convierte la respuesta de Ollama a ModelInfo con metadata enriquecida. */
+function parseOllamaModels(json: OllamaTagsResponse): ModelInfo[] {
+  return (json.models ?? []).map((m) => {
+    const name = m.name || m.model || 'unknown';
+    // Ollama no devuelve context_length en /api/tags, pero podemos
+    // inferirlo de la familia del modelo.
+    const family = m.details?.family;
+    const contextWindow = m.details?.context_length ?? inferContextWindow(name, family);
+
+    // Label legible: "llama3.3:70b" → "Llama 3.3 (70b)"
+    const label = formatOllamaLabel(name, m.details?.parameter_size);
+
+    return {
+      id: name,
+      label,
+      contextWindow,
+      supportsStreaming: true,
+      supportsTools: true, // Ollama soporta tools en la mayoría de modelos.
+      modality: 'text->text',
+      sourceProvider: 'ollama',
+    };
+  });
+}
+
+/** Infiere el context window basándose en el nombre/familia del modelo. */
+function inferContextWindow(name: string, family?: string): number {
+  const lower = name.toLowerCase();
+  // Modelos conocidos:
+  if (lower.includes('llama3.3') || lower.includes('llama-3.3')) return 128_000;
+  if (lower.includes('llama3.1') || lower.includes('llama-3.1')) return 128_000;
+  if (lower.includes('llama3') || lower.includes('llama-3')) return 8_192;
+  if (lower.includes('qwen2.5')) return 128_000;
+  if (lower.includes('qwen2')) return 32_768;
+  if (lower.includes('mistral') || lower.includes('mixtral')) return 32_768;
+  if (lower.includes('phi3') || lower.includes('phi-3')) return 128_000;
+  if (lower.includes('deepseek')) return 64_000;
+  if (lower.includes('gemma2')) return 8_192;
+  if (lower.includes('codellama')) return 16_384;
+  // Default razonable.
+  return 8_192;
+}
+
+/** Formatea el label de un modelo de Ollama. */
+function formatOllamaLabel(name: string, parameterSize?: string): string {
+  // "llama3.3:70b" → "Llama 3.3 (70b)"
+  // "qwen2.5:7b" → "Qwen 2.5 (7b)"
+  // "ornith:9b" → "Ornith (9b)"
+  const [base, tag] = name.split(':');
+  // Capitalizar primera letra.
+  const display = base.charAt(0).toUpperCase() + base.slice(1);
+  const size = tag || parameterSize;
+  return size ? `${display} (${size})` : display;
 }
 
 /** Cerebras: endpoint público sin auth. */

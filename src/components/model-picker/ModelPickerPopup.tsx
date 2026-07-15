@@ -46,10 +46,21 @@ export function ModelPickerPopup({ onClose }: { onClose: () => void }) {
     ).then((entries) => setHasKey(Object.fromEntries(entries)));
   }, [tab]);
 
-  // Auto-cargar modelos remotos para OpenRouter al abrir (es público, sin key).
+  // Auto-cargar modelos remotos para proveedores públicos al abrir
+  // (OpenRouter = 343 modelos públicos, Ollama = modelos locales instalados).
   useEffect(() => {
-    if (tab === 'models' && !remoteModels['openrouter']) {
+    if (tab !== 'models') return;
+    // OpenRouter: público, sin auth.
+    if (!remoteModels['openrouter']) {
       refreshProviderModels('openrouter');
+    }
+    // Ollama: local, sin auth (http://localhost:11434/api/tags).
+    if (!remoteModels['ollama']) {
+      refreshProviderModels('ollama');
+    }
+    // Cerebras: tiene endpoint público sin auth.
+    if (!remoteModels['cerebras']) {
+      refreshProviderModels('cerebras');
     }
   }, [tab]);
 
