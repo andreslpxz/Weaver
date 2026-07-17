@@ -17,12 +17,14 @@ import {
   Map,
   Puzzle,
   Monitor,
+  X,
 } from 'lucide-react';
 import { useWeaver } from '@/store/weaver';
 import { getProvider, PROVIDERS } from '@/providers/registry';
 import { IconButton, Button } from '@/components/common/Button';
 import { ModelPickerPopup } from '@/components/model-picker/ModelPickerPopup';
 import { AttachmentChips } from '@/components/composer/AttachmentChips';
+import { AppPicker, type PickedApp } from '@/components/composer/AppPicker';
 import { createProvider } from '@/providers';
 import { runAgent } from '@/agent/loop';
 import { streamChat, streamUntilDone } from '@/lib/chain';
@@ -51,6 +53,8 @@ export function Composer() {
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionItems, setMentionItems] = useState<MentionItem[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
+  const [appPickerOpen, setAppPickerOpen] = useState(false);
+  const [attachedApp, setAttachedApp] = useState<PickedApp | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -725,8 +729,7 @@ export function Composer() {
                         setAttachmentError('Adjuntar app requiere modo Tauri. Ejecuta con npm run tauri:dev.');
                         return;
                       }
-                      // En Tauri: disparar vista de complementos o AT-SPI picker (TODO)
-                      setView('complementos');
+                      setAppPickerOpen(true);
                     }}
                     className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
                   >
@@ -846,6 +849,37 @@ export function Composer() {
         </div>
 
         {modelPickerOpen && <ModelPickerPopup onClose={() => setModelPickerOpen(false)} />}
+
+        {appPickerOpen && (
+          <AppPicker
+            onClose={() => setAppPickerOpen(false)}
+            onPick={(app) => {
+              setAttachedApp(app);
+              // Inyectar contexto de la app en el composer.
+              const ctx = `\n[App adjunta: ${app.name} (${app.kind})]`;
+              setValue((v) => v + ctx);
+            }}
+          />
+        )}
+
+        {/* Chip de app adjunta */}
+        {attachedApp && (
+          <div className="flex items-center gap-2 px-3 py-1.5 mx-auto max-w-3xl mt-2 rounded-codex bg-accent/10 border border-accent/30 text-xs">
+            <Monitor size={12} className="text-accent" />
+            <span className="text-text-primary font-medium">{attachedApp.name}</span>
+            <span className="text-text-muted">· {attachedApp.kind}</span>
+            <button
+              onClick={() => {
+                setAttachedApp(null);
+                setValue((v) => v.replace(/\n\[App adjunta: [^\]]+\]/, ''));
+              }}
+              className="ml-auto codex-icon-btn w-5 h-5"
+              title="Quitar app adjunta"
+            >
+              <X size={10} />
+            </button>
+          </div>
+        )}
 
         <div className="text-center mt-2">
           <span className="text-xs text-text-muted">

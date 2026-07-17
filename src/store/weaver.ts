@@ -69,6 +69,10 @@ interface WeaverState {
   // --- Conversaciones ---
   conversations: Conversation[];
   activeConversationId: string | null;
+  /** Carga conversaciones desde SQLite (Tauri) o localStorage al iniciar. */
+  loadConversations: () => Promise<void>;
+  /** Carga mensajes de una conversación (lazy load). */
+  loadMessages: (conversationId: string) => Promise<void>;
   newConversation: () => string;
   selectConversation: (id: string) => void;
   deleteConversation: (id: string) => void;
@@ -220,6 +224,77 @@ export const useWeaver = create<WeaverState>((set, get) => ({
   // --- Conversaciones ---
   conversations: [],
   activeConversationId: null,
+  /** Carga conversaciones desde SQLite (Tauri) o localStorage (navegador). */
+  loadConversations: async () => {
+    if (runtime.isTauri) {
+      try {
+        const convs = await sqlite.listConversations();
+        if (convs.length === 0) {
+          // Sin conversaciones, crear una nueva.
+          useWeaver.getState().newConversation();
+          return;
+        }
+        const conversations: Conversation[] = convs.map((c) => ({
+          id: c.id,
+          title: c.title,
+          projectId: c.project_id,
+          messages: [], // Se cargan al seleccionar (lazy load).
+          traces: {},
+          agentState: 'idle' as const,
+          createdAt: c.created_at,
+          updatedAt: c.updated_at,
+        }));
+        set({ conversations, activeConversationId: conversations[0]?.id ?? null });
+        // Cargar mensajes de la conversación activa.
+        if (conversations[0]) {
+          await useWeaver.getState().loadMessages(conversations[0].id);
+        }
+      } catch (e) {
+        console.warn('loadConversations failed:', e);
+        useWeaver.getState().newConversation();
+      }
+    } else {
+      // Navegador: usar localStorage.
+      try {
+        const raw = localStorage.getItem('weaver:conversations');
+        if (raw) {
+          const conversations = JSON.parse(raw) as Conversation[];
+          set({
+            conversations,
+            activeConversationId: conversations[0]?.id ?? null,
+          });
+        } else {
+          useWeaver.getState().newConversation();
+        }
+      } catch {
+        useWeaver.getState().newConversation();
+      }
+    }
+  },
+  /** Carga mensajes de una conversación desde SQLite (lazy load). */
+  loadMessages: async (conversationId: string) => {
+    if (runtime.isTauri) {
+      try {
+        const rows = await sqlite.listMessages(conversationId);
+        const messages: Message[] = rows.map((r) => ({
+          id: r.id,
+          role: r.role as Message['role'],
+          content: r.content,
+          ts: r.ts,
+          reasoning: r.reasoning ?? undefined,
+          // attachments_json se parsea si existe.
+          ...(r.attachments_json ? { attachments: JSON.parse(r.attachments_json) } : {}),
+        }));
+        set((s) => ({
+          conversations: s.conversations.map((c) =>
+            c.id === conversationId ? { ...c, messages } : c,
+          ),
+        }));
+      } catch (e) {
+        console.warn('loadMessages failed:', e);
+      }
+    }
+  },
 
   newConversation: () => {
     const id = crypto.randomUUID();
@@ -243,21 +318,44 @@ export const useWeaver = create<WeaverState>((set, get) => ({
       sqlite.createConversation(id, null, 'Nuevo chat').catch((e) =>
         console.warn('createConversation failed:', e),
       );
+    } else {
+      // Navegador: guardar en localStorage.
+      try {
+        localStorage.setItem('weaver:conversations', JSON.stringify(useWeaver.getState().conversations));
+      } catch { /* ignore */ }
     }
     return id;
   },
 
-  selectConversation: (id) => set({ activeConversationId: id, view: 'chat' }),
+  selectConversation: (id) => {
+    set({ activeConversationId: id, view: 'chat' });
+    // Lazy load mensajes desde SQLite si la conversación está vacía.
+    const conv = useWeaver.getState().conversations.find((c) => c.id === id);
+    if (conv && conv.messages.length === 0) {
+      useWeaver.getState().loadMessages(id);
+    }
+  },
 
-  deleteConversation: (id) =>
+  deleteConversation: (id) => {
     set((s) => {
       const conversations = s.conversations.filter((c) => c.id !== id);
       const activeConversationId =
         s.activeConversationId === id ? conversations[0]?.id ?? null : s.activeConversationId;
       return { conversations, activeConversationId };
-    }),
+    });
+    // Eliminar de SQLite.
+    if (runtime.isTauri) {
+      sqlite.deleteConversation(id).catch((e) =>
+        console.warn('deleteConversation failed:', e),
+      );
+    } else {
+      try {
+        localStorage.setItem('weaver:conversations', JSON.stringify(useWeaver.getState().conversations));
+      } catch { /* ignore */ }
+    }
+  },
 
-  appendMessage: (msg) =>
+  appendMessage: (msg) => {
     set((s) => {
       if (!s.activeConversationId) return s;
       const conversations = s.conversations.map((c) =>
@@ -266,9 +364,32 @@ export const useWeaver = create<WeaverState>((set, get) => ({
           : c,
       );
       return { conversations };
-    }),
+    });
+    // Persistir mensaje en SQLite.
+    const convId = useWeaver.getState().activeConversationId;
+    if (convId) {
+      if (runtime.isTauri) {
+        const msgRow = {
+          id: msg.id ?? crypto.randomUUID(),
+          conversation_id: convId,
+          role: msg.role,
+          content: msg.content ?? '',
+          ts: msg.ts ?? Date.now(),
+          attachments_json: msg.attachments ? JSON.stringify(msg.attachments) : null,
+          reasoning: msg.reasoning ?? null,
+        };
+        sqlite.saveMessage(msgRow).catch((e) =>
+          console.warn('saveMessage failed:', e),
+        );
+      } else {
+        try {
+          localStorage.setItem('weaver:conversations', JSON.stringify(useWeaver.getState().conversations));
+        } catch { /* ignore */ }
+      }
+    }
+  },
 
-  updateLastAssistantMessage: (delta) =>
+  updateLastAssistantMessage: (delta) => {
     set((s) => {
       if (!s.activeConversationId) return s;
       const conversations = s.conversations.map((c) => {
@@ -276,7 +397,6 @@ export const useWeaver = create<WeaverState>((set, get) => ({
         const msgs = [...c.messages];
         const last = msgs[msgs.length - 1];
         if (last && last.role === 'assistant') {
-          // content puede ser null (cuando hay tool_calls), lo tratamos como ''.
           const prev = last.content ?? '';
           msgs[msgs.length - 1] = { ...last, content: prev + delta };
         } else {
@@ -285,7 +405,16 @@ export const useWeaver = create<WeaverState>((set, get) => ({
         return { ...c, messages: msgs, updatedAt: Date.now() };
       });
       return { conversations };
-    }),
+    });
+    // Debounce persistencia: el último update se persiste tras 2s de inactividad.
+    if (runtime.isTauri) {
+      schedulePersistLastMessage();
+    } else {
+      try {
+        localStorage.setItem('weaver:conversations', JSON.stringify(useWeaver.getState().conversations));
+      } catch { /* ignore */ }
+    }
+  },
 
   setConversationPlan: (plan) =>
     set((s) => {
@@ -481,3 +610,38 @@ useWeaver.subscribe((s) => {
     s.newConversation();
   }
 });
+
+// ============================================================================
+// Helper: persistencia con debounce del último mensaje del asistente.
+// ============================================================================
+
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Programa la persistencia del último mensaje del asistente con debounce.
+ * El mensaje se persiste 2s después del último delta, para no spammear
+ * la base de datos durante el streaming.
+ */
+function schedulePersistLastMessage() {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    const s = useWeaver.getState();
+    const conv = s.conversations.find((c) => c.id === s.activeConversationId);
+    if (!conv) return;
+    const last = conv.messages[conv.messages.length - 1];
+    if (!last || last.role !== 'assistant' || !last.id) return;
+    const msgRow = {
+      id: last.id,
+      conversation_id: conv.id,
+      role: 'assistant',
+      content: last.content ?? '',
+      ts: last.ts ?? Date.now(),
+      attachments_json: last.attachments ? JSON.stringify(last.attachments) : null,
+      reasoning: last.reasoning ?? null,
+    };
+    sqlite.saveMessage(msgRow).catch((e) =>
+      console.warn('debounced saveMessage failed:', e),
+    );
+  }, 2000);
+}

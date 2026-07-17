@@ -12,7 +12,7 @@ import { useWeaver } from '@/store/weaver';
 import { initTheme } from '@/lib/themes';
 
 export default function App() {
-  const { view, newConversation, themeId } = useWeaver();
+  const { view, loadConversations, themeId } = useWeaver();
 
   // Inicializar tema al montar.
   useEffect(() => {
@@ -24,12 +24,10 @@ export default function App() {
     initTheme();
   }, [themeId]);
 
-  // Inicializar conversación si no hay ninguna.
+  // Cargar conversaciones desde SQLite (Tauri) o localStorage al iniciar.
   useEffect(() => {
-    if (useWeaver.getState().conversations.length === 0) {
-      newConversation();
-    }
-  }, [newConversation]);
+    loadConversations();
+  }, [loadConversations]);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-app-bg text-text-primary">
