@@ -378,7 +378,7 @@ export function Composer() {
       {
         role: 'system',
         content:
-          `Eres Weaver, un agente de escritorio ejecutándose en ${osName}. ` +
+          `Eres Weaver, un agente de escritorio PROACTIVO y AUTÓNOMO ejecutándose en ${osName}. ` +
           (runtime.isTauri
             ? 'Tienes acceso al sistema de archivos real y puedes ejecutar comandos shell. '
             : 'Estás en modo navegador (sin acceso al filesystem real). ') +
@@ -386,24 +386,30 @@ export function Composer() {
           'TIENES ACCESO A HERRAMIENTAS REALES para:\n' +
           '- Ejecutar comandos shell (shell_exec)\n' +
           '- Leer y escribir archivos (file_read, file_write, file_list)\n' +
-          '- Buscar en internet (web_search) — usa esta tool para obtener información actualizada\n' +
-          '- Descargar contenido de URLs (web_fetch) — puede fallar en algunos sitios por CORS\n' +
-          '- Generar archivos descargables (save_file) — crea archivos que el usuario puede descargar\n\n' +
-          'IMPORTANTE sobre web_fetch:\n' +
-          '- Si web_fetch falla para una URL, NO insistas con la misma URL. Intenta otra URL o usa solo el resultado de web_search.\n' +
-          '- web_search ya devuelve una "Respuesta rápida" con el resumen. Usa esa información directamente.\n' +
-          '- Máximo 1 intento de web_fetch por URL. Si falla, continúa con lo que tengas.\n\n' +
-          'IMPORTANTE sobre save_file:\n' +
-          '- Cuando el usuario pida "crea un archivo", "genera un script", "hazme un resumen en un documento", etc., USA save_file.\n' +
-          '- save_file genera el archivo y lo hace descargable automáticamente. No necesitas file_write para esto.\n' +
-          '- El usuario verá el archivo como un botón de descarga en el chat.\n\n' +
-          'IMPORTANTE sobre shell_exec y file_list:\n' +
-          '- Usa SIEMPRE rutas absolutas válidas para el OS actual.\n' +
-          '- En Windows: C:\\Users\\<username>\\Documents\\ (no /home/)\n' +
-          '- En Linux: /home/<username>/ (no C:\\)\n' +
-          '- Si no conoces el username, usa "echo %USERNAME%" (Windows) o "whoami" (Linux) primero.\n\n' +
-          'Cuando el usuario te pida algo que requiera estas herramientas, ÚSALAS. No digas que no puedes hacer algo si tienes una herramienta para hacerlo.\n' +
-          'Si el usuario pregunta si puedes hacer algo, responde HONESTAMENTE sobre tus capacidades basándote en las herramientas disponibles.\n' +
+          '- Buscar en internet (web_search)\n' +
+          '- Descargar contenido de URLs (web_fetch)\n' +
+          '- Generar archivos descargables (save_file)\n\n' +
+          '═══ COMPORTAMIENTO PROACTIVO Y AUTÓNOMO ═══\n' +
+          'Eres un agente AUTÓNOMO. Esto significa:\n' +
+          '1. NUNCA te rindas al primer error. Si algo falla, intenta una alternativa.\n' +
+          '2. Si no conoces el username o una ruta, DESCÚBRELA primero con shell_exec ("echo %USERNAME%" en Windows, "whoami" en Linux).\n' +
+          '3. NUNCA uses variables de entorno sin expandir en rutas de file_read/file_write/file_list. Primero resuelve el valor con shell_exec, luego úsalo.\n' +
+          '4. Si file_write falla por permisos, intenta otra ruta (ej: Documents en vez de Desktop).\n' +
+          '5. Si shell_exec falla con un comando, prueba otro equivalente.\n' +
+          '6. Encadena tools: usa shell_exec para descubrir info, luego file_read/write para actuar.\n' +
+          '7. Si el usuario pide algo ambiguo, INTERPRETA lo más probable y actúa.\n' +
+          '8. No pidas confirmación para cada paso. Solo actúa y reporta al final.\n\n' +
+          '═══ REGLAS DE RUTAS ═══\n' +
+          '- En Windows: C:\\Users\\<username>\\Documents\\ — descubre username primero\n' +
+          '- En Linux: /home/<username>/ — descubre username primero\n' +
+          '- %USERNAME% y $USER NO se expanden en file_read/file_write/file_list, SOLO en shell_exec\n' +
+          '- Para save_file no necesitas ruta, solo filename\n\n' +
+          '═══ REGLAS DE TOOLS ═══\n' +
+          '- web_search ya devuelve un resumen. Úsalo directamente.\n' +
+          '- Si web_fetch falla, no insistas. Usa web_search.\n' +
+          '- Para crear archivos que el usuario descargue, usa save_file (no file_write).\n' +
+          '- Máximo 1 intento de web_fetch por URL.\n\n' +
+          'Cuando el usuario te pida algo, ÚSALAS LAS HERRAMIENTAS. No digas que no puedes.\n' +
           'Si tu respuesta se acerca al límite de tokens, termina con <<CONTINUE>>. Al terminar del todo, emite <<END>>.',
       },
       { role: 'user', content: userText, images: images.length > 0 ? images : undefined },
@@ -440,24 +446,25 @@ export function Composer() {
           // ignore parse errors
         }
 
-        // Feedback visual: mostrar qué tool se está ejecutando.
-        // El icono SVG lo renderiza MessageList detectando el patrón [tool <name>:
+        // Feedback visual limpio: mostrar qué tool se está ejecutando.
         const toolLabel = formatToolLabel(tc.function.name, args);
         updateLastAssistantMessage(`\n\n[tool ${tc.function.name}: ${toolLabel}]\n`);
 
         const toolResult = await dispatchAdvancedTool(tc.function.name, args);
-        const summary = toolResult.ok
+
+        // Resultado para el LLM (completo, hasta 4000 chars).
+        const llmResult = toolResult.ok
           ? toolResult.output.slice(0, 4000)
           : `ERROR: ${toolResult.error ?? 'unknown'}`;
 
-        // Actualizar el mensaje visual con el resultado (truncado para no abrumar el UI).
-        // El resultado completo se envía al LLM vía messages.
-        updateLastAssistantMessage(`[result ${tc.function.name}: ${summary.slice(0, 300)}…]\n\n`);
+        // Resultado visual limpio (no crudo).
+        const visualResult = formatToolResult(tc.function.name, toolResult);
+        updateLastAssistantMessage(`${visualResult}\n\n`);
 
         messages.push({
           role: 'tool',
           tool_call_id: tc.id,
-          content: summary,
+          content: llmResult,
         });
       }
 
@@ -477,16 +484,37 @@ export function Composer() {
       case 'web_fetch':
         return `descargando: ${args.url ?? ''}`;
       case 'shell_exec':
-        return `ejecutando: ${args.command ?? ''}`;
+        return `ejecutando: ${(args.command ?? '').toString().slice(0, 60)}`;
       case 'file_read':
         return `leyendo: ${args.path ?? ''}`;
       case 'file_write':
         return `escribiendo: ${args.path ?? ''}`;
       case 'file_list':
         return `listando: ${args.path ?? ''}`;
+      case 'save_file':
+        return `generando: ${args.filename ?? 'archivo'}`;
       default:
-        return JSON.stringify(args).slice(0, 80);
+        return toolName;
     }
+  }
+
+  /** Formatea el resultado de un tool de forma limpia para el UI (no crudo). */
+  function formatToolResult(
+    _toolName: string,
+    result: { ok: boolean; output: string; error?: string },
+  ): string {
+    if (!result.ok) {
+      const err = result.error ?? 'error desconocido';
+      const shortErr = err.split('\n')[0].slice(0, 120);
+      return `[result ${_toolName}: ❌ ${shortErr}]`;
+    }
+    const output = result.output;
+    if (output.startsWith('[file:')) {
+      return output;
+    }
+    const truncated = output.slice(0, 150);
+    const hasMore = output.length > 150;
+    return `[result ${_toolName}: ✅ ${truncated}${hasMore ? '…' : ''}]`;
   }
 
   function handleStop() {
