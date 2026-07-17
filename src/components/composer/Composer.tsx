@@ -366,11 +366,23 @@ export function Composer() {
     const { streamChat } = await import('@/lib/chain');
 
     appendMessage({ role: 'assistant', content: '', id: newMsgId(), ts: Date.now() });
+
+    // Detectar OS para que el LLM use comandos correctos (dir vs ls, etc.)
+    const isWindows = typeof navigator !== 'undefined' && navigator.platform.toLowerCase().includes('win');
+    const osName = isWindows ? 'Windows' : runtime.isTauri ? 'Linux/macOS' : 'navegador';
+    const shellHint = isWindows
+      ? 'El shell es PowerShell/CMD en Windows. Usa "dir" (no "ls"), "type" (no "cat"), rutas con "C:\\Users\\" (no "/home/"). La variable de entorno es %USERNAME% (no $USER).'
+      : 'El shell es bash en Linux. Usa "ls", "cat", rutas con "/home/".';
+
     const messages: Message[] = [
       {
         role: 'system',
         content:
-          'Eres Weaver, un agente de escritorio Linux que opera cualquier aplicación a través de APIs de Accesibilidad (AT-SPI). ' +
+          `Eres Weaver, un agente de escritorio ejecutándose en ${osName}. ` +
+          (runtime.isTauri
+            ? 'Tienes acceso al sistema de archivos real y puedes ejecutar comandos shell. '
+            : 'Estás en modo navegador (sin acceso al filesystem real). ') +
+          shellHint + '\n\n' +
           'TIENES ACCESO A HERRAMIENTAS REALES para:\n' +
           '- Ejecutar comandos shell (shell_exec)\n' +
           '- Leer y escribir archivos (file_read, file_write, file_list)\n' +
@@ -385,6 +397,11 @@ export function Composer() {
           '- Cuando el usuario pida "crea un archivo", "genera un script", "hazme un resumen en un documento", etc., USA save_file.\n' +
           '- save_file genera el archivo y lo hace descargable automáticamente. No necesitas file_write para esto.\n' +
           '- El usuario verá el archivo como un botón de descarga en el chat.\n\n' +
+          'IMPORTANTE sobre shell_exec y file_list:\n' +
+          '- Usa SIEMPRE rutas absolutas válidas para el OS actual.\n' +
+          '- En Windows: C:\\Users\\<username>\\Documents\\ (no /home/)\n' +
+          '- En Linux: /home/<username>/ (no C:\\)\n' +
+          '- Si no conoces el username, usa "echo %USERNAME%" (Windows) o "whoami" (Linux) primero.\n\n' +
           'Cuando el usuario te pida algo que requiera estas herramientas, ÚSALAS. No digas que no puedes hacer algo si tienes una herramienta para hacerlo.\n' +
           'Si el usuario pregunta si puedes hacer algo, responde HONESTAMENTE sobre tus capacidades basándote en las herramientas disponibles.\n' +
           'Si tu respuesta se acerca al límite de tokens, termina con <<CONTINUE>>. Al terminar del todo, emite <<END>>.',
