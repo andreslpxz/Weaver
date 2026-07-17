@@ -14,6 +14,7 @@
 pub mod backend;
 #[cfg(target_os = "linux")]
 pub mod commands;
+pub mod commands_crossplatform;
 pub mod db;
 pub mod keyring;
 pub mod mcp;
@@ -134,12 +135,25 @@ pub fn run() {
             ]);
     }
 
-    // En Windows/macOS, registrar solo los comandos cross-platform (MCP, db, tools, keyring).
-    // TODO: cuando los backends Windows/macOS estén implementados, añadir
-    // aquí los comandos que delegan al trait `Backend`.
+    // En Windows/macOS, registrar comandos cross-platform:
+    // - keyring (funciona en todas las plataformas via Credential Manager / Keychain)
+    // - tools (shell_exec, file_read/write/list)
+    // - MCP, SQLite (proyectos, conversaciones, mensajes, skills)
+    // Los comandos de AT-SPI/automation son Linux-only por ahora.
     #[cfg(not(target_os = "linux"))]
     {
         builder = builder.invoke_handler(tauri::generate_handler![
+            // Keyring (cross-platform: Credential Manager en Windows, Keychain en macOS)
+            commands_crossplatform::keyring_set_api_key,
+            commands_crossplatform::keyring_get_api_key,
+            commands_crossplatform::keyring_get_api_key_raw,
+            commands_crossplatform::keyring_delete_api_key,
+            commands_crossplatform::keyring_list_providers,
+            // Tools (shell, fs — cross-platform)
+            tools::tools_shell_exec,
+            tools::tools_file_read,
+            tools::tools_file_write,
+            tools::tools_file_list,
             // MCP
             mcp::mcp_list_servers,
             mcp::mcp_add_server,
