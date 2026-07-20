@@ -101,14 +101,20 @@ export const ADVANCED_TOOLS: ToolDef[] = [
       mime_type: { type: 'string', description: 'Tipo MIME opcional (ej. "text/markdown", "application/json")' },
     },
   },
-  // ===================== ME: Calendario y vida =====================
+  // ===================== ME: Espacio personal del USUARIO =====================
+  // IMPORTANTE: "ME" / "MI" es la sección PERSONAL DEL USUARIO dentro de Weaver.
+  // Estas tools guardan datos DEL USUARIO (sus notas, sus tareas, su calendario,
+  // su lista de la compra, su salud). NO son la memoria del agente.
+  // Úsalas SÓLO cuando el usuario pida explícitamente anotar algo en SU espacio.
   {
     name: 'me_create_event',
     description:
-      'Crea un evento en el calendario ME (la sección personal de Weaver). ' +
-      'Antes de usar esta tool, si el usuario no especificó "calendario de aquí" o "calendario ME", ' +
-      'pregunta: "¿Quieres que lo agregue al calendario ME (aquí) o al calendario de tu PC (Google Calendar, Outlook, Apple Calendar)?" ' +
-      'Si responde "ME" o "aquí", usa esta tool. Si responde "PC", pídele que configure la integración en ME > Complementos > Integraciones nativas.',
+      'Crea un evento en el calendario DEL USUARIO dentro de MI/ME (la sección personal de Weaver). ' +
+      'IMPORTANTE: esta tool es para gestionar la vida del USUARIO, no para que el agente se auto-registre. ' +
+      'Úsala SÓLO cuando el usuario pida explícitamente algo como "pon en mi calendario…", "recuérdame que…", "agenda…". ' +
+      'Antes de usar esta tool, si el usuario no especificó "calendario de aquí" o "calendario MI", ' +
+      'pregunta: "¿Quieres que lo agregue al calendario MI (aquí) o al calendario de tu PC (Google Calendar, Outlook, Apple Calendar)?" ' +
+      'Si responde "MI" o "aquí", usa esta tool. Si responde "PC", pídele que configure la integración en MI > Complementos > Integraciones nativas.',
     category: 'fs',
     parameters: {
       title: { type: 'string', description: 'Título del evento' },
@@ -122,7 +128,7 @@ export const ADVANCED_TOOLS: ToolDef[] = [
   },
   {
     name: 'me_list_events',
-    description: 'Lista los eventos del calendario ME dentro de un rango de fechas.',
+    description: 'Lista los eventos del calendario DEL USUARIO en MI dentro de un rango de fechas. Úsala cuando el usuario pregunte "¿qué tengo esta semana?", "¿qué hay en mi calendario?", etc.',
     category: 'fs',
     parameters: {
       from_ts: { type: 'number', description: 'Timestamp inicial (epoch ms). Default: ahora' },
@@ -131,7 +137,9 @@ export const ADVANCED_TOOLS: ToolDef[] = [
   },
   {
     name: 'me_create_task',
-    description: 'Crea una tarea en la lista de ME.',
+    description: 'Crea una tarea en la lista de tareas DEL USUARIO en MI. ' +
+      'IMPORTANTE: es una tarea para el USUARIO (ej: "comprar pan", "llamar al dentista"), NO una tarea del agente. ' +
+      'Úsala SÓLO cuando el usuario pida algo como "anota esta tarea…", "recuérdame que tengo que…", "agrega a mi lista de tareas…".',
     category: 'fs',
     parameters: {
       title: { type: 'string', description: 'Texto de la tarea' },
@@ -142,7 +150,11 @@ export const ADVANCED_TOOLS: ToolDef[] = [
   },
   {
     name: 'me_create_note',
-    description: 'Crea una nota rápida en ME.',
+    description: 'Crea una nota rápida en el cuaderno DEL USUARIO en MI. ' +
+      'CRÍTICO: esta nota va al espacio personal del USUARIO, no a tu memoria como agente. ' +
+      'Úsala SÓLO cuando el usuario pida explícitamente algo como "anota en MI…", "guárdame esta nota…", "apunta…". ' +
+      'NUNCA la uses para registrar cosas sobre ti mismo (tus capacidades, tu estado, tus reflexiones, tu auto-descripción). ' +
+      'Si el usuario pregunta "¿qué puedes hacer?" o "¿quién eres?", RESPONDE en el chat directamente, NO crees una nota.',
     category: 'fs',
     parameters: {
       title: { type: 'string', description: 'Título opcional' },
@@ -151,7 +163,8 @@ export const ADVANCED_TOOLS: ToolDef[] = [
   },
   {
     name: 'me_add_shopping',
-    description: 'Añade un producto a la lista de la compra de ME.',
+    description: 'Añade un producto a la lista de la compra DEL USUARIO en MI. ' +
+      'Úsala SÓLO cuando el usuario pida algo como "añade a la lista de la compra…", "apunta que necesito comprar…", "agrega a mi lista…".',
     category: 'fs',
     parameters: {
       name: { type: 'string', description: 'Nombre del producto' },
@@ -161,7 +174,8 @@ export const ADVANCED_TOOLS: ToolDef[] = [
   },
   {
     name: 'me_log_health',
-    description: 'Registra una medición de salud en ME.',
+    description: 'Registra una medición de salud DEL USUARIO en MI (peso, sueño, agua, medicación, pasos, ritmo cardíaco). ' +
+      'Úsala SÓLO cuando el usuario pida algo como "registra mi peso…", "anota cuánto dormí…", "apunta que tomé mi medicación…".',
     category: 'fs',
     parameters: {
       kind: { type: 'string', description: 'Tipo: weight, sleep, water, meds, steps, heart' },

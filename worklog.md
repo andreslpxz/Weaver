@@ -172,3 +172,34 @@ Stage Summary:
 
 
 
+
+---
+Task ID: bug-fix-me-user-not-agent
+Agent: main
+Task: El usuario reporta que el agente se confunde y piensa que "MI" (la sección personal de Weaver) es para él mismo, no para el usuario. Síntoma: al preguntar "Hola, ¿qué puedes hacer?", el agente usó me_create_note para crear una nota titulada "Mis Capacidades / Funciones" listando sus propias habilidades, en vez de responder en el chat.
+
+Work Log:
+- Análisis: las descripciones de las tools me_create_note, me_create_task, me_create_event, me_add_shopping, me_log_health decían simplemente "crea una nota en ME" / "crea una tarea en ME" sin aclarar que ME es el espacio personal DEL USUARIO. El system prompt tampoco mencionaba la distinción. El agente interpretaba "ME" como "mi espacio (del agente)".
+- Cambios en src/lib/tools.ts:
+  - Cabecera del bloque ME cambió de "ME: Calendario y vida" a "ME: Espacio personal del USUARIO" + comentario aclaratorio.
+  - me_create_event: ahora dice "Crea un evento en el calendario DEL USUARIO dentro de MI/ME". Aclara que NO es para auto-registro del agente.
+  - me_list_events: "Lista los eventos del calendario DEL USUARIO".
+  - me_create_task: "Crea una tarea en la lista de tareas DEL USUARIO en MI. IMPORTANTE: es una tarea para el USUARIO (ej: 'comprar pan'), NO una tarea del agente."
+  - me_create_note: bloque CRÍTICO explicando que va al espacio del usuario, no a la memoria del agente. NUNCA usar para registrar cosas sobre sí mismo. Si el usuario pregunta "¿qué puedes hacer?", responder en chat, NO crear nota.
+  - me_add_shopping: "lista de la compra DEL USUARIO".
+  - me_log_health: "medición de salud DEL USUARIO".
+- Cambios en src/components/composer/Composer.tsx (system prompt):
+  - Añadido bloque "REGLA CRÍTICA SOBRE MI / ME" después de "REGLAS DE TOOLS".
+  - Define: MI/ME es la sección personal DEL USUARIO (sus notas, tareas, calendario, lista de la compra, salud). NO es el espacio del agente.
+  - Prohíbe explícitamente usar me_create_* para registrar cosas sobre el agente mismo.
+  - Sólo usar estas tools cuando el usuario pida explícitamente anotar algo en SU espacio.
+  - Caso concreto: si el usuario pregunta "¿qué puedes hacer?" o "¿quién eres?", responder en chat, NO crear nota en MI.
+- Verificado: tsc --noEmit EXIT 0 ✓ · vite build exitoso en 5.66s ✓.
+
+Stage Summary:
+- Archivos modificados:
+  - src/lib/tools.ts: descripciones de las 6 tools me_* reescritas para aclarar que son para datos DEL USUARIO.
+  - src/components/composer/Composer.tsx: system prompt ampliado con bloque "REGLA CRÍTICA SOBRE MI / ME".
+- Causa raíz: ambigüedad en el nombre "ME" + descripciones mínimas → el agente interpretaba "ME" como "mi (del agente)" en vez de "MI (del usuario)".
+- Fix: doble refuerzo — system prompt + descripciones de cada tool. El agente ahora recibe la aclaración tanto al cargarse el contexto (system prompt) como al inspeccionar cada tool (description).
+- Ahora al preguntar "¿qué puedes hacer?", el agente debería responder directamente en el chat en vez de crear una nota en MI.

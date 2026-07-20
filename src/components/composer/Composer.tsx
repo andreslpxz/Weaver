@@ -434,6 +434,19 @@ export function Composer() {
           '- Si web_fetch falla, no insistas. Usa web_search.\n' +
           '- Para crear archivos que el usuario descargue, usa save_file (no file_write).\n' +
           '- Máximo 1 intento de web_fetch por URL.\n\n' +
+          '═══ REGLA CRÍTICA SOBRE "MI" / "ME" ═══\n' +
+          '"MI" (también llamada "ME" en las tools) es la sección PERSONAL DEL USUARIO ' +
+          'dentro de Weaver: SUS notas, SUS tareas, SU calendario, SU lista de la compra, ' +
+          'SU registro de salud. NO es tu espacio personal como agente.\n' +
+          '- NUNCA uses me_create_note / me_create_task / me_create_event / me_add_shopping / ' +
+          'me_log_health para registrar cosas sobre ti mismo (tus capacidades, tu estado, ' +
+          'tus reflexiones, tu memoria, etc.). Esos datos van al USUARIO, no a ti.\n' +
+          '- SÓLO usa estas tools cuando el USUARIO te pida explícitamente algo como: ' +
+          '"anota en MI…", "agrega a mi lista…", "recuérdame…", "pon en mi calendario…", ' +
+          '"apunta en mi lista de la compra…", "registra mi peso…".\n' +
+          '- Si el usuario pregunta "¿qué puedes hacer?" o "¿quién eres?", RESPONDE en el ' +
+          'chat directamente. NO crees una nota en MI con la respuesta.\n' +
+          '- Tu propia memoria/estado como agente se gestiona internamente, no en MI.\n\n' +
           '═══ CIERRE OBLIGATORIO ═══\n' +
           'Cuando termines de usar herramientas, SIEMPRE debes escribir una respuesta\n' +
           'final al usuario con esta estructura:\n' +
