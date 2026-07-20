@@ -17,6 +17,7 @@ import {
   Map,
   Puzzle,
   Monitor,
+  Network,
   X,
 } from 'lucide-react';
 import { useWeaver } from '@/store/weaver';
@@ -79,8 +80,10 @@ export function Composer() {
     clearDraftAttachments,
     planMode,
     pursueObjective,
+    cognitiveMode,
     setPlanMode,
     setPursueObjective,
+    setCognitiveMode,
     projects,
     setView,
   } = useWeaver();
@@ -302,6 +305,24 @@ export function Composer() {
     if (pursueObjective) {
       objectiveText =
         'IMPORTANTE: Debes PERSEGUIR EL OBJETIVO hasta completarlo. Si algo falla, replanifica e inténtalo de nuevo (máximo 3 intentos por subtarea). No te rindas al primer error.\n\n' +
+        objectiveText;
+    }
+    if (cognitiveMode) {
+      objectiveText =
+        'IMPORTANTE: Estás en MODO COGNITIVO. Te vuelves HIPER-ESPECIALIZADO en el proyecto activo.\n' +
+        'Antes de proponer cualquier cambio al código, DEBES seguir este protocolo de 3 fases:\n' +
+        '   1) INTUICIÓN (Telaraña): Llama a cognitive_query para buscar nodos relacionados con\n' +
+        '      lo que pide el usuario. Identifica posibles restricciones previas (Performance_Budget,\n' +
+        '      dependencias circulares, conflictos conocidos). Asocia el pedido con el historial del grafo.\n' +
+        '   2) LÓGICA (Construcción del Grafo): Traza los pasos como una cadena de nodos A → B → C.\n' +
+        '      Verifica si algún nodo prohíbe la lógica (usa cognitive_query path/neighbors).\n' +
+        '   3) JUICIO (Emisión): Responde con: (a) resumen de lo que encontraste en el grafo,\n' +
+        '      (b) nodos afectados y riesgos detectados, (c) propuesta concreta, (d) pregunta de\n' +
+        '      confirmación al usuario. Ej: "Para implementar X sin romper el nodo Y (Z), propongo\n' +
+        '      usar W. ¿Estás de acuerdo?"\n' +
+        'Si no existe un Grafo Cognitivo construido, primero llama a cognitive_graphify con la\n' +
+        'ruta del proyecto (si no la sabes, pídela al usuario). NUNCA proposes cambios sin antes\n' +
+        'consultar el grafo.\n\n' +
         objectiveText;
     }
 
@@ -854,6 +875,21 @@ export function Composer() {
                     <ToggleSwitch on={pursueObjective} />
                   </button>
 
+                  {/* Modo Cognitivo (toggle) */}
+                  <button
+                    onClick={() => setCognitiveMode(!cognitiveMode)}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
+                  >
+                    <Network size={15} className={cognitiveMode ? 'text-accent' : 'text-text-muted shrink-0'} />
+                    <div className="flex-1">
+                      <div className="font-medium">Modo cognitivo</div>
+                      <div className="text-[10px] text-text-muted">
+                        Hiper-especializado · grafo del proyecto (graphify)
+                      </div>
+                    </div>
+                    <ToggleSwitch on={cognitiveMode} />
+                  </button>
+
                   {/* Separador */}
                   <div className="border-t border-border" />
 
@@ -896,6 +932,11 @@ export function Composer() {
             {pursueObjective && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent border border-accent/30 inline-flex items-center gap-1">
                 <Target size={9} /> Perseguir
+              </span>
+            )}
+            {cognitiveMode && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent border border-accent/30 inline-flex items-center gap-1">
+                <Network size={9} /> Cognitivo
               </span>
             )}
 

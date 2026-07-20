@@ -101,8 +101,16 @@ interface WeaverState {
   planMode: boolean;
   /** Perseguir objetivo: el agente itera hasta completar el objetivo, no se rinde al primer fallo. */
   pursueObjective: boolean;
+  /**
+   * Modo Cognitivo: el agente se vuelve hiper-especializado en el proyecto activo.
+   * Antes de proponer cambios, construye/consulta un Grafo Cognitivo del proyecto
+   * (graphify) y emite un juicio con 3 fases: intuición → lógica → juicio.
+   * Requiere Tauri para escanear archivos.
+   */
+  cognitiveMode: boolean;
   setPlanMode: (v: boolean) => void;
   setPursueObjective: (v: boolean) => void;
+  setCognitiveMode: (v: boolean) => void;
 
   // --- Regeneración de mensajes ---
   regenerateMessage: (messageId: string) => Promise<void>;
@@ -546,8 +554,10 @@ export const useWeaver = create<WeaverState>((set, get) => ({
   // --- Modos del agente ---
   planMode: false,
   pursueObjective: true,
+  cognitiveMode: false,
   setPlanMode: (v) => set({ planMode: v }),
   setPursueObjective: (v) => set({ pursueObjective: v }),
+  setCognitiveMode: (v) => set({ cognitiveMode: v }),
 
   // --- Regeneración ---
   regenerateMessage: async (messageId) => {

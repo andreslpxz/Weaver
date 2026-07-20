@@ -129,6 +129,11 @@ const dict: Record<Lang, Dict> = {
     'config.language.es': 'Español',
     'config.language.en': 'English',
     'config.language.hint': 'Selecciona el idioma de la interfaz. Los prompts internos del agente y el contenido generado siguen en el idioma que les pidas.',
+
+    // Modo Cognitivo
+    'cognitive.title': 'Modo cognitivo',
+    'cognitive.subtitle': 'Hiper-especializado · grafo del proyecto (graphify)',
+    'cognitive.badge': 'Cognitivo',
   },
 
   en: {
@@ -232,6 +237,11 @@ const dict: Record<Lang, Dict> = {
     'config.language.es': 'Español',
     'config.language.en': 'English',
     'config.language.hint': 'Select the interface language. Agent internal prompts and generated content stay in whatever language you ask for.',
+
+    // Cognitive Mode
+    'cognitive.title': 'Cognitive mode',
+    'cognitive.subtitle': 'Hyper-specialized · project graph (graphify)',
+    'cognitive.badge': 'Cognitive',
   },
 };
 

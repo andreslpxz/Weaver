@@ -190,6 +190,43 @@ export const ADVANCED_TOOLS: ToolDef[] = [
       content: { type: 'string', description: 'Contenido del PDF. Si es texto/HTML, se renderiza como tal. Si es binario, pasar como base64.' },
     },
   },
+  // ===================== Modo Cognitivo =====================
+  {
+    name: 'cognitive_graphify',
+    description:
+      'Escanea un directorio raíz y construye (o refresca) el Grafo Cognitivo del Proyecto: ' +
+      'extrae funciones, clases, interfaces, métodos, variables, tipos, módulos, archivos y carpetas, ' +
+      'y conecta con aristas de imports/contains/affects/depends_on. ' +
+      'Uso típico: cognitive_graphify({ root_path: "/ruta/al/proyecto" }). ' +
+      'Requiere modo Tauri. Tras ejecutarlo, el grafo queda persistido en localStorage ' +
+      'y se puede consultar con cognitive_query.',
+    category: 'fs',
+    parameters: {
+      root_path: { type: 'string', description: 'Ruta absoluta al directorio raíz del proyecto a escanear' },
+    },
+  },
+  {
+    name: 'cognitive_query',
+    description:
+      'Consulta el Grafo Cognitivo del Proyecto construido previamente con cognitive_graphify. ' +
+      'Soporta 5 modos (pasa exactamente uno): ' +
+      '(1) search: busca nodos por nombre (substring). ' +
+      '(2) by_kind: lista nodos de un tipo concreto (file, folder, module, function, class, interface, method, variable, type). ' +
+      '(3) neighbors: dado un id de nodo, devuelve los nodos conectados. ' +
+      '(4) path: BFS más corto entre dos nodos por nombre (from, to). ' +
+      '(5) stats: devuelve las estadísticas globales del grafo. ' +
+      'En MODO COGNITIVO, el agente DEBE consultar este grafo ANTES de proponer cambios al código.',
+    category: 'fs',
+    parameters: {
+      search: { type: 'string', description: 'Buscar nodos por nombre (substring, case-insensitive)' },
+      by_kind: { type: 'string', description: 'Listar nodos de un tipo: file|folder|module|function|class|interface|method|variable|type' },
+      neighbors: { type: 'string', description: 'ID del nodo del que se quiere conocer sus vecinos' },
+      from: { type: 'string', description: 'Para modo path: nombre del nodo origen (substring)' },
+      to: { type: 'string', description: 'Para modo path: nombre del nodo destino (substring)' },
+      stats: { type: 'boolean', description: 'Si true, devuelve estadísticas globales del grafo' },
+      limit: { type: 'number', description: 'Máximo de resultados (default 50)' },
+    },
+  },
 ];
 
 /** Lista de tools para exponer al LLM (formato OpenAI function calling). */
@@ -198,6 +235,7 @@ export function buildAdvancedToolsList() {
     'cwd', 'timeout', 'max_results', 'create_dirs', 'max_chars', 'mime_type',
     'description', 'location', 'calendar_id', 'all_day', 'priority', 'due_ts', 'list_id',
     'from_ts', 'to_ts', 'notes', 'qty', 'category', 'title',
+    'search', 'by_kind', 'neighbors', 'from', 'to', 'stats', 'limit', 'root_path',
   ]);
   return ADVANCED_TOOLS.map((t) => ({
     type: 'function' as const,
@@ -263,6 +301,10 @@ export async function dispatchAdvancedTool(
         return await renderHtml(args);
       case 'render_pdf':
         return await renderPdf(args);
+      case 'cognitive_graphify':
+        return await cognitiveGraphify(args);
+      case 'cognitive_query':
+        return await cognitiveQuery(args);
       default:
         return { ok: false, output: '', error: `Tool desconocida: ${name}` };
     }
@@ -761,4 +803,75 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// ============================================================================
+// Modo Cognitivo — graphify + query
+// ============================================================================
+
+async function cognitiveGraphify(args: Record<string, unknown>): Promise<ToolExecResult> {
+  const rootPath = String(args.root_path ?? args.rootPath ?? '').trim();
+  if (!rootPath) {
+    return { ok: false, output: '', error: 'Falta root_path' };
+  }
+  try {
+    const { graphify } = await import('@/lib/cognitive');
+    const graph = await graphify(rootPath);
+    const s = graph.stats;
+    const summary =
+      `✅ Grafo Cognitivo construido para: ${graph.rootPath}\n` +
+      `   Files: ${s.files}  ·  Folders: ${s.folders}  ·  Modules: ${s.modules}\n` +
+      `   Functions: ${s.functions}  ·  Classes: ${s.classes}  ·  Interfaces: ${s.interfaces}\n` +
+      `   Methods: ${s.methods}  ·  Variables: ${s.variables}  ·  Types: ${s.types}\n` +
+      `   Imports: ${s.imports}  ·  Edges totales: ${s.edges}\n` +
+      `   Construido: ${new Date(graph.builtAt).toLocaleString()}`;
+    return { ok: true, output: summary };
+  } catch (e) {
+    return { ok: false, output: '', error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+async function cognitiveQuery(args: Record<string, unknown>): Promise<ToolExecResult> {
+  try {
+    const { loadGraph, queryGraph } = await import('@/lib/cognitive');
+    type NodeKind = import('@/lib/cognitive').NodeKind;
+    type CognitiveGraph = import('@/lib/cognitive').CognitiveGraph;
+    const graph = loadGraph();
+    if (!graph) {
+      return {
+        ok: false,
+        output: '',
+        error:
+          'No hay Grafo Cognitivo construido. Pídele al usuario que ejecute cognitive_graphify ' +
+          'con la ruta del proyecto (o hazlo tú si tienes la ruta).',
+      };
+    }
+    const opts: Parameters<typeof queryGraph>[1] = {};
+    if (typeof args.search === 'string') opts.search = args.search;
+    if (typeof args.by_kind === 'string') opts.byKind = args.by_kind as NodeKind;
+    if (typeof args.neighbors === 'string') opts.neighbors = args.neighbors;
+    if (typeof args.from === 'string' && typeof args.to === 'string') {
+      opts.path = { from: args.from, to: args.to };
+    }
+    if (args.stats === true) opts.stats = true;
+    if (typeof args.limit === 'number') opts.limit = args.limit;
+
+    const result = queryGraph(graph as CognitiveGraph, opts);
+    const lines: string[] = [result.summary];
+    if (result.nodes.length > 0) {
+      lines.push('', 'Nodos:');
+      for (const n of result.nodes) {
+        lines.push(`  · [${n.kind}] ${n.name}  (${n.file}${n.line > 0 ? `:${n.line}` : ''})`);
+      }
+    }
+    if (result.edges.length > 0) {
+      lines.push('', 'Aristas:');
+      for (const e of result.edges) {
+        lines.push(`  · ${e.fromName} --${e.kind}--> ${e.toName}`);
+      }
+    }
+    return { ok: true, output: lines.join('\n') };
+  } catch (e) {
+    return { ok: false, output: '', error: e instanceof Error ? e.message : String(e) };
+  }
 }
