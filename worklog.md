@@ -94,3 +94,38 @@ Stage Summary:
 - Fix: parser de texto → tool calls nativos → ejecución normal.
 - El usuario ya NO debería ver `<function(...)>` crudo ni respuestas vacías cuando el LLM use formato texto.
 
+---
+Task ID: bug-fix-empty-response-no-message
+Agent: main
+Task: Corregir bug donde el agente mostraba spinner "Pensando..." y luego NO mostraba ningún mensaje al enviar sugerencias predefinidas como "Busca en internet las últimas noticias de IA y haz un resumen". Síntoma: sale el spinner, luego desaparece, y no hay mensaje del asistente. El log de Vite sólo mostraba HMR noise + ECONNREFUSED 127.0.0.1:11434 (Ollama no corriendo — irrelevante).
+
+Work Log:
+- Análisis: el bug anterior (commit c07cb2e) fixeó el caso de tool calls en formato texto, PERO introdujo/dejó un bug peor: cuando el LLM respondía VACÍO (ni texto ni tool calls — común en modelos pequeños, streams cortados, o cuando el modelo no soporta tools y se confunde), el código hacía:
+    if (result.toolCalls.length === 0) {
+      producedFinalText = true;  // ← siempre true, incluso si text es ''
+      break;
+    }
+  Como producedFinalText quedaba true, el bloque post-loop (que fuerza una respuesta final) NUNCA se ejecutaba. El usuario se quedaba con mensaje asistente vacío → spinner mientras isRunning=true → nada cuando isRunning=false.
+- Fix 1: sólo marcar producedFinalText=true si HAY texto real:
+    if (result.toolCalls.length === 0) {
+      if (result.text && result.text.trim().length > 0) {
+        producedFinalText = true;
+      }
+      break;
+    }
+  Así, si el LLM responde vacío, producedFinalText queda false y el bloque post-loop se ejecuta.
+- Fix 2: el bloque post-loop (force-final) ahora:
+  1. Captura el resultado de streamChat (antes lo ignoraba).
+  2. Si el LLM emitió tool calls como texto en la respuesta final, los limpia con parseTextToolCalls (sin ejecutarlos — ya cerramos la fase de tools).
+  3. Si aún así el texto es vacío, muestra un fallback claro:
+     "*(El modelo no generó una respuesta. Posibles causas: ...)*"
+  para que el usuario NUNCA se quede con mensaje vacío.
+- Verificado: `tsc --noEmit` EXIT 0 ✓ · `vite build` exitoso en 5.50s ✓.
+
+Stage Summary:
+- Archivo modificado: `src/components/composer/Composer.tsx` (runChatWithTools).
+- Causa raíz: el flag producedFinalText se seteaba true incluso cuando el LLM respondía vacío, saltándose el bloque force-final.
+- Fix: producedFinalText sólo true si hay texto real; force-final block captura resultado, limpia text-tool-calls, y muestra fallback si sigue vacío.
+- Ahora el usuario SIEMPRE ve un mensaje del asistente (respuesta del LLM, resumen forzado, o fallback explicativo).
+
+

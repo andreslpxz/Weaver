@@ -485,8 +485,15 @@ export function Composer() {
       }
 
       // Si no hay tool calls (nativos ni text-based), el LLM ya respondió → terminamos.
+      // PERO sólo marcamos producedFinalText=true si HAY texto real. Si el LLM
+      // respondió vacío (ni texto ni tools — pasa con modelos pequeños o cuando
+      // el stream se corta), dejamos producedFinalText=false para que el bloque
+      // post-loop fuerce una respuesta. Esto fixea el bug "sale el de pensar y
+      // luego no sale mensaje".
       if (result.toolCalls.length === 0) {
-        producedFinalText = true;
+        if (result.text && result.text.trim().length > 0) {
+          producedFinalText = true;
+        }
         break;
       }
 
@@ -534,8 +541,9 @@ export function Composer() {
       await new Promise((r) => setTimeout(r, 100));
     }
 
-    // Si el LLM nunca produjo texto final (sólo llamó tools hasta agotar rounds),
-    // forzar una respuesta final SIN tools para que el usuario sí reciba respuesta.
+    // Si el LLM nunca produjo texto final (sólo llamó tools hasta agotar rounds,
+    // O respondió vacío), forzar una respuesta final SIN tools para que el
+    // usuario sí reciba respuesta.
     if (!producedFinalText) {
       updateLastAssistantMessage('\n\n');
       messages.push({
@@ -548,10 +556,32 @@ export function Composer() {
           'No intentes usar más herramientas. Responde directamente.',
       });
       try {
-        await streamChat(llm, modelId, messages, {
+        const finalResult = await streamChat(llm, modelId, messages, {
           signal,
           onDelta: (delta) => updateLastAssistantMessage(delta),
         });
+        // El LLM podría seguir emitiendo tool calls como texto (modelos
+        // test-only-style). Limpiarlos del texto visible SIN ejecutarlos
+        // (ya cerramos la fase de tools).
+        let finalText = finalResult.text;
+        if (maybeHasTextToolCall(finalText)) {
+          const parsed = parseTextToolCalls(finalText);
+          if (parsed.found) {
+            finalText = parsed.cleanedText;
+            setLastAssistantMessage(finalText);
+          }
+        }
+        // Si aún así el LLM no produce nada útil, mostrar un fallback claro
+        // para que el usuario no se quede con mensaje vacío.
+        if (!finalText || finalText.trim().length === 0) {
+          updateLastAssistantMessage(
+            '\n\n*(El modelo no generó una respuesta. Posibles causas:\n' +
+              '- El modelo no soporta tools y se confundió\n' +
+              '- El stream se cortó\n' +
+              '- La API key del proveedor es inválida o sin cuota\n' +
+              'Intenta reformular el mensaje, cambia de modelo en el selector, o revisa la configuración.)*',
+          );
+        }
       } catch (e) {
         updateLastAssistantMessage(
           `\n\n*(No se pudo generar el resumen final: ${e instanceof Error ? e.message : String(e)})*`,
