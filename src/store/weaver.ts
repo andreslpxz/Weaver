@@ -76,6 +76,7 @@ interface WeaverState {
   newConversation: () => string;
   selectConversation: (id: string) => void;
   deleteConversation: (id: string) => void;
+  renameConversation: (id: string, title: string) => Promise<void>;
   appendMessage: (msg: Message) => void;
   updateLastAssistantMessage: (delta: string) => void;
   setConversationPlan: (plan: Plan) => void;
@@ -371,6 +372,26 @@ export const useWeaver = create<WeaverState>((set, get) => ({
     }
   },
 
+  renameConversation: async (id, title) => {
+    const cleanTitle = title.trim().slice(0, 80) || 'Sin título';
+    set((s) => ({
+      conversations: s.conversations.map((c) =>
+        c.id === id ? { ...c, title: cleanTitle } : c,
+      ),
+    }));
+    if (runtime.isTauri) {
+      try {
+        await sqlite.renameConversation(id, cleanTitle);
+      } catch (e) {
+        console.warn('renameConversation failed:', e);
+      }
+    } else {
+      try {
+        localStorage.setItem('weaver:conversations', JSON.stringify(useWeaver.getState().conversations));
+      } catch { /* ignore */ }
+    }
+  },
+
   deleteConversation: (id) => {
     set((s) => {
       const conversations = s.conversations.filter((c) => c.id !== id);
@@ -421,6 +442,10 @@ export const useWeaver = create<WeaverState>((set, get) => ({
           localStorage.setItem('weaver:conversations', JSON.stringify(useWeaver.getState().conversations));
         } catch { /* ignore */ }
       }
+    }
+    // Auto-titular conversación con IA si es el primer mensaje del usuario.
+    if (msg.role === 'user' && convId) {
+      void maybeAutoTitleConversation(convId, msg.content ?? '');
     }
   },
 
@@ -910,6 +935,74 @@ useWeaver.subscribe((s) => {
     s.newConversation();
   }
 });
+
+// ============================================================================
+// Auto-titulación de conversaciones con IA.
+// ============================================================================
+
+/** Conversaciones que ya están siendo tituladas, para evitar duplicar. */
+const inFlightTitles = new Set<string>();
+
+/**
+ * Si la conversación sigue con el título por defecto ("Nuevo chat"),
+ * llama al LLM con el primer mensaje del usuario para generar un título
+ * corto (máx 5 palabras) y lo persiste.
+ *
+ * Es best-effort: si falla (no hay API key, sin red, etc.) se queda con
+ * el título por defecto.
+ */
+async function maybeAutoTitleConversation(convId: string, userText: string) {
+  // Solo titulamos si el texto no está vacío.
+  const text = userText.trim();
+  if (!text) return;
+  // Solo titulamos si la conversación sigue con el título por defecto.
+  const conv = useWeaver.getState().conversations.find((c) => c.id === convId);
+  if (!conv) return;
+  if (conv.title !== 'Nuevo chat') return;
+  // Solo titulamos si es efectivamente el primer mensaje del usuario.
+  const userMsgs = conv.messages.filter((m) => m.role === 'user');
+  if (userMsgs.length !== 1) return;
+  // Evitar invocaciones simultáneas para la misma conversación.
+  if (inFlightTitles.has(convId)) return;
+  inFlightTitles.add(convId);
+  try {
+    const { createProvider } = await import('@/providers');
+    const { streamChat } = await import('@/lib/chain');
+    const s = useWeaver.getState();
+    const llm = await createProvider(s.providerId);
+    const prompt: Message[] = [
+      {
+        role: 'system',
+        content:
+          'Generas un título MUY corto (máximo 5 palabras, sin comillas, sin puntuación final) ' +
+          'que resuma el tema del primer mensaje del usuario. ' +
+          'Responde con el título ÚNICAMENTE, sin prefijos como "Título:" ni explicaciones. ' +
+          'Usa el mismo idioma del mensaje del usuario. ' +
+          'Ejemplos: "Receta pasta carbonara", "Configurar servidor nginx", "Comparar vuelos Madrid".',
+      },
+      {
+        role: 'user',
+        content: text.slice(0, 800),
+      },
+    ];
+    const result = await streamChat(llm, s.modelId, prompt, {});
+    let title = result.text.trim();
+    // Limpiar comillas, "Título:", etc.
+    title = title
+      .replace(/^t[íi]tulo\s*:\s*/i, '')
+      .replace(/^["'«»]+|["'«»]+$/g, '')
+      .replace(/\.$/, '')
+      .replace(/\n.*$/s, '')
+      .slice(0, 60);
+    if (title && title.length >= 2) {
+      await useWeaver.getState().renameConversation(convId, title);
+    }
+  } catch (e) {
+    console.warn('maybeAutoTitleConversation failed:', e);
+  } finally {
+    inFlightTitles.delete(convId);
+  }
+}
 
 // ============================================================================
 // Helper: persistencia con debounce del último mensaje del asistente.

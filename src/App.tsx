@@ -11,6 +11,7 @@ import {
 import { MeView } from '@/views/MeView';
 import { useWeaver } from '@/store/weaver';
 import { initTheme } from '@/lib/themes';
+import { startScheduler } from '@/lib/scheduler';
 
 export default function App() {
   const { view, loadConversations, themeId, loadMeAll } = useWeaver();
@@ -30,6 +31,11 @@ export default function App() {
     loadConversations();
     loadMeAll();
   }, [loadConversations, loadMeAll]);
+
+  // Arrancar el motor de Schedules (tareas programadas).
+  useEffect(() => {
+    startScheduler();
+  }, []);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-app-bg text-text-primary">

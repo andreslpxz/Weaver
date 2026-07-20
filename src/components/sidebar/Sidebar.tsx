@@ -1,10 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Plus,
   Search,
   Puzzle,
   Cog,
-  Sparkles,
   MessageSquare,
   Trash2,
   ChevronLeft,
@@ -14,6 +13,8 @@ import {
   FolderPlus,
   MoreHorizontal,
   CalendarDays,
+  X,
+  Clock,
 } from 'lucide-react';
 import { useWeaver, type ViewId } from '@/store/weaver';
 import { cn } from '@/components/common/Button';
@@ -38,7 +39,7 @@ const SECTIONS: { title: string; items: SidebarItem[] }[] = [
     items: [
       { id: 'me', label: 'ME', icon: <CalendarDays size={14} /> },
       { id: 'complementos', label: 'Complementos', icon: <Puzzle size={14} /> },
-      { id: 'automatizaciones', label: 'Automatizaciones', icon: <Sparkles size={14} /> },
+      { id: 'automatizaciones', label: 'Schedules', icon: <Clock size={14} /> },
     ],
   },
 ];
@@ -59,16 +60,62 @@ export function Sidebar() {
     createProject,
     deleteProject,
     setConversationProject,
+    loadMessages,
   } = useWeaver();
 
   const [showProjectInput, setShowProjectInput] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [openProjects, setOpenProjects] = useState<Set<string>>(new Set());
   const [convMenuFor, setConvMenuFor] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
     loadProjects();
   }, [loadProjects]);
+
+  // Atajo: Ctrl/Cmd+K abre la búsqueda.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setSearchOpen(true);
+        setView('chat');
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [setView]);
+
+  // Resultados de búsqueda: filtra por título del chat y por contenido de mensajes.
+  const searchResults = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return [];
+    return conversations
+      .filter((c) => {
+        if (c.title.toLowerCase().includes(q)) return true;
+        // Buscar en mensajes (puede ser que estén lazy-load; si messages es [] no hay coincidencia).
+        return c.messages.some((m) => (m.content ?? '').toLowerCase().includes(q));
+      })
+      .slice(0, 30)
+      .map((c) => ({
+        conv: c,
+        matchInTitle: c.title.toLowerCase().includes(q),
+        snippet: (() => {
+          // Extraer snippet del mensaje que coincide.
+          for (const m of c.messages) {
+            const content = (m.content ?? '').toLowerCase();
+            const idx = content.indexOf(q);
+            if (idx >= 0) {
+              const start = Math.max(0, idx - 30);
+              const end = Math.min((m.content ?? '').length, idx + q.length + 30);
+              return '…' + (m.content ?? '').slice(start, end) + '…';
+            }
+          }
+          return '';
+        })(),
+      }));
+  }, [searchQuery, conversations]);
 
   // Agrupar conversaciones por proyecto
   const convsByProject = new Map<string | null, typeof conversations>();
@@ -87,11 +134,24 @@ export function Sidebar() {
         <button onClick={() => newConversation()} className="codex-icon-btn" title="Nuevo chat">
           <Plus size={16} />
         </button>
+        <button
+          onClick={() => {
+            setSearchOpen(true);
+            setView('chat');
+          }}
+          className="codex-icon-btn"
+          title="Buscar"
+        >
+          <Search size={16} />
+        </button>
         <button onClick={() => setView('me')} className="codex-icon-btn" title="ME">
           <CalendarDays size={16} />
         </button>
         <button onClick={() => setView('complementos')} className="codex-icon-btn" title="Complementos">
           <Puzzle size={16} />
+        </button>
+        <button onClick={() => setView('automatizaciones')} className="codex-icon-btn" title="Schedules">
+          <Clock size={16} />
         </button>
         <button onClick={() => setView('configuracion')} className="codex-icon-btn mt-auto" title="Configuración">
           <Cog size={16} />
@@ -139,8 +199,10 @@ export function Sidebar() {
                 key={item.id}
                 onClick={() => {
                   if (item.id === 'new-chat') newConversation();
-                  else if (item.id === 'search') setView('chat');
-                  else setView(item.id as ViewId);
+                  else if (item.id === 'search') {
+                    setSearchOpen(true);
+                    setView('chat');
+                  } else setView(item.id as ViewId);
                 }}
                 className={cn('sidebar-item w-full text-left', view === item.id && 'active')}
               >
@@ -151,6 +213,80 @@ export function Sidebar() {
             ))}
           </div>
         ))}
+
+        {/* Buscador de chats */}
+        {searchOpen && (
+          <div className="mt-2 mb-1 p-2 rounded-codex border border-border-accent bg-app-elevated">
+            <div className="flex items-center gap-1 mb-1">
+              <Search size={12} className="text-text-muted shrink-0" />
+              <input
+                autoFocus
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    setSearchOpen(false);
+                    setSearchQuery('');
+                  }
+                  if (e.key === 'Enter' && searchResults.length > 0) {
+                    const first = searchResults[0];
+                    if (first) {
+                      selectConversation(first.conv.id);
+                      setSearchOpen(false);
+                      setSearchQuery('');
+                    }
+                  }
+                }}
+                placeholder="Buscar en chats…"
+                className="codex-input flex-1 px-2 py-1 text-xs bg-transparent border-0 focus:outline-none"
+              />
+              <button
+                onClick={() => {
+                  setSearchOpen(false);
+                  setSearchQuery('');
+                }}
+                className="codex-icon-btn w-5 h-5 shrink-0"
+                title="Cerrar búsqueda"
+              >
+                <X size={10} />
+              </button>
+            </div>
+            {searchQuery.trim() && (
+              <div className="max-h-80 overflow-y-auto">
+                {searchResults.length === 0 ? (
+                  <div className="text-[11px] text-text-muted px-1 py-2 italic">
+                    Sin resultados. Nota: chats antiguos pueden tener mensajes sin cargar.
+                  </div>
+                ) : (
+                  searchResults.map(({ conv, matchInTitle, snippet }) => (
+                    <button
+                      key={conv.id}
+                      onClick={() => {
+                        selectConversation(conv.id);
+                        // Forzar carga de mensajes si están lazy-load.
+                        if (conv.messages.length === 0) loadMessages(conv.id);
+                        setSearchOpen(false);
+                        setSearchQuery('');
+                      }}
+                      className="w-full text-left px-2 py-1.5 rounded-codex hover:bg-app-input transition-colors"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <MessageSquare size={11} className="text-text-muted shrink-0" />
+                        <span className="text-xs font-medium truncate flex-1">{conv.title || 'Nuevo chat'}</span>
+                        {matchInTitle && (
+                          <span className="text-[9px] bg-accent/15 text-accent px-1 rounded-full">título</span>
+                        )}
+                      </div>
+                      {snippet && (
+                        <div className="text-[10px] text-text-muted mt-0.5 truncate">{snippet}</div>
+                      )}
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Proyectos */}
         <div className="sidebar-section-title flex items-center justify-between">

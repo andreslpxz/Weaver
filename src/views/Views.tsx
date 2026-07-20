@@ -19,6 +19,7 @@ import {
   Loader2,
   Power,
   Circle,
+  Clock,
 } from 'lucide-react';
 import { mcpClient, listPresets, type McpServer, type ToolApproval } from '@/mcp/client';
 import { type McpPreset } from '@/mcp/presets';
@@ -1177,58 +1178,420 @@ export function HabilidadesView() {
 }
 
 // ============================================================================
-// AutomatizacionesView — recopilación de episodios recientes
+// AutomatizacionesView — ahora Schedules: tareas programadas
 // ============================================================================
 
-export function AutomatizacionesView() {
-  const [episodes, setEpisodes] = useState<
-    { id: string; objective: string; outcome: string; startedAt: number }[]
-  >([]);
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem('weaver:episodes');
-      setEpisodes(raw ? JSON.parse(raw) : []);
-    } catch {
-      setEpisodes([]);
+export interface ScheduledTask {
+  id: string;
+  name: string;          // nombre corto, ej: "Organizar correos"
+  instruction: string;   // qué debe hacer el agente, ej: "organiza todos mis correos por carpeta"
+  time: string;          // HH:MM (24h), ej: "09:00"
+  recurrence: 'once' | 'daily' | 'weekdays' | 'weekly' | 'monthly';
+  weekday?: number;      // 0=Dom..6=Sáb (para weekly)
+  monthDay?: number;     // 1..31 (para monthly)
+  enabled: boolean;
+  lastRunAt?: number;
+  lastRunStatus?: 'success' | 'partial' | 'failed';
+  lastRunMessage?: string;
+  createdAt: number;
+}
+
+const SCHEDULES_KEY = 'weaver:schedules';
+
+function loadSchedules(): ScheduledTask[] {
+  try {
+    const raw = localStorage.getItem(SCHEDULES_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSchedules(tasks: ScheduledTask[]) {
+  try {
+    localStorage.setItem(SCHEDULES_KEY, JSON.stringify(tasks));
+  } catch { /* ignore */ }
+}
+
+const RECURRENCE_LABELS: Record<ScheduledTask['recurrence'], string> = {
+  once: 'Una vez',
+  daily: 'Diario',
+  weekdays: 'Lunes a Viernes',
+  weekly: 'Semanal',
+  monthly: 'Mensual',
+};
+
+const WEEKDAY_LABELS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+
+function formatSchedule(t: ScheduledTask): string {
+  const time = t.time;
+  switch (t.recurrence) {
+    case 'once':
+      return `Hoy a las ${time}`;
+    case 'daily':
+      return `Cada día a las ${time}`;
+    case 'weekdays':
+      return `Lun-Vie a las ${time}`;
+    case 'weekly':
+      return `Cada ${WEEKDAY_LABELS[t.weekday ?? 1]} a las ${time}`;
+    case 'monthly':
+      return `El día ${t.monthDay ?? 1} de cada mes a las ${time}`;
+    default:
+      return time;
+  }
+}
+
+function getNextRunLabel(t: ScheduledTask): string {
+  if (!t.enabled) return 'Pausado';
+  const now = new Date();
+  const [hh, mm] = t.time.split(':').map(Number);
+  const next = new Date(now);
+  next.setHours(hh, mm, 0, 0);
+
+  const day = now.getDay();
+  const isWeekday = day >= 1 && day <= 5;
+
+  switch (t.recurrence) {
+    case 'once': {
+      if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
+      break;
     }
+    case 'daily': {
+      if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
+      break;
+    }
+    case 'weekdays': {
+      // Avanzar días hasta llegar a L-V
+      while (next.getTime() <= now.getTime() || next.getDay() === 0 || next.getDay() === 6) {
+        next.setDate(next.getDate() + 1);
+      }
+      void isWeekday;
+      break;
+    }
+    case 'weekly': {
+      const wd = t.weekday ?? 1;
+      while (next.getTime() <= now.getTime() || next.getDay() !== wd) {
+        next.setDate(next.getDate() + 1);
+      }
+      break;
+    }
+    case 'monthly': {
+      const md = t.monthDay ?? 1;
+      next.setDate(md);
+      if (next.getTime() <= now.getTime()) {
+        next.setMonth(next.getMonth() + 1);
+        next.setDate(md);
+      }
+      break;
+    }
+  }
+  const diff = next.getTime() - now.getTime();
+  const hours = Math.floor(diff / 3_600_000);
+  const days = Math.floor(hours / 24);
+  if (days > 0) return `Próxima en ${days}d ${hours % 24}h`;
+  if (hours > 0) return `Próxima en ${hours}h`;
+  const mins = Math.floor(diff / 60_000);
+  return mins > 0 ? `Próxima en ${mins}min` : 'Ahora';
+}
+
+export function AutomatizacionesView() {
+  const [tasks, setTasks] = useState<ScheduledTask[]>([]);
+  const [editing, setEditing] = useState<ScheduledTask | null>(null);
+  const [showForm, setShowForm] = useState(false);
+
+  useEffect(() => {
+    setTasks(loadSchedules());
   }, []);
+
+  // Re-cargar cuando el scheduler marca una tarea como ejecutada.
+  useEffect(() => {
+    const handler = () => setTasks(loadSchedules());
+    window.addEventListener('weaver:schedules-updated', handler);
+    return () => window.removeEventListener('weaver:schedules-updated', handler);
+  }, []);
+
+  function persist(next: ScheduledTask[]) {
+    setTasks(next);
+    saveSchedules(next);
+    window.dispatchEvent(new CustomEvent('weaver:schedules-updated'));
+  }
+
+  function createTask(t: ScheduledTask) {
+    persist([t, ...tasks]);
+    setShowForm(false);
+    setEditing(null);
+  }
+
+  function updateTask(t: ScheduledTask) {
+    persist(tasks.map((x) => (x.id === t.id ? t : x)));
+    setEditing(null);
+    setShowForm(false);
+  }
+
+  function deleteTask(id: string) {
+    if (!confirm('¿Eliminar esta tarea programada?')) return;
+    persist(tasks.filter((t) => t.id !== id));
+  }
+
+  function toggleEnabled(id: string) {
+    persist(tasks.map((t) => (t.id === id ? { ...t, enabled: !t.enabled } : t)));
+  }
+
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-3xl mx-auto px-6 py-10">
-        <h1 className="text-3xl font-medium mb-2">Automatizaciones</h1>
+        <div className="flex items-center justify-between mb-2">
+          <h1 className="text-3xl font-medium">Schedules</h1>
+          <Button
+            variant="primary"
+            onClick={() => {
+              setEditing(null);
+              setShowForm(true);
+            }}
+          >
+            <Plus size={14} className="mr-1" /> Nueva tarea
+          </Button>
+        </div>
         <p className="text-text-secondary text-sm mb-8">
-          Historial de tareas ejecutadas por el agente. Cada episodio queda
-          registrado en la memoria episódica.
+          Crea tareas que el agente ejecutará automáticamente en el horario que elijas.
+          Por ejemplo: «organizar mis correos» a las 9:00, «limpiar la carpeta
+          Descargas» cada viernes, o «recordar pagar la luz» el día 5 de cada mes.
+          Las tareas pueden invocar MCPs, herramientas del sistema, o cualquier
+          cosa que sepas pedirle al agente en el chat.
         </p>
-        {episodes.length === 0 ? (
+
+        {showForm && (
+          <ScheduleForm
+            initial={editing}
+            onCancel={() => {
+              setShowForm(false);
+              setEditing(null);
+            }}
+            onSubmit={(t) => (editing ? updateTask(t) : createTask(t))}
+          />
+        )}
+
+        {tasks.length === 0 ? (
           <div className="text-sm text-text-muted p-8 border border-dashed border-border rounded-codex text-center">
-            Sin automatizaciones aún.
+            Aún no hay tareas programadas.
+            <br />
+            <span className="text-xs">
+              Crea una con el botón <strong>Nueva tarea</strong> de arriba.
+            </span>
           </div>
         ) : (
           <div className="space-y-2">
-            {episodes.map((e) => (
-              <div key={e.id} className="codex-card p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">{e.objective}</span>
-                  <Badge
-                    color={
-                      e.outcome === 'success'
-                        ? 'success'
-                        : e.outcome === 'partial'
-                          ? 'warning'
-                          : 'danger'
-                    }
-                  >
-                    {e.outcome}
-                  </Badge>
-                </div>
-                <div className="text-xs text-text-muted mt-1">
-                  {new Date(e.startedAt).toLocaleString()}
+            {tasks.map((t) => (
+              <div key={t.id} className="codex-card p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-medium truncate">{t.name}</span>
+                      <Badge color={t.enabled ? 'success' : 'default'}>
+                        {t.enabled ? 'Activa' : 'Pausada'}
+                      </Badge>
+                      {t.lastRunStatus && (
+                        <Badge
+                          color={
+                            t.lastRunStatus === 'success'
+                              ? 'success'
+                              : t.lastRunStatus === 'partial'
+                                ? 'warning'
+                                : 'danger'
+                          }
+                        >
+                          Última: {t.lastRunStatus}
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="text-xs text-text-muted mt-1">
+                      <Clock size={10} className="inline mr-1 -mt-0.5" />
+                      {formatSchedule(t)} · <span title="próxima ejecución">{getNextRunLabel(t)}</span>
+                    </div>
+                    <div className="text-xs text-text-secondary mt-1.5 line-clamp-2">
+                      <span className="text-text-muted">Instrucción:</span>{' '}
+                      <code className="text-[11px] bg-app-elevated px-1 rounded">{t.instruction}</code>
+                    </div>
+                    {t.lastRunMessage && (
+                      <div className="text-[11px] text-text-muted mt-1 italic truncate">
+                        {t.lastRunMessage}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => toggleEnabled(t.id)}
+                      className="codex-icon-btn w-7 h-7"
+                      title={t.enabled ? 'Pausar' : 'Activar'}
+                    >
+                      <Power size={12} className={t.enabled ? 'text-success' : 'text-text-muted'} />
+                    </button>
+                    <button
+                      onClick={() => {
+                        setEditing(t);
+                        setShowForm(true);
+                      }}
+                      className="codex-icon-btn w-7 h-7"
+                      title="Editar"
+                    >
+                      <SettingsIcon size={12} />
+                    </button>
+                    <button
+                      onClick={() => deleteTask(t.id)}
+                      className="codex-icon-btn w-7 h-7"
+                      title="Eliminar"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}
           </div>
         )}
+
+        <div className="mt-8 p-3 rounded-codex bg-app-elevated text-xs text-text-secondary leading-relaxed">
+          <Shield size={12} className="inline mr-1 -mt-0.5" />
+          <strong>Nota:</strong> el programador (cron) se ejecuta cuando Weaver está abierto.
+          Al llegar la hora, se lanza la instrucción en un chat nuevo y el agente la
+          procesa con las mismas herramientas que tendría a mano (MCPs, shell, archivos,
+          web, ME calendario, etc.). Para tareas que necesiten correr 24/7 sin la app
+          abierta, configura un cron del sistema que llame a <code>weaver --run "instrucción"</code>.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ScheduleForm({
+  initial,
+  onCancel,
+  onSubmit,
+}: {
+  initial: ScheduledTask | null;
+  onCancel: () => void;
+  onSubmit: (t: ScheduledTask) => void;
+}) {
+  const [name, setName] = useState(initial?.name ?? '');
+  const [instruction, setInstruction] = useState(initial?.instruction ?? '');
+  const [time, setTime] = useState(initial?.time ?? '09:00');
+  const [recurrence, setRecurrence] = useState<ScheduledTask['recurrence']>(initial?.recurrence ?? 'daily');
+  const [weekday, setWeekday] = useState(initial?.weekday ?? 1);
+  const [monthDay, setMonthDay] = useState(initial?.monthDay ?? 1);
+
+  function submit() {
+    if (!name.trim() || !instruction.trim()) return;
+    const t: ScheduledTask = {
+      id: initial?.id ?? crypto.randomUUID(),
+      name: name.trim(),
+      instruction: instruction.trim(),
+      time,
+      recurrence,
+      weekday: recurrence === 'weekly' ? weekday : undefined,
+      monthDay: recurrence === 'monthly' ? monthDay : undefined,
+      enabled: initial?.enabled ?? true,
+      lastRunAt: initial?.lastRunAt,
+      lastRunStatus: initial?.lastRunStatus,
+      lastRunMessage: initial?.lastRunMessage,
+      createdAt: initial?.createdAt ?? Date.now(),
+    };
+    onSubmit(t);
+  }
+
+  return (
+    <div className="codex-card p-4 mb-4 space-y-3">
+      <div className="text-sm font-medium">{initial ? 'Editar tarea' : 'Nueva tarea programada'}</div>
+      <div>
+        <label className="text-xs text-text-muted block mb-1">Nombre</label>
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Ej: Organizar mis correos"
+          className="codex-input w-full px-2 py-1.5 text-sm"
+        />
+      </div>
+      <div>
+        <label className="text-xs text-text-muted block mb-1">
+          Instrucción para el agente
+        </label>
+        <textarea
+          value={instruction}
+          onChange={(e) => setInstruction(e.target.value)}
+          placeholder="Ej: organiza todos mis correos por carpeta según el remitente"
+          className="codex-input w-full px-2 py-1.5 text-sm h-20 resize-y"
+        />
+        <p className="text-[11px] text-text-muted mt-1">
+          Puedes referenciar MCPs (@mcp:nombre) o herramientas del sistema. La
+          instrucción se ejecuta como si la escribieras en el chat.
+        </p>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs text-text-muted block mb-1">Hora</label>
+          <input
+            type="time"
+            value={time}
+            onChange={(e) => setTime(e.target.value)}
+            className="codex-input w-full px-2 py-1.5 text-sm"
+          />
+        </div>
+        <div>
+          <label className="text-xs text-text-muted block mb-1">Repetición</label>
+          <select
+            value={recurrence}
+            onChange={(e) => setRecurrence(e.target.value as ScheduledTask['recurrence'])}
+            className="codex-input w-full px-2 py-1.5 text-sm"
+          >
+            {Object.entries(RECURRENCE_LABELS).map(([k, v]) => (
+              <option key={k} value={k}>
+                {v}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      {recurrence === 'weekly' && (
+        <div>
+          <label className="text-xs text-text-muted block mb-1">Día de la semana</label>
+          <div className="flex gap-1">
+            {WEEKDAY_LABELS.map((d, i) => (
+              <button
+                key={i}
+                onClick={() => setWeekday(i)}
+                className={cn(
+                  'codex-btn !px-2 !py-1 text-xs',
+                  weekday === i && 'codex-btn-primary',
+                )}
+              >
+                {d}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {recurrence === 'monthly' && (
+        <div>
+          <label className="text-xs text-text-muted block mb-1">Día del mes</label>
+          <input
+            type="number"
+            min={1}
+            max={31}
+            value={monthDay}
+            onChange={(e) => setMonthDay(Math.max(1, Math.min(31, parseInt(e.target.value) || 1)))}
+            className="codex-input w-24 px-2 py-1.5 text-sm"
+          />
+        </div>
+      )}
+      <div className="flex justify-end gap-2 pt-1">
+        <Button onClick={onCancel}>Cancelar</Button>
+        <Button
+          variant="primary"
+          onClick={submit}
+          disabled={!name.trim() || !instruction.trim()}
+        >
+          {initial ? 'Guardar' : 'Crear tarea'}
+        </Button>
       </div>
     </div>
   );
