@@ -77,6 +77,18 @@ export async function fetchOpenRouterModels(opts?: {
     const json = (await resp.json()) as OpenRouterResponse;
     const models = json.data.map(convertOpenRouterModel).filter(Boolean) as ModelInfo[];
 
+    // Ordenar: modelos FREE primero, luego por label alfabético.
+    // Esto hace que los modelos gratuitos sean fáciles de encontrar en el
+    // model picker sin tener que hacer scroll por 300+ modelos de pago.
+    models.sort((a, b) => {
+      // Free primero.
+      const aFree = a.isFree ? 0 : 1;
+      const bFree = b.isFree ? 0 : 1;
+      if (aFree !== bFree) return aFree - bFree;
+      // Dentro del mismo grupo (free/paid), ordenar alfabéticamente por label.
+      return a.label.localeCompare(b.label);
+    });
+
     // Guardar en cache.
     writeCache(models);
     return models;
@@ -111,23 +123,39 @@ function convertOpenRouterModel(m: OpenRouterModel): ModelInfo | null {
 
   // Pricing (OpenRouter devuelve strings en USD por token).
   let pricing: ModelPricing | undefined;
+  let isFree = false;
   if (m.pricing) {
     pricing = {};
     if (m.pricing.prompt) pricing.prompt = parseFloat(m.pricing.prompt);
     if (m.pricing.completion) pricing.completion = parseFloat(m.pricing.completion);
     if (m.pricing.input_cache_read) pricing.inputCacheRead = parseFloat(m.pricing.input_cache_read);
     if (m.pricing.request) pricing.request = parseFloat(m.pricing.request);
-    // Si todo es 0 o NaN, no incluir pricing.
+
+    // Detectar free: todos los precios son 0 Y el id termina en ":free"
+    // (OpenRouter marca los modelos gratuitos con el sufijo :free).
+    const allZero =
+      (pricing.prompt ?? 1) === 0 &&
+      (pricing.completion ?? 1) === 0 &&
+      (pricing.request ?? 0) === 0;
+    isFree = allZero || m.id.toLowerCase().endsWith(':free');
+
+    // Si todo es 0 o NaN, no incluir pricing (pero keep isFree).
     if (Object.values(pricing).every((v) => !v || isNaN(v))) {
       pricing = undefined;
     }
+  } else if (m.id.toLowerCase().endsWith(':free')) {
+    isFree = true;
   }
 
   // Detectar proveedor real desde el ID (ej. "openai/gpt-4o" → "openai").
   const sourceProvider = m.id.includes('/') ? m.id.split('/')[0] : undefined;
 
   // Label legible: usar m.name si existe, si no derivar del ID.
-  const label = m.name || m.id.split('/').pop() || m.id;
+  // Si el modelo es free y el label no indica "(free)", añadirlo.
+  let label = m.name || m.id.split('/').pop() || m.id;
+  if (isFree && !/free|gratis/i.test(label)) {
+    label = `${label} (free)`;
+  }
 
   return {
     id: m.id,
@@ -140,6 +168,7 @@ function convertOpenRouterModel(m: OpenRouterModel): ModelInfo | null {
     modality: m.architecture?.modality,
     pricing,
     sourceProvider,
+    isFree,
   };
 }
 

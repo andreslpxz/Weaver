@@ -128,4 +128,47 @@ Stage Summary:
 - Fix: producedFinalText sólo true si hay texto real; force-final block captura resultado, limpia text-tool-calls, y muestra fallback si sigue vacío.
 - Ahora el usuario SIEMPRE ve un mensaje del asistente (respuesta del LLM, resumen forzado, o fallback explicativo).
 
+---
+Task ID: feat-model-picker-free-models-search
+Agent: main
+Task: El usuario reporta que en el selector de modelos NO encuentra modelos free de OpenRouter — los de pago sí aparecen, los free no. Además, la búsqueda no filtra por nombre de modelo, sólo por nombre de proveedor, así que escribir "free" o "llama" no encuentra nada.
+
+Work Log:
+- Análisis de la causa raíz:
+  1. La función `fetchOpenRouterModels` SÍ trae los modelos free (OpenRouter los marca con sufijo `:free` en el id y pricing = "0"). El problema NO era que faltaran, sino que:
+     a) Estaban MEZCLADOS entre los 300+ modelos de pago, difíciles de encontrar.
+     b) La búsqueda del popup (`filtered = PROVIDERS.filter(label.includes(q) || desc.includes(q))`) NO filtraba modelos, sólo proveedores. Escribir "free" no matcheaba ningún proveedor → lista vacía.
+     c) No había forma visual de distinguir free de paid en el listado.
+- Cambios en `src/providers/types.ts`:
+  - Añadido campo `isFree?: boolean` a `ModelInfo` para marcar modelos gratuitos.
+- Cambios en `src/providers/openrouter-models.ts` (`convertOpenRouterModel`):
+  - Detecta free: pricing todo 0 O id termina en `:free`.
+  - Añade "(free)" al label si es free y el label no lo indica ya.
+  - Mantiene `isFree: true` incluso si pricing se descarta por ser todo 0.
+  - En `fetchOpenRouterModels`: ordena el array final con FREE primero, luego alfabético por label. Así los modelos gratuitos aparecen al principio del listado de OpenRouter.
+- Cambios en `src/components/model-picker/ModelPickerPopup.tsx`:
+  - Añadido estado `freeOnly: boolean` y `providerLimits: Record<string, number>`.
+  - Añadido `DEFAULT_MODEL_LIMIT = 12` — sin búsqueda, sólo muestra 12 modelos por proveedor (OpenRouter tiene 300+, era inservible). Con búsqueda o filtro free, muestra todos los que matcheen.
+  - Añadido chip "Solo free" bajo la barra de búsqueda (toggle). Filtra modelos con `isFree=true` en todos los proveedores.
+  - Placeholder actualizado: 'Buscar modelo, proveedor o "free"…'.
+  - Nueva función `getDisplayedModels(pid)`: aplica filtro freeOnly, filtro query (match id/label), y límite de paginación. Devuelve {models, total, hidden}.
+  - El `useMemo filtered` ahora también incluye proveedores cuyos MODELOS matchean la query (no sólo label/desc del proveedor).
+  - Mensaje "No se encontraron modelos" cuando no hay resultados.
+  - Badge "FREE" (verde, icono Gift) en modelos gratuitos, reemplaza el badge "reasoning" si ambos aplican.
+  - Contador de modelos junto al nombre del proveedor (ej. "OpenRouter [50]").
+  - Botón "Ver N modelos más de X" para ampliar el límite de 12 en 24.
+  - Si el filtro deja 0 modelos en un proveedor, se omite el card completo.
+  - Import añadido: `Gift` de lucide-react, `useMemo` de react.
+- Verificado: `tsc --noEmit` EXIT 0 ✓ · `vite build` exitoso en 5.37s ✓.
+
+Stage Summary:
+- Archivos modificados:
+  - `src/providers/types.ts`: añadido `isFree?: boolean` a ModelInfo.
+  - `src/providers/openrouter-models.ts`: detecta free, marca label "(free)", ordena FREE primero.
+  - `src/components/model-picker/ModelPickerPopup.tsx`: chip "Solo free", búsqueda por modelo, badge FREE, límite 12 + "Ver más".
+- Causa raíz: los modelos free SÍ estaban en el catálogo, pero mezclados entre 300+ y sin forma de distinguirlos ni buscarlos.
+- Fix: flag isFree + chip Solo free + búsqueda por modelo + orden FREE primero + badge visual.
+- Ahora el usuario puede hacer click en "Solo free" y ver sólo los modelos gratuitos de OpenRouter (Llama 3.3 70B free, Gemini 2.0 Flash free, Qwen 2.5 72B free, DeepSeek R1 free, etc.) directamente.
+
+
 

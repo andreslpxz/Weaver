@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Search, Check, AlertCircle, X, ExternalLink, Trash2, KeyRound, RefreshCw, Eye, DollarSign, Wrench, Zap } from 'lucide-react';
+import { useEffect, useState, useMemo } from 'react';
+import { Search, Check, AlertCircle, X, ExternalLink, Trash2, KeyRound, RefreshCw, Eye, DollarSign, Wrench, Zap, Gift } from 'lucide-react';
 import { PROVIDERS, getProvider } from '@/providers/registry';
 import { useWeaver } from '@/store/weaver';
 import { apiKeyStore, maskKey } from '@/providers/store';
@@ -29,6 +29,15 @@ export function ModelPickerPopup({ onClose }: { onClose: () => void }) {
   const [remoteModels, setRemoteModels] = useState<Record<string, ModelInfo[]>>({});
   const [refreshing, setRefreshing] = useState<ProviderId | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  // Filtro "Solo free": muestra sólo modelos gratuitos a través de todos los
+  // proveedores. Útil porque OpenRouter tiene 300+ modelos y los free son
+  // difíciles de encontrar sin este filtro.
+  const [freeOnly, setFreeOnly] = useState(false);
+  // Límite de modelos por proveedor cuando no hay búsqueda activa.
+  // OpenRouter solo tiene ~50 free y 250+ paid — si los mostramos todos,
+  // el popup se hace infinito. Con scroll, mostramos más.
+  const [providerLimits, setProviderLimits] = useState<Record<string, number>>({});
+  const DEFAULT_MODEL_LIMIT = 12;
 
   useEffect(() => {
     refreshProvidersWithKey();
@@ -82,11 +91,74 @@ export function ModelPickerPopup({ onClose }: { onClose: () => void }) {
     return remoteModels[pid] ?? getProvider(pid)?.models ?? [];
   }
 
-  const filtered = PROVIDERS.filter(
-    (p) =>
-      p.label.toLowerCase().includes(query.toLowerCase()) ||
-      p.desc.toLowerCase().includes(query.toLowerCase()),
-  );
+  /**
+   * Filtra los modelos de un proveedor según:
+   *   - query de búsqueda (matchea en id o label)
+   *   - filtro "Solo free" (sólo modelos con isFree=true)
+   *   - límite de visualización (DEFAULT_MODEL_LIMIT, ampliable con "Ver más")
+   *
+   * ANTES: la búsqueda sólo filtraba por nombre/desc del proveedor. Si el
+   * usuario buscaba "free" o "llama", no matcheaba nada porque ningún
+   * proveedor se llama así. Ahora la búsqueda filtra dentro de cada
+   * proveedor los modelos cuyos id/label coinciden.
+   */
+  const filtered = useMemo(() => {
+    const q = query.toLowerCase().trim();
+    // Primero filtrar proveedores por nombre/desc (comportamiento original).
+    let providers = PROVIDERS;
+    if (q) {
+      // Si la query matchea el proveedor, mostrarlo con TODOS sus modelos.
+      // Si no matchea el proveedor pero sí algún modelo, también mostrarlo
+      // (sólo con los modelos que matchean).
+      providers = PROVIDERS.filter((p) => {
+        const matchesProvider =
+          p.label.toLowerCase().includes(q) || p.desc.toLowerCase().includes(q);
+        if (matchesProvider) return true;
+        // Verificar si algún modelo del proveedor matchea.
+        const models = getModelsForProvider(p.id);
+        return models.some(
+          (m) =>
+            m.id.toLowerCase().includes(q) ||
+            m.label.toLowerCase().includes(q) ||
+            (m.isFree && ('free'.includes(q) || 'gratis'.includes(q))),
+        );
+      });
+    }
+    return providers;
+  }, [query, remoteModels]);
+
+  /** Devuelve los modelos filtrados + limitados para un proveedor dado. */
+  function getDisplayedModels(pid: ProviderId): { models: ModelInfo[]; total: number; hidden: number } {
+    let models = getModelsForProvider(pid);
+    const q = query.toLowerCase().trim();
+
+    // Filtro "Solo free": sólo modelos gratuitos.
+    if (freeOnly) {
+      models = models.filter((m) => m.isFree);
+    }
+
+    // Si la query no matchea el proveedor, filtrar modelos que matcheen la query.
+    if (q) {
+      const provider = getProvider(pid);
+      const matchesProvider =
+        provider &&
+        (provider.label.toLowerCase().includes(q) ||
+          provider.desc.toLowerCase().includes(q));
+      if (!matchesProvider) {
+        models = models.filter(
+          (m) =>
+            m.id.toLowerCase().includes(q) ||
+            m.label.toLowerCase().includes(q) ||
+            (m.isFree && ('free'.includes(q) || 'gratis'.includes(q))),
+        );
+      }
+    }
+
+    const total = models.length;
+    const limit = providerLimits[pid] ?? (q || freeOnly ? total : DEFAULT_MODEL_LIMIT);
+    const visible = models.slice(0, limit);
+    return { models: visible, total, hidden: total - visible.length };
+  }
 
   const activeProvider = getProvider(providerId)!;
 
@@ -156,17 +228,39 @@ export function ModelPickerPopup({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Search */}
-        <div className="p-3 border-b border-border">
+        <div className="p-3 border-b border-border space-y-2">
           <div className="relative">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder={tab === 'models' ? 'Buscar modelo o proveedor…' : 'Buscar proveedor…'}
+              placeholder={tab === 'models' ? 'Buscar modelo, proveedor o "free"…' : 'Buscar proveedor…'}
               className="codex-input w-full pl-9 pr-3 py-2 text-sm"
               autoFocus
             />
           </div>
+          {tab === 'models' && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={() => setFreeOnly((v) => !v)}
+                className={cn(
+                  'inline-flex items-center gap-1 px-2 py-1 rounded-codex text-[11px] transition-colors border',
+                  freeOnly
+                    ? 'bg-success/15 text-success border-success/40'
+                    : 'bg-app-input text-text-secondary border-border hover:border-border-accent',
+                )}
+                title="Mostrar sólo modelos gratuitos (OpenRouter :free y modelos locales)"
+              >
+                <Gift size={11} />
+                Solo free
+              </button>
+              {freeOnly && (
+                <span className="text-[10px] text-text-muted">
+                  Mostrando sólo modelos gratuitos
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Content */}
@@ -191,16 +285,27 @@ export function ModelPickerPopup({ onClose }: { onClose: () => void }) {
                 </button>
               </div>
 
+              {filtered.length === 0 && (
+                <div className="text-center py-8 text-text-muted text-sm">
+                  No se encontraron modelos para "{query}"
+                  {freeOnly && ' con filtro "Solo free" activo'}
+                </div>
+              )}
+
               {filtered.map((p) => {
                 const isActive = p.id === providerId;
                 const hasApiKey = p.noApiKey || hasKey[p.id];
-                const models = getModelsForProvider(p.id);
+                const { models: visibleModels, total, hidden } = getDisplayedModels(p.id);
                 const isRemote = !!remoteModels[p.id];
+                if (total === 0) return null; // no mostrar proveedor sin modelos tras filtro
                 return (
                   <div key={p.id}>
                     <div className="flex items-center gap-2 mb-1.5">
                       <span className="text-sm font-medium text-text-primary">{p.label}</span>
                       <span className="text-xs text-text-muted">{p.desc}</span>
+                      <span className="text-[10px] text-text-muted px-1.5 py-0.5 rounded-codex bg-app-input">
+                        {total}
+                      </span>
                       {p.noApiKey && <Badge color="accent">local</Badge>}
                       {hasApiKey && !p.noApiKey && (
                         <Badge color="success">
@@ -224,7 +329,7 @@ export function ModelPickerPopup({ onClose }: { onClose: () => void }) {
                       )}
                     </div>
                     <div className="grid grid-cols-2 gap-1">
-                      {models.map((m) => (
+                      {visibleModels.map((m) => (
                         <button
                           key={m.id}
                           onClick={() => {
@@ -248,7 +353,13 @@ export function ModelPickerPopup({ onClose }: { onClose: () => void }) {
                         >
                           <div className="flex items-center justify-between gap-1">
                             <span className="font-medium truncate">{m.label}</span>
-                            {m.isReasoning && <Badge color="default">reasoning</Badge>}
+                            {m.isFree ? (
+                              <Badge color="success">
+                                <Gift size={9} /> FREE
+                              </Badge>
+                            ) : m.isReasoning ? (
+                              <Badge color="default">reasoning</Badge>
+                            ) : null}
                           </div>
                           {/* Badges de metadata */}
                           <div className="flex flex-wrap items-center gap-1 mt-0.5">
@@ -265,7 +376,7 @@ export function ModelPickerPopup({ onClose }: { onClose: () => void }) {
                                 <Eye size={8} /> vision
                               </span>
                             )}
-                            {m.pricing?.prompt !== undefined && (
+                            {!m.isFree && m.pricing?.prompt !== undefined && (
                               <span className="text-[9px] text-text-muted flex items-center gap-0.5" title="Precio por millón de tokens">
                                 <DollarSign size={8} /> {formatPricing(m.pricing.prompt)}
                               </span>
@@ -274,6 +385,19 @@ export function ModelPickerPopup({ onClose }: { onClose: () => void }) {
                         </button>
                       ))}
                     </div>
+                    {hidden > 0 && (
+                      <button
+                        onClick={() =>
+                          setProviderLimits((prev) => ({
+                            ...prev,
+                            [p.id]: (prev[p.id] ?? DEFAULT_MODEL_LIMIT) + 24,
+                          }))
+                        }
+                        className="mt-1.5 w-full text-center text-[11px] text-accent hover:underline py-1"
+                      >
+                        Ver {hidden} modelo{hidden === 1 ? '' : 's'} más de {p.label}
+                      </button>
+                    )}
                   </div>
                 );
               })}

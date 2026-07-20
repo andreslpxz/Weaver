@@ -47,6 +47,8 @@ export interface ModelInfo {
   modality?: string; // ej. "text->text", "text+image->text"
   /** Proveedor real si viene de un agregador como OpenRouter. */
   sourceProvider?: string;
+  /** True si el modelo es gratuito (pricing = 0 o id termina en ":free" en OpenRouter). */
+  isFree?: boolean;
 }
 
 /** Pricing de un modelo (en USD por token). */
