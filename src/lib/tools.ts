@@ -320,6 +320,10 @@ export async function dispatchAdvancedTool(
       case 'cognitive_query':
         return await cognitiveQuery(args);
       default:
+        // Tools MCP con prefijo mcp__<serverId>__<toolName>.
+        if (name.startsWith('mcp__')) {
+          return await dispatchMcpTool(name, args);
+        }
         return { ok: false, output: '', error: `Tool desconocida: ${name}` };
     }
   } catch (e) {
@@ -327,6 +331,51 @@ export async function dispatchAdvancedTool(
       ok: false,
       output: '',
       error: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
+
+/**
+ * Dispatcher para tools de servidores MCP.
+ * El nombre viene con el prefijo mcp__<serverId>__<toolName> que se armó en
+ * Composer.runChatWithTools cuando se cargaron las tools del servidor MCP.
+ */
+async function dispatchMcpTool(
+  fullToolName: string,
+  args: Record<string, unknown>,
+): Promise<ToolExecResult> {
+  // Formato: mcp__<serverId>__<toolName>
+  // serverId puede contener guiones (preset-figma-1234567890), pero NO '__'.
+  const parts = fullToolName.split('__');
+  if (parts.length < 3 || parts[0] !== 'mcp') {
+    return { ok: false, output: '', error: `Nombre de tool MCP inválido: ${fullToolName}` };
+  }
+  const serverId = parts.slice(1, -1).join('__');
+  const toolName = parts[parts.length - 1];
+  try {
+    const { mcpClient } = await import('@/mcp/client');
+    const result = (await mcpClient.callTool(serverId, toolName, args)) as {
+      content: Array<{ type?: string; text?: string } | string>;
+      is_error: boolean;
+    };
+    // McpCallResult tiene { content: McpContent[], is_error }
+    const output = Array.isArray(result.content)
+      ? result.content
+          .map((c: { type?: string; text?: string } | string) =>
+            typeof c === 'string' ? c : (c?.text ?? JSON.stringify(c)),
+          )
+          .join('\n')
+      : JSON.stringify(result);
+    return {
+      ok: !result.is_error,
+      output: output.slice(0, 8000),
+      error: result.is_error ? output.slice(0, 500) : undefined,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      output: '',
+      error: `MCP ${serverId}/${toolName}: ${e instanceof Error ? e.message : String(e)}`,
     };
   }
 }

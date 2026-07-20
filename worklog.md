@@ -203,3 +203,53 @@ Stage Summary:
 - Causa raíz: ambigüedad en el nombre "ME" + descripciones mínimas → el agente interpretaba "ME" como "mi (del agente)" en vez de "MI (del usuario)".
 - Fix: doble refuerzo — system prompt + descripciones de cada tool. El agente ahora recibe la aclaración tanto al cargarse el contexto (system prompt) como al inspeccionar cada tool (description).
 - Ahora al preguntar "¿qué puedes hacer?", el agente debería responder directamente en el chat en vez de crear una nota en MI.
+
+---
+Task ID: feat-mcp-mention-integration
+Agent: main
+Task: Implementar @mcp:<nombre> en el menú de menciones del Composer para que el usuario pueda activar servidores MCP instalados (ej: Figma, GitHub, Slack). Antes de esto, los servidores MCP estaban instalados pero no había forma de invocarlos desde el chat — el agente no los conocía.
+
+Work Log:
+- Análisis del estado MCP:
+  - mcpClient en src/mcp/client.ts ya tenía listServers/listTools/callTool pero requieren Tauri (en navegador devuelven [] o throw).
+  - Composer.tsx no mencionaba MCPs en su menú @.
+  - dispatchAdvancedTool en lib/tools.ts no tenía dispatcher para tools MCP.
+- Cambios en src/components/composer/Composer.tsx:
+  - Imports: mcpClient y McpServer desde @/mcp/client; getPreset desde @/mcp/presets; Puzzle desde lucide-react.
+  - Estado nuevo: mcpServers: McpServer[] cargado en useEffect (recarga al recibir evento 'weaver:mcp-changed').
+  - Menú @: añadido bloque "Servidores MCP instalados" que lista los servers habilitados, con icono Puzzle y desc que incluye el nombre del preset o el comando. Insert: `@mcp:${s.name}`.
+  - MentionItem: añadido tipo 'mcp' e icon 'puzzle'.
+  - MentionIcon: añadido case 'puzzle' → <Puzzle/>.
+  - handleSend: regex `/@mcp:([\w\- ]+)/g` extrae los nombres mencionados → mcpMentionedNames: string[].
+  - runChatWithTools: nuevo parámetro mcpMentionedNames=[].
+    - Antes del system prompt: bloque que carga las tools MCP (sólo si hay menciones):
+      * Si !runtime.isTauri → hint "MCP no disponible en navegador" en system prompt.
+      * Si no encuentra el server mencionado → hint "MCP no encontrado, disponibles: X".
+      * Si hay server pero 0 tools aprobadas → hint "aprueba tools en Ajustes".
+      * Si hay server pero 0 tools expuestas → hint "servidor no corriendo / API key inválida".
+      * Si todo OK → lista las tools MCP con prefijo mcp__<serverId>__<toolName> en system prompt.
+    - System prompt ampliado con bloque "MCP (Model Context Protocol)" explicando:
+      * Qué son los servidores MCP (externos, instalados por el usuario).
+      * Cómo se activan (@mcp:<nombre> en el mensaje).
+      * Prefijo mcp__<serverId>__<toolName> de las tools.
+      * Si no hay @mcp:, no usarlas.
+    - tools = [...buildAdvancedToolsList(), ...mcpExtraTools] — concatena las tools nativas con las MCP.
+  - formatToolLabel: default case ahora detecta mcp__ y muestra "MCP · <toolShortName>".
+- Cambios en src/lib/tools.ts:
+  - dispatchAdvancedTool default case: si name.startsWith('mcp__') → dispatchMcpTool(name, args).
+  - Nueva función dispatchMcpTool(fullToolName, args):
+    * Parsea mcp__<serverId>__<toolName> (serverId puede contener '__' si el id lo tuviera, se une todo menos la última parte).
+    * Llama mcpClient.callTool(serverId, toolName, args).
+    * Formatea el resultado: une los .text de cada content item, trunca a 8000 chars.
+    * Si is_error → ok=false + error=primeros 500 chars.
+    * Catch: devuelve error "MCP serverId/toolName: msg".
+- Verificado: tsc --noEmit EXIT 0 ✓ · vite build exitoso en 5.07s ✓.
+
+Stage Summary:
+- Archivos modificados:
+  - src/components/composer/Composer.tsx: imports MCP, estado mcpServers, bloque @mcp en menú, parseo @mcp en handleSend, carga dinámica de tools MCP en runChatWithTools, system prompt ampliado con bloque MCP + hints contextuales, formatToolLabel para tools MCP.
+  - src/lib/tools.ts: dispatcher default para tools mcp__, nueva función dispatchMcpTool.
+- Causa raíz: los servidores MCP estaban instalados pero no había puente entre el chat y el cliente MCP — el LLM no los conocía y no había forma de invocarlos desde el Composer.
+- Fix: feature completa de @mcp:<nombre> — el usuario escribe @mcp:Figma en su mensaje y las tools de Figma se cargan automáticamente al array de tools del LLM.
+- IMPORTANTE: MCP sigue requiriendo Tauri para funcionar. En modo navegador (npm run dev puro), si el usuario menciona @mcp:, el agente le informará que debe ejecutar la app de escritorio.
+- Próximo paso sugerido: emitir evento 'weaver:mcp-changed' desde la vista Ajustes > MCP cuando el usuario instale/desinstale/apruebe tools, para que el Composer recargue la lista sin recargar la página.

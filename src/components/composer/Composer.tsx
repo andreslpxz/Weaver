@@ -39,6 +39,8 @@ import type { Message, ImageContent } from '@/providers/types';
 import type { Attachment } from '@/lib/attachments';
 import { skillsRegistry } from '@/skills/registry';
 import type { Skill } from '@/skills/registry';
+import { mcpClient, type McpServer } from '@/mcp/client';
+import { getPreset } from '@/mcp/presets';
 
 const newMsgId = () =>
   typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `m-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -54,6 +56,7 @@ export function Composer() {
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionItems, setMentionItems] = useState<MentionItem[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
+  const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
   const [appPickerOpen, setAppPickerOpen] = useState(false);
   const [attachedApp, setAttachedApp] = useState<PickedApp | null>(null);
 
@@ -92,6 +95,18 @@ export function Composer() {
   // Cargar skills para el menú @
   useEffect(() => {
     skillsRegistry.loadAll().then(setSkills).catch(() => setSkills([]));
+  }, []);
+
+  // Cargar servidores MCP instalados para el menú @
+  useEffect(() => {
+    const load = () => {
+      try { setMcpServers(mcpClient.listServers()); } catch { setMcpServers([]); }
+    };
+    load();
+    // Recargar cuando se cierre el popup del menú + (por si el usuario
+    // acaba de instalar/desinstalar un servidor MCP en la vista de ajustes).
+    window.addEventListener('weaver:mcp-changed', load as EventListener);
+    return () => window.removeEventListener('weaver:mcp-changed', load as EventListener);
   }, []);
 
   // Autosize textarea
@@ -180,6 +195,20 @@ export function Composer() {
           });
         }
       }
+      // Servidores MCP instalados
+      for (const s of mcpServers) {
+        if (!s.enabled) continue;
+        if (!q || s.name.toLowerCase().includes(q)) {
+          const preset = s.presetId ? getPreset(s.presetId) : undefined;
+          items.push({
+            type: 'mcp',
+            label: s.name,
+            desc: `MCP · ${preset ? preset.description : (s.command ?? s.url ?? 'servidor')}${s.status === 'error' ? ' · ERROR' : s.status === 'running' ? ' · activo' : ''}`,
+            icon: 'puzzle',
+            insert: `@mcp:${s.name}`,
+          });
+        }
+      }
       // Adjuntos recientes
       for (const a of draftAttachments) {
         if (!q || a.name.toLowerCase().includes(q)) {
@@ -206,7 +235,7 @@ export function Composer() {
     } else {
       setMentionOpen(false);
     }
-  }, [value, skills, draftAttachments, projects]);
+  }, [value, skills, draftAttachments, projects, mcpServers]);
 
   const addFiles = useCallback(
     async (files: File[]) => {
@@ -327,6 +356,15 @@ export function Composer() {
         objectiveText;
     }
 
+    // Detectar menciones @mcp:<name> en el texto para cargar tools MCP específicas.
+    const mcpMentionRegex = /@mcp:([\w\- ]+)/g;
+    const mcpMentionedNames: string[] = [];
+    let mcpMatch: RegExpExecArray | null;
+    while ((mcpMatch = mcpMentionRegex.exec(objectiveText)) !== null) {
+      const name = mcpMatch[1].trim();
+      if (name && !mcpMentionedNames.includes(name)) mcpMentionedNames.push(name);
+    }
+
     setValue('');
     clearDraftAttachments();
     setIsRunning(true);
@@ -365,7 +403,7 @@ export function Composer() {
         // tiene capacidades de agente de escritorio, incluso si la pregunta
         // no es directamente agentiva. Así puede responder "sí, puedo
         // ejecutar comandos" en lugar de "no puedo".
-        await runChatWithTools(llm, objectiveText, images, ac.signal);
+        await runChatWithTools(llm, objectiveText, images, ac.signal, mcpMentionedNames);
       }
     } catch (e) {
       appendMessage({
@@ -385,6 +423,7 @@ export function Composer() {
     userText: string,
     images: ImageContent[],
     signal: AbortSignal,
+    mcpMentionedNames: string[] = [],
   ) {
     const { buildAdvancedToolsList, dispatchAdvancedTool } = await import('@/lib/tools');
     const { streamChat } = await import('@/lib/chain');
@@ -398,6 +437,99 @@ export function Composer() {
     const shellHint = isWindows
       ? 'El shell es PowerShell/CMD en Windows. Usa "dir" (no "ls"), "type" (no "cat"), rutas con "C:\\Users\\" (no "/home/"). La variable de entorno es %USERNAME% (no $USER).'
       : 'El shell es bash en Linux. Usa "ls", "cat", rutas con "/home/".';
+
+    // ── Cargar tools MCP de los servidores MENCIONADOS con @mcp:<name> ──
+    // Las tools MCP se nombran con prefijo mcp__<serverId>__<toolName> para
+    // evitar colisiones con las tools nativas (shell_exec, web_search, etc.).
+    // El dispatcher en lib/tools.ts las rutea a mcpClient.callTool.
+    //
+    // NOTA: sólo cargamos los MCPs explícitamente mencionados. Esto evita
+    // lanzar subprocesos stdio innecesariamente en cada mensaje (los
+    // servidores MCP se arrancan bajo demanda al hacer listTools en Rust).
+    let mcpExtraTools: { type: 'function'; function: { name: string; description: string; parameters: Record<string, unknown> } }[] = [];
+    let mcpServersInfo = '';
+    let mcpUnavailableHint = '';
+    if (mcpMentionedNames.length > 0) {
+      if (!runtime.isTauri) {
+        mcpUnavailableHint =
+          '\n\n═══ MCP NO DISPONIBLE EN MODO NAVEGADOR ═══\n' +
+          'El usuario mencionó @mcp: pero MCP sólo funciona en el backend de Tauri.\n' +
+          'Informale que debe ejecutar Weaver con `npm run tauri:dev` o la app de escritorio\n' +
+          'instalada para usar los servidores MCP. En modo navegador las tools MCP\n' +
+          'NO están disponibles. Continúa usando las tools nativas (shell_exec, web_search, etc.).';
+      } else {
+        try {
+          const { mcpClient } = await import('@/mcp/client');
+          const allServers = mcpClient.listServers().filter((s) => s.enabled);
+          const targetServers = allServers.filter((s) =>
+            mcpMentionedNames.some((n) => n.toLowerCase() === s.name.toLowerCase()),
+          );
+          if (targetServers.length === 0) {
+            mcpUnavailableHint =
+              '\n\n═══ MCP MENCIONADO NO ENCONTRADO ═══\n' +
+              `El usuario mencionó @mcp: pero no hay servidores MCP habilitados con ese nombre. ` +
+              `Servidores disponibles: ${allServers.map((s) => s.name).join(', ') || 'ninguno'}. ` +
+              `Pídele al usuario que instale el servidor MCP en Ajustes > Servidores MCP.`;
+          } else {
+            const allMcpTools = await mcpClient.listTools();
+            mcpExtraTools = targetServers.flatMap((srv) => {
+              const serverTools = allMcpTools.filter((t) => t.serverId === srv.id);
+              const approved = serverTools.filter(
+                (t) => mcpClient.isToolApproved(srv.id, t.name) && !mcpClient.isToolDenied(srv.id, t.name),
+              );
+              return approved.map((t) => ({
+                type: 'function' as const,
+                function: {
+                  name: `mcp__${srv.id}__${t.name}`,
+                  description: `[MCP:${srv.name}] ${t.description}`,
+                  parameters:
+                    t.inputSchema && typeof t.inputSchema === 'object' && 'properties' in t.inputSchema
+                      ? t.inputSchema
+                      : { type: 'object' as const, properties: {}, additionalProperties: true },
+                },
+              }));
+            });
+            const totalAvailable = targetServers.reduce(
+              (acc, s) => acc + allMcpTools.filter((t) => t.serverId === s.id).length,
+              0,
+            );
+            if (mcpExtraTools.length === 0 && totalAvailable > 0) {
+              mcpUnavailableHint =
+                '\n\n═══ MCP SIN TOOLS APROBADAS ═══\n' +
+                `Hay tools MCP disponibles en ${targetServers.map((s) => s.name).join(', ')} ` +
+                `pero ninguna está aprobada. Pídele al usuario que apruebe las tools en ` +
+                `Ajustes > Servidores MCP > ${targetServers[0]?.name} > Tools.`;
+            } else if (mcpExtraTools.length === 0) {
+              mcpUnavailableHint =
+                '\n\n═══ MCP SIN TOOLS ═══\n' +
+                `El servidor MCP mencionado no expuso ninguna tool. Posibles causas:\n` +
+                `- El servidor no está corriendo correctamente\n` +
+                `- La API key del servidor es inválida\n` +
+                `Sugiérele al usuario verificar la configuración en Ajustes > Servidores MCP.`;
+            } else {
+              mcpServersInfo =
+                '\n\n═══ SERVIDORES MCP ACTIVOS PARA ESTE MENSAJE ═══\n' +
+                `El usuario mencionó @mcp: lo que activa las siguientes tools MCP. ` +
+                `Úsalas cuando sean relevantes para la petición del usuario.\n` +
+                targetServers
+                  .map((s) => {
+                    const all = allMcpTools.filter((t) => t.serverId === s.id);
+                    const appr = all.filter((t) => mcpClient.isToolApproved(s.id, t.name) && !mcpClient.isToolDenied(s.id, t.name));
+                    return `- ${s.name}: ${appr.length}/${all.length} tools aprobadas — ` +
+                      appr.map((t) => `mcp__${s.id}__${t.name}`).join(', ');
+                  })
+                  .join('\n');
+            }
+          }
+        } catch (e) {
+          console.warn('[MCP] No se pudieron cargar tools MCP:', e);
+          mcpUnavailableHint =
+            '\n\n═══ ERROR AL CARGAR MCP ═══\n' +
+            `No se pudieron cargar las tools MCP: ${e instanceof Error ? e.message : String(e)}.\n` +
+            `Informale al usuario y continúa con las tools nativas.`;
+        }
+      }
+    }
 
     const messages: Message[] = [
       {
@@ -413,7 +545,19 @@ export function Composer() {
           '- Leer y escribir archivos (file_read, file_write, file_list)\n' +
           '- Buscar en internet (web_search)\n' +
           '- Descargar contenido de URLs (web_fetch)\n' +
-          '- Generar archivos descargables (save_file)\n\n' +
+          '- Generar archivos descargables (save_file)\n' +
+          '- Crear notas/tareas/eventos en el espacio personal del usuario (me_create_*)\n' +
+          '- Construir un Grafo Cognitivo del proyecto (cognitive_graphify, cognitive_query)\n' +
+          '- Usar tools de servidores MCP externos cuando el usuario las mencione con @mcp:\n\n' +
+          '═══ MCP (Model Context Protocol) ═══\n' +
+          'Los servidores MCP son herramientas externas que el usuario instala en Weaver. Para usarlas,\n' +
+          'el usuario debe mencionarlas en su mensaje con @mcp:<nombre> (ej: "@mcp:Figma obtén el\n' +
+          'archivo XYZ"). Cuando lo hace, las tools MCP se cargan automáticamente en tu lista de tools\n' +
+          'con el prefijo mcp__<serverId>__<toolName>. Úsalas como cualquier otra tool.\n' +
+          'Si el usuario NO menciona @mcp:, las tools MCP NO están disponibles — no intentes usarlas.\n' +
+          'Si el usuario menciona @mcp: pero no hay tools cargadas, informa del problema y continúa.\n' +
+          mcpServersInfo +
+          mcpUnavailableHint + '\n\n' +
           '═══ COMPORTAMIENTO PROACTIVO Y AUTÓNOMO ═══\n' +
           'Eres un agente AUTÓNOMO. Esto significa:\n' +
           '1. NUNCA te rindas al primer error. Si algo falla, intenta una alternativa.\n' +
@@ -462,7 +606,7 @@ export function Composer() {
       { role: 'user', content: userText, images: images.length > 0 ? images : undefined },
     ];
 
-    const tools = buildAdvancedToolsList();
+    const tools = [...buildAdvancedToolsList(), ...mcpExtraTools];
     const MAX_TOOL_ROUNDS = 8;
 
     let producedFinalText = false;
@@ -621,6 +765,12 @@ export function Composer() {
       case 'save_file':
         return `generando: ${args.filename ?? 'archivo'}`;
       default:
+        // Tools MCP con prefijo mcp__<serverId>__<toolName>
+        if (toolName.startsWith('mcp__')) {
+          const parts = toolName.split('__');
+          const toolShortName = parts[parts.length - 1];
+          return `MCP · ${toolShortName}`;
+        }
         return toolName;
     }
   }
@@ -1110,10 +1260,10 @@ function ToggleSwitch({ on }: { on: boolean }) {
 // ============================================================================
 
 interface MentionItem {
-  type: 'skill' | 'provider' | 'file' | 'project' | 'command';
+  type: 'skill' | 'provider' | 'file' | 'project' | 'command' | 'mcp';
   label: string;
   desc: string;
-  icon: 'brain' | 'globe' | 'file' | 'image';
+  icon: 'brain' | 'globe' | 'file' | 'image' | 'puzzle';
   insert: string;
 }
 
@@ -1126,6 +1276,8 @@ function MentionIcon({ icon }: { icon: MentionItem['icon'] }) {
       return <Globe {...props} />;
     case 'image':
       return <ImageIcon {...props} />;
+    case 'puzzle':
+      return <Puzzle {...props} />;
     case 'file':
     default:
       return <FileText {...props} />;
