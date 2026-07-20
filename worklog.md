@@ -59,3 +59,38 @@ Stage Summary:
 - Requiere modo Tauri para escanear archivos (en navegador el graphify fallará con error claro).
 - El grafo se persiste en localStorage, así que no se reconstruye en cada mensaje — sólo cuando el usuario o el agente llama a cognitive_graphify explícitamente.
 
+---
+Task ID: bug-fix-text-tool-calls
+Agent: main
+Task: Corregir bug donde el agente emitía tool calls como TEXTO (formato Mistral `<function(name){args}</function>`) en vez de usar function calling nativo. Síntomas reportados: (1) mensaje "sin respuesta" cuando el LLM sólo emitía un text-tool-call, (2) mensaje mostraba el texto crudo `<function(web_search){...}</function>` en vez de ejecutar la herramienta. El usuario tiene Tavily API key configurada y no tenía ningún modo activado.
+
+Work Log:
+- Análisis del bug: el adapter `openai-compat.ts` sólo popula `result.toolCalls` cuando el LLM emite `delta.tool_calls` (function calling nativo). Muchos modelos (Mistral-Nemo, Hermes 2 Pro, Llama 3.1+, Qwen, Nous Research) NO usan function calling nativo y emiten los tool calls como texto con tags como:
+  - Mistral: `<function(web_search){"query": "...", "max_results": 5}</function>`
+  - Mistral official: `[TOOL_CALLS: [{"name":"...","arguments":{...}}]]`
+  - Hermes/Nous: `<tool_call>{"name":"...","arguments":{...}}</tool_call>`
+  - Llama 3.1+: `<|tool_call|>{"name":"...","arguments":{...}}`
+- Como `result.toolCalls.length === 0`, el loop `runChatWithTools` rompía inmediatamente con `producedFinalText = true`. El "texto" visible era el tool call crudo (o vacío si ReactMarkdown strippeaba los tags HTML-like, causando el "sin respuesta").
+- Creado `src/lib/textToolParser.ts`:
+  - `parseTextToolCalls(text)`: detecta y extrae tool calls de los 5 formatos soportados.
+  - `extractBalancedJson(text, pos)`: extrae JSON respetando anidamiento de braces y strings. Necesario porque regex `\{[\s\S]*?\}` corta en el primer `}` (no el balanceado) → falla para args con objetos anidados como `{"arguments":{"a":1}}`.
+  - `maybeHasTextToolCall(text)`: check rápido (string includes) para decidir si vale la pena hacer el parseo completo.
+  - Si JSON es malformado, lo deja como texto (no rompe).
+  - Devuelve `{toolCalls, cleanedText, found}`.
+- Añadido `setLastAssistantMessage(content)` al store `weaver.ts`: reemplaza el contenido completo del último mensaje asistente (no append como `updateLastAssistantMessage`). Necesario para limpiar el texto visible que contenía las marcas del tool call.
+- Modificado `runChatWithTools` en `Composer.tsx`:
+  - Tras `streamChat`, si `result.toolCalls.length === 0` y `maybeHasTextToolCall(result.text)` es true, ejecuta `parseTextToolCalls(result.text)`.
+  - Si encuentra tool calls, los añade a `result.toolCalls`, reemplaza el texto visible con `setLastAssistantMessage(parsed.cleanedText)`, y actualiza `result.text` para que el historial del LLM también quede limpio.
+  - El resto del loop sigue igual: ejecuta los tool calls, envía los resultados al LLM, etc.
+- Tests rápidos con `tsx` (archivo temporal `textToolParser.test.ts`, luego borrado): 9/9 tests pasaron cubriendo Mistral, Mistral official, Hermes, Llama 3.1+, múltiples tool calls, JSON malformado, texto normal sin tool call, y texto con prefijo+tool call+sufijo.
+- Verificado: `tsc --noEmit` EXIT 0 ✓ · `vite build` exitoso en 5.40s ✓ (textToolParser chunk 3.10 kB / 1.15 kB gzip).
+
+Stage Summary:
+- Archivos modificados:
+  - `src/lib/textToolParser.ts` (NUEVO, 3.10 kB): parser de tool calls en formato texto.
+  - `src/store/weaver.ts`: añadido `setLastAssistantMessage(content)` para reemplazar (no append) el último mensaje.
+  - `src/components/composer/Composer.tsx`: integración del parser en `runChatWithTools` (después de `streamChat`, antes del break).
+- Causa raíz: modelos que no soportan function calling nativo emitían tool calls como texto, el adapter no los detectaba, el loop rompía sin ejecutarlos.
+- Fix: parser de texto → tool calls nativos → ejecución normal.
+- El usuario ya NO debería ver `<function(...)>` crudo ni respuestas vacías cuando el LLM use formato texto.
+

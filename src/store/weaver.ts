@@ -79,6 +79,8 @@ interface WeaverState {
   renameConversation: (id: string, title: string) => Promise<void>;
   appendMessage: (msg: Message) => void;
   updateLastAssistantMessage: (delta: string) => void;
+  /** Reemplaza el contenido completo del último mensaje asistente (no append). */
+  setLastAssistantMessage: (content: string) => void;
   setConversationPlan: (plan: Plan) => void;
   appendTrace: (subtaskId: string, step: TraceStep) => void;
   setSubtaskStatus: (subtaskId: string, status: Subtask['status']) => void;
@@ -475,6 +477,31 @@ export const useWeaver = create<WeaverState>((set, get) => ({
       return { conversations };
     });
     // Debounce persistencia: el último update se persiste tras 2s de inactividad.
+    if (runtime.isTauri) {
+      schedulePersistLastMessage();
+    } else {
+      try {
+        localStorage.setItem('weaver:conversations', JSON.stringify(useWeaver.getState().conversations));
+      } catch { /* ignore */ }
+    }
+  },
+
+  setLastAssistantMessage: (content) => {
+    set((s) => {
+      if (!s.activeConversationId) return s;
+      const conversations = s.conversations.map((c) => {
+        if (c.id !== s.activeConversationId) return c;
+        const msgs = [...c.messages];
+        const last = msgs[msgs.length - 1];
+        if (last && last.role === 'assistant') {
+          msgs[msgs.length - 1] = { ...last, content };
+        } else {
+          msgs.push({ role: 'assistant', content });
+        }
+        return { ...c, messages: msgs, updatedAt: Date.now() };
+      });
+      return { conversations };
+    });
     if (runtime.isTauri) {
       schedulePersistLastMessage();
     } else {

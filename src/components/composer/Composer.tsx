@@ -70,6 +70,7 @@ export function Composer() {
     modelPickerOpen,
     appendMessage,
     updateLastAssistantMessage,
+    setLastAssistantMessage,
     setAgentState,
     handleAgentEvent,
     activeConversationId,
@@ -387,6 +388,7 @@ export function Composer() {
   ) {
     const { buildAdvancedToolsList, dispatchAdvancedTool } = await import('@/lib/tools');
     const { streamChat } = await import('@/lib/chain');
+    const { parseTextToolCalls, maybeHasTextToolCall } = await import('@/lib/textToolParser');
 
     appendMessage({ role: 'assistant', content: '', id: newMsgId(), ts: Date.now() });
 
@@ -459,7 +461,30 @@ export function Composer() {
         onDelta: (delta) => updateLastAssistantMessage(delta),
       });
 
-      // Si no hay tool calls, el LLM ya respondió → terminamos.
+      // ----------------------------------------------------------------------
+      // Detectar tool calls emitidos como TEXTO por modelos que no usan
+      // function calling nativo. Ejemplos:
+      //   <function(web_search){"query": "...", "max_results": 5}</function>
+      //   <tool_call>{"name": "web_search", "arguments": {...}}</tool_call>
+      //   [TOOL_CALLS: [{...}]]
+      //   <|tool_call|>{...}
+      // Sin este parser, estos tool calls se mostrarían como texto crudo al
+      // usuario y nunca se ejecutarían (bug reportado: "agente sin respuesta"
+      // o "agente emite <function(...)> como texto").
+      // ----------------------------------------------------------------------
+      if (result.toolCalls.length === 0 && maybeHasTextToolCall(result.text)) {
+        const parsed = parseTextToolCalls(result.text);
+        if (parsed.found) {
+          result.toolCalls = parsed.toolCalls;
+          // Reemplazar el texto visible (que contenía las marcas del tool call)
+          // por el texto limpio. Si no había texto fuera de los tool calls,
+          // queda vacío — el siguiente bloque añade el feedback de ejecución.
+          setLastAssistantMessage(parsed.cleanedText);
+          result.text = parsed.cleanedText;
+        }
+      }
+
+      // Si no hay tool calls (nativos ni text-based), el LLM ya respondió → terminamos.
       if (result.toolCalls.length === 0) {
         producedFinalText = true;
         break;
