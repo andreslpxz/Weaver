@@ -75,6 +75,95 @@ CREATE TABLE IF NOT EXISTS skills (
 );
 CREATE INDEX IF NOT EXISTS idx_conv_msgs ON conversation_messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_conv_proj ON conversations(project_id);
+
+-- ===================== ME: Calendario + utilidades de vida =====================
+CREATE TABLE IF NOT EXISTS me_events (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT,
+    location TEXT,
+    calendar_id TEXT NOT NULL DEFAULT 'personal',
+    start_ts INTEGER NOT NULL,
+    end_ts INTEGER NOT NULL,
+    all_day INTEGER NOT NULL DEFAULT 0,
+    color TEXT,
+    recurrence TEXT,
+    reminder_minutes INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_me_events_start ON me_events(start_ts);
+CREATE INDEX IF NOT EXISTS idx_me_events_cal ON me_events(calendar_id);
+
+CREATE TABLE IF NOT EXISTS me_calendars (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL,
+    visible INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS me_tasks (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    notes TEXT,
+    priority INTEGER NOT NULL DEFAULT 0,
+    done INTEGER NOT NULL DEFAULT 0,
+    due_ts INTEGER,
+    list_id TEXT NOT NULL DEFAULT 'inbox',
+    created_at INTEGER NOT NULL,
+    completed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_me_tasks_list ON me_tasks(list_id);
+CREATE INDEX IF NOT EXISTS idx_me_tasks_due ON me_tasks(due_ts);
+
+CREATE TABLE IF NOT EXISTS me_notes (
+    id TEXT PRIMARY KEY,
+    title TEXT,
+    body TEXT NOT NULL,
+    color TEXT,
+    tags_json TEXT,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS me_health (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    value TEXT NOT NULL,
+    unit TEXT,
+    ts INTEGER NOT NULL,
+    notes TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_me_health_ts ON me_health(ts);
+
+CREATE TABLE IF NOT EXISTS me_shopping (
+    id TEXT PRIMARY KEY,
+    list_id TEXT NOT NULL DEFAULT 'default',
+    name TEXT NOT NULL,
+    qty TEXT,
+    category TEXT,
+    checked INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    checked_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_me_shopping_list ON me_shopping(list_id);
+
+CREATE TABLE IF NOT EXISTS me_weather_cache (
+    location TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    fetched_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS me_integrations (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    label TEXT NOT NULL,
+    config_json TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -372,5 +461,331 @@ pub fn skills_save(skill: SkillRow, state: State<'_, DbState>) -> Result<(), Str
 pub fn skills_delete(name: String, state: State<'_, DbState>) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM skills WHERE name = ?", params![name]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ============================================================================
+// ME: Eventos de calendario
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeEvent {
+    pub id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub location: Option<String>,
+    pub calendar_id: String,
+    pub start_ts: i64,
+    pub end_ts: i64,
+    pub all_day: bool,
+    pub color: Option<String>,
+    pub recurrence: Option<String>,
+    pub reminder_minutes: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[tauri::command]
+pub fn me_events_list(state: State<'_, DbState>) -> Result<Vec<MeEvent>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT id, title, description, location, calendar_id, start_ts, end_ts, all_day, color, recurrence, reminder_minutes, created_at, updated_at FROM me_events ORDER BY start_ts ASC").map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |r| Ok(MeEvent {
+        id: r.get(0)?, title: r.get(1)?, description: r.get(2)?, location: r.get(3)?,
+        calendar_id: r.get(4)?, start_ts: r.get(5)?, end_ts: r.get(6)?, all_day: r.get::<_, i64>(7)? != 0,
+        color: r.get(8)?, recurrence: r.get(9)?, reminder_minutes: r.get(10)?,
+        created_at: r.get(11)?, updated_at: r.get(12)?,
+    })).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for r in rows { out.push(r.map_err(|e| e.to_string())?); }
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn me_events_save(event: MeEvent, state: State<'_, DbState>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO me_events (id, title, description, location, calendar_id, start_ts, end_ts, all_day, color, recurrence, reminder_minutes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        params![event.id, event.title, event.description, event.location, event.calendar_id, event.start_ts, event.end_ts, event.all_day as i64, event.color, event.recurrence, event.reminder_minutes, event.created_at, event.updated_at],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn me_events_delete(id: String, state: State<'_, DbState>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM me_events WHERE id = ?", params![id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ============================================================================
+// ME: Calendarios (categorías)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeCalendar {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+    pub visible: bool,
+    pub created_at: i64,
+}
+
+#[tauri::command]
+pub fn me_calendars_list(state: State<'_, DbState>) -> Result<Vec<MeCalendar>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT id, name, color, visible, created_at FROM me_calendars ORDER BY created_at ASC").map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |r| Ok(MeCalendar {
+        id: r.get(0)?, name: r.get(1)?, color: r.get(2)?,
+        visible: r.get::<_, i64>(3)? != 0, created_at: r.get(4)?,
+    })).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for r in rows { out.push(r.map_err(|e| e.to_string())?); }
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn me_calendars_save(cal: MeCalendar, state: State<'_, DbState>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO me_calendars (id, name, color, visible, created_at) VALUES (?, ?, ?, ?, ?)",
+        params![cal.id, cal.name, cal.color, cal.visible as i64, cal.created_at],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn me_calendars_delete(id: String, state: State<'_, DbState>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM me_calendars WHERE id = ?", params![id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ============================================================================
+// ME: Tareas
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeTask {
+    pub id: String,
+    pub title: String,
+    pub notes: Option<String>,
+    pub priority: i64,
+    pub done: bool,
+    pub due_ts: Option<i64>,
+    pub list_id: String,
+    pub created_at: i64,
+    pub completed_at: Option<i64>,
+}
+
+#[tauri::command]
+pub fn me_tasks_list(state: State<'_, DbState>) -> Result<Vec<MeTask>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT id, title, notes, priority, done, due_ts, list_id, created_at, completed_at FROM me_tasks ORDER BY done ASC, priority DESC, created_at ASC").map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |r| Ok(MeTask {
+        id: r.get(0)?, title: r.get(1)?, notes: r.get(2)?, priority: r.get(3)?,
+        done: r.get::<_, i64>(4)? != 0, due_ts: r.get(5)?, list_id: r.get(6)?,
+        created_at: r.get(7)?, completed_at: r.get(8)?,
+    })).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for r in rows { out.push(r.map_err(|e| e.to_string())?); }
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn me_tasks_save(task: MeTask, state: State<'_, DbState>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO me_tasks (id, title, notes, priority, done, due_ts, list_id, created_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        params![task.id, task.title, task.notes, task.priority, task.done as i64, task.due_ts, task.list_id, task.created_at, task.completed_at],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn me_tasks_delete(id: String, state: State<'_, DbState>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM me_tasks WHERE id = ?", params![id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ============================================================================
+// ME: Notas
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeNote {
+    pub id: String,
+    pub title: Option<String>,
+    pub body: String,
+    pub color: Option<String>,
+    pub tags_json: Option<String>,
+    pub pinned: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[tauri::command]
+pub fn me_notes_list(state: State<'_, DbState>) -> Result<Vec<MeNote>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT id, title, body, color, tags_json, pinned, created_at, updated_at FROM me_notes ORDER BY pinned DESC, updated_at DESC").map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |r| Ok(MeNote {
+        id: r.get(0)?, title: r.get(1)?, body: r.get(2)?, color: r.get(3)?,
+        tags_json: r.get(4)?, pinned: r.get::<_, i64>(5)? != 0,
+        created_at: r.get(6)?, updated_at: r.get(7)?,
+    })).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for r in rows { out.push(r.map_err(|e| e.to_string())?); }
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn me_notes_save(note: MeNote, state: State<'_, DbState>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO me_notes (id, title, body, color, tags_json, pinned, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        params![note.id, note.title, note.body, note.color, note.tags_json, note.pinned as i64, note.created_at, note.updated_at],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn me_notes_delete(id: String, state: State<'_, DbState>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM me_notes WHERE id = ?", params![id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ============================================================================
+// ME: Salud (registros)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeHealth {
+    pub id: String,
+    pub kind: String,
+    pub value: String,
+    pub unit: Option<String>,
+    pub ts: i64,
+    pub notes: Option<String>,
+}
+
+#[tauri::command]
+pub fn me_health_list(state: State<'_, DbState>) -> Result<Vec<MeHealth>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT id, kind, value, unit, ts, notes FROM me_health ORDER BY ts DESC LIMIT 500").map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |r| Ok(MeHealth {
+        id: r.get(0)?, kind: r.get(1)?, value: r.get(2)?, unit: r.get(3)?,
+        ts: r.get(4)?, notes: r.get(5)?,
+    })).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for r in rows { out.push(r.map_err(|e| e.to_string())?); }
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn me_health_save(h: MeHealth, state: State<'_, DbState>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO me_health (id, kind, value, unit, ts, notes) VALUES (?, ?, ?, ?, ?, ?)",
+        params![h.id, h.kind, h.value, h.unit, h.ts, h.notes],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn me_health_delete(id: String, state: State<'_, DbState>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM me_health WHERE id = ?", params![id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ============================================================================
+// ME: Listas de compra
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeShoppingItem {
+    pub id: String,
+    pub list_id: String,
+    pub name: String,
+    pub qty: Option<String>,
+    pub category: Option<String>,
+    pub checked: bool,
+    pub created_at: i64,
+    pub checked_at: Option<i64>,
+}
+
+#[tauri::command]
+pub fn me_shopping_list(state: State<'_, DbState>) -> Result<Vec<MeShoppingItem>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT id, list_id, name, qty, category, checked, created_at, checked_at FROM me_shopping ORDER BY checked ASC, created_at ASC").map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |r| Ok(MeShoppingItem {
+        id: r.get(0)?, list_id: r.get(1)?, name: r.get(2)?, qty: r.get(3)?,
+        category: r.get(4)?, checked: r.get::<_, i64>(5)? != 0,
+        created_at: r.get(6)?, checked_at: r.get(7)?,
+    })).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for r in rows { out.push(r.map_err(|e| e.to_string())?); }
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn me_shopping_save(item: MeShoppingItem, state: State<'_, DbState>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO me_shopping (id, list_id, name, qty, category, checked, created_at, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        params![item.id, item.list_id, item.name, item.qty, item.category, item.checked as i64, item.created_at, item.checked_at],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn me_shopping_delete(id: String, state: State<'_, DbState>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM me_shopping WHERE id = ?", params![id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ============================================================================
+// ME: Integraciones nativas (correo, nube, tareas externas, etc.)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeIntegration {
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+    pub config_json: String,
+    pub enabled: bool,
+    pub created_at: i64,
+}
+
+#[tauri::command]
+pub fn me_integrations_list(state: State<'_, DbState>) -> Result<Vec<MeIntegration>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT id, kind, label, config_json, enabled, created_at FROM me_integrations ORDER BY created_at ASC").map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |r| Ok(MeIntegration {
+        id: r.get(0)?, kind: r.get(1)?, label: r.get(2)?, config_json: r.get(3)?,
+        enabled: r.get::<_, i64>(4)? != 0, created_at: r.get(5)?,
+    })).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for r in rows { out.push(r.map_err(|e| e.to_string())?); }
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn me_integrations_save(it: MeIntegration, state: State<'_, DbState>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO me_integrations (id, kind, label, config_json, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        params![it.id, it.kind, it.label, it.config_json, it.enabled as i64, it.created_at],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn me_integrations_delete(id: String, state: State<'_, DbState>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM me_integrations WHERE id = ?", params![id]).map_err(|e| e.to_string())?;
     Ok(())
 }

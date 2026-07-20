@@ -17,9 +17,9 @@ import { apiKeyStore } from '@/providers/store';
 import type { Attachment } from '@/lib/attachments';
 import type { ThemeId } from '@/lib/themes';
 import { getActiveTheme, applyTheme } from '@/lib/themes';
-import { sqlite, runtime, type ProjectRow } from '@/lib/tauri';
+import { sqlite, runtime, type ProjectRow, type MeEvent, type MeCalendar, type MeTask, type MeNote, type MeHealth, type MeShoppingItem, type MeIntegration } from '@/lib/tauri';
 
-export type ViewId = 'chat' | 'complementos' | 'habilidades' | 'automatizaciones' | 'configuracion';
+export type ViewId = 'chat' | 'complementos' | 'habilidades' | 'automatizaciones' | 'configuracion' | 'me';
 
 export interface Conversation {
   id: string;
@@ -108,6 +108,41 @@ interface WeaverState {
 
   // --- Agent events ---
   handleAgentEvent: (event: AgentEvent) => void;
+
+  // --- ME: Calendario + utilidades de vida ---
+  meEvents: MeEvent[];
+  meCalendars: MeCalendar[];
+  meTasks: MeTask[];
+  meNotes: MeNote[];
+  meHealth: MeHealth[];
+  meShopping: MeShoppingItem[];
+  meIntegrations: MeIntegration[];
+  loadMeEvents: () => Promise<void>;
+  upsertMeEvent: (event: MeEvent) => Promise<void>;
+  deleteMeEvent: (id: string) => Promise<void>;
+  loadMeCalendars: () => Promise<void>;
+  upsertMeCalendar: (cal: MeCalendar) => Promise<void>;
+  deleteMeCalendar: (id: string) => Promise<void>;
+  loadMeTasks: () => Promise<void>;
+  upsertMeTask: (task: MeTask) => Promise<void>;
+  deleteMeTask: (id: string) => Promise<void>;
+  loadMeNotes: () => Promise<void>;
+  upsertMeNote: (note: MeNote) => Promise<void>;
+  deleteMeNote: (id: string) => Promise<void>;
+  loadMeHealth: () => Promise<void>;
+  upsertMeHealth: (h: MeHealth) => Promise<void>;
+  deleteMeHealth: (id: string) => Promise<void>;
+  loadMeShopping: () => Promise<void>;
+  upsertMeShopping: (item: MeShoppingItem) => Promise<void>;
+  deleteMeShopping: (id: string) => Promise<void>;
+  loadMeIntegrations: () => Promise<void>;
+  upsertMeIntegration: (it: MeIntegration) => Promise<void>;
+  deleteMeIntegration: (id: string) => Promise<void>;
+  loadMeAll: () => Promise<void>;
+
+  // --- Cápsulas ocultadas por el usuario (UI chat) ---
+  hiddenCapsules: Set<string>;
+  hideCapsule: (id: string) => void;
 }
 
 export const useWeaver = create<WeaverState>((set, get) => ({
@@ -602,6 +637,271 @@ export const useWeaver = create<WeaverState>((set, get) => ({
         break;
     }
   },
+
+  // ==========================================================================
+  // ME — Calendario + utilidades
+  // ==========================================================================
+  meEvents: [],
+  meCalendars: [],
+  meTasks: [],
+  meNotes: [],
+  meHealth: [],
+  meShopping: [],
+  meIntegrations: [],
+  hiddenCapsules: new Set<string>(),
+
+  loadMeEvents: async () => {
+    if (runtime.isTauri) {
+      const rows = await sqlite.meEventsList();
+      set({ meEvents: rows });
+    } else {
+      try {
+        const raw = localStorage.getItem('weaver:me:events');
+        set({ meEvents: raw ? JSON.parse(raw) : [] });
+      } catch { set({ meEvents: [] }); }
+    }
+  },
+  upsertMeEvent: async (event) => {
+    if (runtime.isTauri) {
+      await sqlite.meEventsSave(event);
+    } else {
+      try {
+        const cur = useWeaver.getState().meEvents;
+        const next = [...cur.filter((e) => e.id !== event.id), event];
+        localStorage.setItem('weaver:me:events', JSON.stringify(next));
+      } catch { /* ignore */ }
+    }
+    set((s) => ({ meEvents: [...s.meEvents.filter((e) => e.id !== event.id), event] }));
+  },
+  deleteMeEvent: async (id) => {
+    if (runtime.isTauri) await sqlite.meEventsDelete(id);
+    set((s) => ({ meEvents: s.meEvents.filter((e) => e.id !== id) }));
+    if (runtime.isBrowser) {
+      try {
+        localStorage.setItem('weaver:me:events', JSON.stringify(useWeaver.getState().meEvents));
+      } catch { /* ignore */ }
+    }
+  },
+
+  loadMeCalendars: async () => {
+    if (runtime.isTauri) {
+      const rows = await sqlite.meCalendarsList();
+      if (rows.length === 0) {
+        // Seed default calendars
+        const defaults = [
+          { id: 'personal', name: 'Personal', color: '#7aa67a', visible: true, created_at: Date.now() },
+          { id: 'work', name: 'Trabajo', color: '#6b8cff', visible: true, created_at: Date.now() },
+          { id: 'family', name: 'Familia', color: '#d97757', visible: true, created_at: Date.now() },
+        ];
+        for (const d of defaults) await sqlite.meCalendarsSave(d);
+        set({ meCalendars: defaults });
+      } else {
+        set({ meCalendars: rows });
+      }
+    } else {
+      try {
+        const raw = localStorage.getItem('weaver:me:calendars');
+        if (raw) {
+          set({ meCalendars: JSON.parse(raw) });
+        } else {
+          const defaults = [
+            { id: 'personal', name: 'Personal', color: '#7aa67a', visible: true, created_at: Date.now() },
+            { id: 'work', name: 'Trabajo', color: '#6b8cff', visible: true, created_at: Date.now() },
+            { id: 'family', name: 'Familia', color: '#d97757', visible: true, created_at: Date.now() },
+          ];
+          localStorage.setItem('weaver:me:calendars', JSON.stringify(defaults));
+          set({ meCalendars: defaults });
+        }
+      } catch { set({ meCalendars: [] }); }
+    }
+  },
+  upsertMeCalendar: async (cal) => {
+    if (runtime.isTauri) await sqlite.meCalendarsSave(cal);
+    set((s) => ({ meCalendars: [...s.meCalendars.filter((c) => c.id !== cal.id), cal] }));
+    if (runtime.isBrowser) {
+      try {
+        localStorage.setItem('weaver:me:calendars', JSON.stringify(useWeaver.getState().meCalendars));
+      } catch { /* ignore */ }
+    }
+  },
+  deleteMeCalendar: async (id) => {
+    if (runtime.isTauri) await sqlite.meCalendarsDelete(id);
+    set((s) => ({ meCalendars: s.meCalendars.filter((c) => c.id !== id) }));
+    if (runtime.isBrowser) {
+      try {
+        localStorage.setItem('weaver:me:calendars', JSON.stringify(useWeaver.getState().meCalendars));
+      } catch { /* ignore */ }
+    }
+  },
+
+  loadMeTasks: async () => {
+    if (runtime.isTauri) {
+      const rows = await sqlite.meTasksList();
+      set({ meTasks: rows });
+    } else {
+      try {
+        const raw = localStorage.getItem('weaver:me:tasks');
+        set({ meTasks: raw ? JSON.parse(raw) : [] });
+      } catch { set({ meTasks: [] }); }
+    }
+  },
+  upsertMeTask: async (task) => {
+    if (runtime.isTauri) await sqlite.meTasksSave(task);
+    set((s) => ({ meTasks: [...s.meTasks.filter((t) => t.id !== task.id), task] }));
+    if (runtime.isBrowser) {
+      try {
+        localStorage.setItem('weaver:me:tasks', JSON.stringify(useWeaver.getState().meTasks));
+      } catch { /* ignore */ }
+    }
+  },
+  deleteMeTask: async (id) => {
+    if (runtime.isTauri) await sqlite.meTasksDelete(id);
+    set((s) => ({ meTasks: s.meTasks.filter((t) => t.id !== id) }));
+    if (runtime.isBrowser) {
+      try {
+        localStorage.setItem('weaver:me:tasks', JSON.stringify(useWeaver.getState().meTasks));
+      } catch { /* ignore */ }
+    }
+  },
+
+  loadMeNotes: async () => {
+    if (runtime.isTauri) {
+      const rows = await sqlite.meNotesList();
+      set({ meNotes: rows });
+    } else {
+      try {
+        const raw = localStorage.getItem('weaver:me:notes');
+        set({ meNotes: raw ? JSON.parse(raw) : [] });
+      } catch { set({ meNotes: [] }); }
+    }
+  },
+  upsertMeNote: async (note) => {
+    if (runtime.isTauri) await sqlite.meNotesSave(note);
+    set((s) => ({ meNotes: [...s.meNotes.filter((n) => n.id !== note.id), note] }));
+    if (runtime.isBrowser) {
+      try {
+        localStorage.setItem('weaver:me:notes', JSON.stringify(useWeaver.getState().meNotes));
+      } catch { /* ignore */ }
+    }
+  },
+  deleteMeNote: async (id) => {
+    if (runtime.isTauri) await sqlite.meNotesDelete(id);
+    set((s) => ({ meNotes: s.meNotes.filter((n) => n.id !== id) }));
+    if (runtime.isBrowser) {
+      try {
+        localStorage.setItem('weaver:me:notes', JSON.stringify(useWeaver.getState().meNotes));
+      } catch { /* ignore */ }
+    }
+  },
+
+  loadMeHealth: async () => {
+    if (runtime.isTauri) {
+      const rows = await sqlite.meHealthList();
+      set({ meHealth: rows });
+    } else {
+      try {
+        const raw = localStorage.getItem('weaver:me:health');
+        set({ meHealth: raw ? JSON.parse(raw) : [] });
+      } catch { set({ meHealth: [] }); }
+    }
+  },
+  upsertMeHealth: async (h) => {
+    if (runtime.isTauri) await sqlite.meHealthSave(h);
+    set((s) => ({ meHealth: [...s.meHealth.filter((x) => x.id !== h.id), h] }));
+    if (runtime.isBrowser) {
+      try {
+        localStorage.setItem('weaver:me:health', JSON.stringify(useWeaver.getState().meHealth));
+      } catch { /* ignore */ }
+    }
+  },
+  deleteMeHealth: async (id) => {
+    if (runtime.isTauri) await sqlite.meHealthDelete(id);
+    set((s) => ({ meHealth: s.meHealth.filter((x) => x.id !== id) }));
+    if (runtime.isBrowser) {
+      try {
+        localStorage.setItem('weaver:me:health', JSON.stringify(useWeaver.getState().meHealth));
+      } catch { /* ignore */ }
+    }
+  },
+
+  loadMeShopping: async () => {
+    if (runtime.isTauri) {
+      const rows = await sqlite.meShoppingList();
+      set({ meShopping: rows });
+    } else {
+      try {
+        const raw = localStorage.getItem('weaver:me:shopping');
+        set({ meShopping: raw ? JSON.parse(raw) : [] });
+      } catch { set({ meShopping: [] }); }
+    }
+  },
+  upsertMeShopping: async (item) => {
+    if (runtime.isTauri) await sqlite.meShoppingSave(item);
+    set((s) => ({ meShopping: [...s.meShopping.filter((x) => x.id !== item.id), item] }));
+    if (runtime.isBrowser) {
+      try {
+        localStorage.setItem('weaver:me:shopping', JSON.stringify(useWeaver.getState().meShopping));
+      } catch { /* ignore */ }
+    }
+  },
+  deleteMeShopping: async (id) => {
+    if (runtime.isTauri) await sqlite.meShoppingDelete(id);
+    set((s) => ({ meShopping: s.meShopping.filter((x) => x.id !== id) }));
+    if (runtime.isBrowser) {
+      try {
+        localStorage.setItem('weaver:me:shopping', JSON.stringify(useWeaver.getState().meShopping));
+      } catch { /* ignore */ }
+    }
+  },
+
+  loadMeIntegrations: async () => {
+    if (runtime.isTauri) {
+      const rows = await sqlite.meIntegrationsList();
+      set({ meIntegrations: rows });
+    } else {
+      try {
+        const raw = localStorage.getItem('weaver:me:integrations');
+        set({ meIntegrations: raw ? JSON.parse(raw) : [] });
+      } catch { set({ meIntegrations: [] }); }
+    }
+  },
+  upsertMeIntegration: async (it) => {
+    if (runtime.isTauri) await sqlite.meIntegrationsSave(it);
+    set((s) => ({ meIntegrations: [...s.meIntegrations.filter((x) => x.id !== it.id), it] }));
+    if (runtime.isBrowser) {
+      try {
+        localStorage.setItem('weaver:me:integrations', JSON.stringify(useWeaver.getState().meIntegrations));
+      } catch { /* ignore */ }
+    }
+  },
+  deleteMeIntegration: async (id) => {
+    if (runtime.isTauri) await sqlite.meIntegrationsDelete(id);
+    set((s) => ({ meIntegrations: s.meIntegrations.filter((x) => x.id !== id) }));
+    if (runtime.isBrowser) {
+      try {
+        localStorage.setItem('weaver:me:integrations', JSON.stringify(useWeaver.getState().meIntegrations));
+      } catch { /* ignore */ }
+    }
+  },
+
+  loadMeAll: async () => {
+    await Promise.all([
+      get().loadMeCalendars(),
+      get().loadMeEvents(),
+      get().loadMeTasks(),
+      get().loadMeNotes(),
+      get().loadMeHealth(),
+      get().loadMeShopping(),
+      get().loadMeIntegrations(),
+    ]);
+  },
+
+  hideCapsule: (id) =>
+    set((s) => {
+      const next = new Set(s.hiddenCapsules);
+      next.add(id);
+      return { hiddenCapsules: next };
+    }),
 }));
 
 // Inicializar al cargar: crear conversación por defecto.

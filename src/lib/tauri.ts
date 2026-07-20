@@ -313,6 +313,86 @@ export interface SkillRow {
   file_path: string | null;
 }
 
+// ============================================================================
+// ME — Tipos de datos
+// ============================================================================
+
+export interface MeEvent {
+  id: string;
+  title: string;
+  description: string | null;
+  location: string | null;
+  calendar_id: string;
+  start_ts: number;
+  end_ts: number;
+  all_day: boolean;
+  color: string | null;
+  recurrence: string | null;
+  reminder_minutes: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface MeCalendar {
+  id: string;
+  name: string;
+  color: string;
+  visible: boolean;
+  created_at: number;
+}
+
+export interface MeTask {
+  id: string;
+  title: string;
+  notes: string | null;
+  priority: number;
+  done: boolean;
+  due_ts: number | null;
+  list_id: string;
+  created_at: number;
+  completed_at: number | null;
+}
+
+export interface MeNote {
+  id: string;
+  title: string | null;
+  body: string;
+  color: string | null;
+  tags_json: string | null;
+  pinned: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface MeHealth {
+  id: string;
+  kind: string;
+  value: string;
+  unit: string | null;
+  ts: number;
+  notes: string | null;
+}
+
+export interface MeShoppingItem {
+  id: string;
+  list_id: string;
+  name: string;
+  qty: string | null;
+  category: string | null;
+  checked: boolean;
+  created_at: number;
+  checked_at: number | null;
+}
+
+export interface MeIntegration {
+  id: string;
+  kind: string;
+  label: string;
+  config_json: string;
+  enabled: boolean;
+  created_at: number;
+}
+
 export const sqlite = {
   // --- Episodes ---
   listEpisodes: () =>
@@ -403,6 +483,62 @@ export const sqlite = {
           args: { path },
         })
       : Promise.reject(new Error('file_list requiere Tauri')),
+
+  // --- ME: Eventos ---
+  meEventsList: () =>
+    isTauri ? tauriInvoke<MeEvent[]>('me_events_list') : Promise.resolve([]),
+  meEventsSave: (event: MeEvent) =>
+    isTauri ? tauriInvoke<void>('me_events_save', { event }) : Promise.resolve(),
+  meEventsDelete: (id: string) =>
+    isTauri ? tauriInvoke<void>('me_events_delete', { id }) : Promise.resolve(),
+
+  // --- ME: Calendarios ---
+  meCalendarsList: () =>
+    isTauri ? tauriInvoke<MeCalendar[]>('me_calendars_list') : Promise.resolve([]),
+  meCalendarsSave: (cal: MeCalendar) =>
+    isTauri ? tauriInvoke<void>('me_calendars_save', { cal }) : Promise.resolve(),
+  meCalendarsDelete: (id: string) =>
+    isTauri ? tauriInvoke<void>('me_calendars_delete', { id }) : Promise.resolve(),
+
+  // --- ME: Tareas ---
+  meTasksList: () =>
+    isTauri ? tauriInvoke<MeTask[]>('me_tasks_list') : Promise.resolve([]),
+  meTasksSave: (task: MeTask) =>
+    isTauri ? tauriInvoke<void>('me_tasks_save', { task }) : Promise.resolve(),
+  meTasksDelete: (id: string) =>
+    isTauri ? tauriInvoke<void>('me_tasks_delete', { id }) : Promise.resolve(),
+
+  // --- ME: Notas ---
+  meNotesList: () =>
+    isTauri ? tauriInvoke<MeNote[]>('me_notes_list') : Promise.resolve([]),
+  meNotesSave: (note: MeNote) =>
+    isTauri ? tauriInvoke<void>('me_notes_save', { note }) : Promise.resolve(),
+  meNotesDelete: (id: string) =>
+    isTauri ? tauriInvoke<void>('me_notes_delete', { id }) : Promise.resolve(),
+
+  // --- ME: Salud ---
+  meHealthList: () =>
+    isTauri ? tauriInvoke<MeHealth[]>('me_health_list') : Promise.resolve([]),
+  meHealthSave: (h: MeHealth) =>
+    isTauri ? tauriInvoke<void>('me_health_save', { h }) : Promise.resolve(),
+  meHealthDelete: (id: string) =>
+    isTauri ? tauriInvoke<void>('me_health_delete', { id }) : Promise.resolve(),
+
+  // --- ME: Compras ---
+  meShoppingList: () =>
+    isTauri ? tauriInvoke<MeShoppingItem[]>('me_shopping_list') : Promise.resolve([]),
+  meShoppingSave: (item: MeShoppingItem) =>
+    isTauri ? tauriInvoke<void>('me_shopping_save', { item }) : Promise.resolve(),
+  meShoppingDelete: (id: string) =>
+    isTauri ? tauriInvoke<void>('me_shopping_delete', { id }) : Promise.resolve(),
+
+  // --- ME: Integraciones nativas ---
+  meIntegrationsList: () =>
+    isTauri ? tauriInvoke<MeIntegration[]>('me_integrations_list') : Promise.resolve([]),
+  meIntegrationsSave: (it: MeIntegration) =>
+    isTauri ? tauriInvoke<void>('me_integrations_save', { it }) : Promise.resolve(),
+  meIntegrationsDelete: (id: string) =>
+    isTauri ? tauriInvoke<void>('me_integrations_delete', { id }) : Promise.resolve(),
 };
 
 // ============================================================================

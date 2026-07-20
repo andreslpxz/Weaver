@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -26,6 +26,23 @@ import {
   Globe,
   FileCode,
   Download,
+  X,
+  EyeOff,
+  Maximize2,
+  ExternalLink,
+  Calendar,
+  ListTodo,
+  StickyNote,
+  Heart,
+  ShoppingCart,
+  Mail,
+  Cloud,
+  Map as MapIcon,
+  Home,
+  MessageSquare,
+  Puzzle,
+  Cog,
+  Sparkles,
 } from 'lucide-react';
 import { formatSize } from '@/lib/attachments';
 
@@ -65,6 +82,7 @@ function EmptyState() {
         <Suggestion text="Abre gedit y escribe 'Hola desde Weaver', luego guárdalo en ~/weaver-test.txt" />
         <Suggestion text="Busca en internet las últimas noticias de IA y haz un resumen" />
         <Suggestion text="Lee el archivo /etc/os-release y dime qué distro es" />
+        <Suggestion text="En mi calendario ME, organiza mi fiesta el próximo sábado a las 8pm" />
       </div>
     </div>
   );
@@ -205,141 +223,218 @@ function MessageBubble({ msg }: { msg: Message }) {
   );
 }
 
-/**
- * Renderiza el contenido de un mensaje del asistente.
- *
- * Detecta los patrones `[tool <name>: <label>]` y `[result <name>: <text>]`
- * que inserta el bucle de tools, y los renderiza como bloques visuales con
- * iconos SVG (lupa para web_search, terminal para shell_exec, etc.) en
- * lugar de texto plano.
- *
- * El resto del contenido se renderiza con ReactMarkdown + syntax highlighting.
- */
+// ============================================================================
+// Renderizado de contenido con cápsulas acordeón + mini-ventanas
+// ============================================================================
+//
+// Patrones reconocidos dentro del contenido de un mensaje del asistente:
+//
+// 1. [tool <name>: <label>]
+//    Cápsula inicial. Crea el header colapsable. El resultado se mostrará
+//    dentro cuando llegue el patrón [result <name>: ...] siguiente.
+//
+// 2. [result <name>: <text>]
+//    Resultado de la herramienta. Se acopla a la última cápsula del mismo
+//    tool name dentro del mismo mensaje.
+//
+// 3. [file:<filename>:<sizeBytes>:<pathOrLabel>]
+//    Botón de descarga de archivo generado.
+//
+// 4. [render:<type>:<id>:<title>]
+//    Marca el inicio de una mini-ventana que renderiza contenido embebido.
+//    El contenido viene después, en bloques [render-content:<id>:<contentType>]
+//    ... contenido ... [/render-content]
+//    type ∈ {html, pdf, docx, xlsx, md}
+//
+// 5. [app:<appId>:<label>]
+//    Muestra el logo de la app con la que el agente está interactuando.
+//    appId ∈ {firefox, chrome, vscode, gedit, terminal, libreoffice, ...}
+//
+// ============================================================================
+
+interface CapsuleGroup {
+  toolName: string;
+  label: string;
+  appId?: string;
+  resultText?: string;
+  capsuleId: string; // id único para tracking de hide
+}
+
+interface RenderWindow {
+  id: string;
+  type: 'html' | 'pdf' | 'docx' | 'xlsx' | 'md';
+  title: string;
+  content: string;
+  capsuleId: string;
+}
+
+interface ParsedSegment {
+  kind: 'text' | 'capsule' | 'file' | 'render' | 'app';
+  text?: string;
+  capsule?: CapsuleGroup;
+  file?: { filename: string; sizeBytes: number; pathOrLabel: string };
+  render?: RenderWindow;
+  app?: { appId: string; label: string };
+}
+
+function parseMessageContent(content: string): ParsedSegment[] {
+  const segments: ParsedSegment[] = [];
+  // Regex que captura: tool, result, file, render-open, render-close, render-content-open, render-content-close, app
+  const pattern = /(\[tool \w+: [^\]]+\]|\[result \w+: [\s\S]*?\]|\[file:[^\]]+\]|\[render:[a-z]+:[a-f0-9-]+:[^\]]+\]|\[render-content:[a-f0-9-]+:[a-z+]+\]|\[\/render-content\]|\[app:\w+:[^\]]+\])/g;
+  const parts = content.split(pattern).filter((p) => p !== undefined && p !== '');
+
+  const pendingCapsules: CapsuleGroup[] = [];
+  const openRenders: Map<string, { type: RenderWindow['type']; title: string; capsuleId: string; contentType: string }> = new Map();
+  const renderContents: Map<string, string> = new Map();
+  let currentRenderContentId: string | null = null;
+  let currentRenderContentBuf = '';
+
+  for (const part of parts) {
+    // tool
+    const toolMatch = part.match(/^\[tool (\w+): (.+)\]$/);
+    if (toolMatch) {
+      const capsuleId = `cap-${pendingCapsules.length}-${Math.random().toString(36).slice(2, 8)}`;
+      // Si hay un [app:...] precedente sin capsule, lo absorbemos
+      const lastSeg = segments[segments.length - 1];
+      const appId = lastSeg?.app?.appId;
+      const label = lastSeg?.app?.label;
+      if (lastSeg?.kind === 'app') segments.pop();
+      const capsule: CapsuleGroup = {
+        toolName: toolMatch[1],
+        label: toolMatch[2],
+        appId: appId,
+        capsuleId,
+      };
+      pendingCapsules.push(capsule);
+      segments.push({ kind: 'capsule', capsule });
+      continue;
+    }
+
+    // result — se acopla a la última capsule con el mismo tool name
+    const resultMatch = part.match(/^\[result (\w+): ([\s\S]*)\]$/);
+    if (resultMatch) {
+      const toolName = resultMatch[1];
+      const text = resultMatch[2];
+      // Buscar la última capsule pendiente con ese toolName
+      for (let i = pendingCapsules.length - 1; i >= 0; i--) {
+        if (pendingCapsules[i].toolName === toolName && !pendingCapsules[i].resultText) {
+          pendingCapsules[i].resultText = text;
+          break;
+        }
+      }
+      // El segmento capsule ya se añadió; se actualizará su contenido al renderizar
+      continue;
+    }
+
+    // file
+    const fileMatch = part.match(/^\[file:([^:]+):(\d+):([^\]]+)\]$/);
+    if (fileMatch) {
+      segments.push({
+        kind: 'file',
+        file: { filename: fileMatch[1], sizeBytes: parseInt(fileMatch[2], 10), pathOrLabel: fileMatch[3] },
+      });
+      continue;
+    }
+
+    // app
+    const appMatch = part.match(/^\[app:(\w+):([^\]]+)\]$/);
+    if (appMatch) {
+      segments.push({ kind: 'app', app: { appId: appMatch[1], label: appMatch[2] } });
+      continue;
+    }
+
+    // render-open
+    const renderOpenMatch = part.match(/^\[render:(html|pdf|docx|xlsx|md):([a-f0-9-]+):([^\]]+)\]$/);
+    if (renderOpenMatch) {
+      openRenders.set(renderOpenMatch[2], {
+        type: renderOpenMatch[1] as RenderWindow['type'],
+        title: renderOpenMatch[3],
+        capsuleId: `rw-${renderOpenMatch[2]}`,
+        contentType: '',
+      });
+      continue;
+    }
+
+    // render-content-open
+    const rcOpenMatch = part.match(/^\[render-content:([a-f0-9-]+):([a-z+]+)\]$/);
+    if (rcOpenMatch) {
+      currentRenderContentId = rcOpenMatch[1];
+      currentRenderContentBuf = '';
+      continue;
+    }
+
+    // render-content-close
+    if (part === '[/render-content]') {
+      if (currentRenderContentId) {
+        renderContents.set(currentRenderContentId, currentRenderContentBuf.trim());
+        currentRenderContentId = null;
+        currentRenderContentBuf = '';
+      }
+      continue;
+    }
+
+    // Si estamos dentro de un render-content, acumular
+    if (currentRenderContentId !== null) {
+      currentRenderContentBuf += part;
+      continue;
+    }
+
+    // Texto normal
+    if (part.trim()) {
+      segments.push({ kind: 'text', text: part });
+    }
+  }
+
+  // Construir segmentos de render a partir de openRenders + renderContents
+  for (const [id, info] of openRenders.entries()) {
+    const content = renderContents.get(id) ?? '';
+    segments.push({
+      kind: 'render',
+      render: {
+        id, type: info.type, title: info.title, content, capsuleId: info.capsuleId,
+      },
+    });
+  }
+
+  return segments;
+}
+
 function MessageContent({ content }: { content: string }) {
-  // Split por los patrones [tool ...], [result ...] y [file:...]
-  const parts = content.split(/(\[(?:tool|result) [^\]]+\]|\[file:[^\]]+\])/g);
+  const segments = useMemoParse(content);
+  const hiddenCapsules = useWeaver((s) => s.hiddenCapsules);
 
   return (
     <>
-      {parts.map((part, i) => {
-        const toolMatch = part.match(/^\[tool (\w+): (.+)\]$/);
-        const resultMatch = part.match(/^\[result (\w+): (.+)\]$/);
-        const fileMatch = part.match(/^\[file:([^:]+):(\d+):([^\]]+)\]$/);
-
-        if (toolMatch) {
-          const toolName = toolMatch[1];
-          const label = toolMatch[2];
-          const icon = getToolIcon(toolName);
-          const color = getToolColor(toolName);
-          return (
-            <div
-              key={i}
-              className="flex items-center gap-2 my-2 px-3 py-1.5 rounded-codex bg-app-elevated border border-border text-xs"
-            >
-              <span style={{ color }} className="flex-shrink-0">
-                {icon}
-              </span>
-              <span className="text-text-secondary font-medium">{toolName}</span>
-              <span className="text-text-muted truncate">{label}</span>
-            </div>
-          );
+      {segments.map((seg, i) => {
+        if (seg.kind === 'text' && seg.text) {
+          return <MarkdownText key={i} text={seg.text} />;
         }
-
-        if (fileMatch) {
-          const filename = fileMatch[1];
-          const sizeBytes = parseInt(fileMatch[2], 10);
-          const pathOrLabel = fileMatch[3];
+        if (seg.kind === 'file' && seg.file) {
           return (
             <FileDownloadBlock
               key={i}
-              filename={filename}
-              sizeBytes={sizeBytes}
-              pathOrLabel={pathOrLabel}
+              filename={seg.file.filename}
+              sizeBytes={seg.file.sizeBytes}
+              pathOrLabel={seg.file.pathOrLabel}
             />
           );
         }
-
-        if (resultMatch) {
-          const toolName = resultMatch[1];
-          const text = resultMatch[2];
-          const icon = getToolIcon(toolName);
-          const color = getToolColor(toolName);
+        if (seg.kind === 'app' && seg.app) {
+          // Este segmento se absorbe en la siguiente capsule; si llega aquí, mostrarlo inline.
           return (
-            <div
-              key={i}
-              className="my-2 px-3 py-2 rounded-codex bg-app-bg border border-border text-xs"
-            >
-              <div className="flex items-center gap-1.5 mb-1 text-text-muted">
-                <span style={{ color }} className="flex-shrink-0">
-                  {icon}
-                </span>
-                <span className="font-medium">resultado de {toolName}</span>
-              </div>
-              <div className="text-text-muted whitespace-pre-wrap line-clamp-3">{text}</div>
+            <div key={i} className="inline-flex items-center gap-1.5 my-1 px-2 py-1 rounded-codex bg-app-elevated border border-border text-xs">
+              <AppLogo appId={seg.app.appId} size={14} />
+              <span className="text-text-secondary">{seg.app.label}</span>
             </div>
           );
         }
-
-        // Texto normal: renderizar con markdown.
-        if (part.trim()) {
-          return (
-            <ReactMarkdown
-              key={i}
-              remarkPlugins={[remarkGfm]}
-              components={{
-                code({ className, children, ...props }) {
-                  const match = /language-(\w+)/.exec(className || '');
-                  const isInline = !className;
-                  return !isInline && match ? (
-                    <SyntaxHighlighter
-                      language={match[1]}
-                      style={vscDarkPlus}
-                      customStyle={{
-                        background: 'var(--bg-app)',
-                        border: '1px solid var(--border)',
-                        borderRadius: '0.5rem',
-                        fontSize: '0.8125rem',
-                      }}
-                    >
-                      {String(children).replace(/\n$/, '')}
-                    </SyntaxHighlighter>
-                  ) : (
-                    <code
-                      className="px-1 py-0.5 rounded bg-app-elevated text-xs font-mono"
-                      {...props}
-                    >
-                      {children}
-                    </code>
-                  );
-                },
-                p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
-                ul: ({ children }) => <ul className="list-disc pl-5 mb-3 space-y-1">{children}</ul>,
-                ol: ({ children }) => <ol className="list-decimal pl-5 mb-3 space-y-1">{children}</ol>,
-                h1: ({ children }) => <h1 className="text-lg font-semibold mb-3 mt-4">{children}</h1>,
-                h2: ({ children }) => <h2 className="text-base font-semibold mb-2 mt-3">{children}</h2>,
-                h3: ({ children }) => <h3 className="text-sm font-semibold mb-2 mt-2">{children}</h3>,
-                a: ({ children, href }) => (
-                  <a href={href} target="_blank" rel="noreferrer" className="text-accent hover:underline">
-                    {children}
-                  </a>
-                ),
-                blockquote: ({ children }) => (
-                  <blockquote className="border-l-2 border-border-accent pl-3 text-text-secondary italic mb-3">
-                    {children}
-                  </blockquote>
-                ),
-                table: ({ children }) => (
-                  <div className="overflow-x-auto mb-3">
-                    <table className="border-collapse border border-border text-xs">{children}</table>
-                  </div>
-                ),
-                th: ({ children }) => <th className="border border-border p-2 bg-app-elevated">{children}</th>,
-                td: ({ children }) => <td className="border border-border p-2">{children}</td>,
-              }}
-            >
-              {part}
-            </ReactMarkdown>
-          );
+        if (seg.kind === 'capsule' && seg.capsule) {
+          if (hiddenCapsules.has(seg.capsule.capsuleId)) return null;
+          return <ToolCapsule key={i} capsule={seg.capsule} />;
+        }
+        if (seg.kind === 'render' && seg.render) {
+          if (hiddenCapsules.has(seg.render.capsuleId)) return null;
+          return <RenderWindowBlock key={i} rw={seg.render} />;
         }
         return null;
       })}
@@ -347,18 +442,370 @@ function MessageContent({ content }: { content: string }) {
   );
 }
 
+function useMemoParse(content: string): ParsedSegment[] {
+  // Sin memo: re-parsea cada render. El contenido crece incrementalmente,
+  // pero las cápsulas ya procesadas conservan su estado interno.
+  return parseMessageContent(content);
+}
+
+// ============================================================================
+// ToolCapsule — cápsula acordeón con bordes redondeados y logo de app
+// ============================================================================
+
+function ToolCapsule({ capsule }: { capsule: CapsuleGroup }) {
+  const [open, setOpen] = useState(false);
+  const hideCapsule = useWeaver((s) => s.hideCapsule);
+  const icon = getToolIcon(capsule.toolName);
+  const color = getToolColor(capsule.toolName);
+
+  return (
+    <div
+      className="my-2 rounded-codex border border-border bg-app-elevated overflow-hidden transition-shadow hover:shadow-sm"
+      style={{ borderRadius: '10px' }}
+    >
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-app-input/40 transition-colors"
+      >
+        {/* Chevron */}
+        <span className="text-text-muted shrink-0">
+          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        </span>
+
+        {/* Logo de la app si existe */}
+        {capsule.appId && (
+          <AppLogo appId={capsule.appId} size={16} />
+        )}
+
+        {/* Icono del tool */}
+        <span style={{ color }} className="shrink-0">
+          {icon}
+        </span>
+
+        {/* Nombre + label */}
+        <span className="font-medium text-text-secondary shrink-0">{capsule.toolName}</span>
+        <span className="text-text-muted truncate flex-1 text-left">{capsule.label}</span>
+
+        {/* Ocultar */}
+        <span
+          role="button"
+          tabIndex={0}
+          onClick={(e) => {
+            e.stopPropagation();
+            hideCapsule(capsule.capsuleId);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.stopPropagation();
+              hideCapsule(capsule.capsuleId);
+            }
+          }}
+          className="codex-icon-btn w-5 h-5 opacity-40 hover:opacity-100"
+          title="Ocultar cápsula"
+        >
+          <EyeOff size={11} />
+        </span>
+      </button>
+
+      {/* Resultado colapsable */}
+      {open && capsule.resultText && (
+        <div
+          className="px-3 py-2 text-xs whitespace-pre-wrap border-t border-border/60"
+          style={{
+            color: 'var(--text-secondary)',
+            opacity: 0.7,
+            background: 'var(--bg-app)',
+            fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+            maxHeight: '320px',
+            overflowY: 'auto',
+          }}
+        >
+          {capsule.resultText}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// AppLogo — logos SVG inline para apps y categorías de integraciones
+// ============================================================================
+
+const APP_LOGOS: Record<string, { bg: string; fg: string; icon: React.ReactNode }> = {
+  firefox: { bg: '#FF7139', fg: '#fff', icon: <Globe size={12} /> },
+  chrome: { bg: '#4285F4', fg: '#fff', icon: <Globe size={12} /> },
+  edge: { bg: '#0078D7', fg: '#fff', icon: <Globe size={12} /> },
+  safari: { bg: '#1E88E5', fg: '#fff', icon: <Globe size={12} /> },
+  vscode: { bg: '#007ACC', fg: '#fff', icon: <FileCode size={12} /> },
+  'vs-code': { bg: '#007ACC', fg: '#fff', icon: <FileCode size={12} /> },
+  gedit: { bg: '#5c6bc0', fg: '#fff', icon: <FileText size={12} /> },
+  terminal: { bg: '#1e1e1e', fg: '#4ade80', icon: <Terminal size={12} /> },
+  libreoffice: { bg: '#18A303', fg: '#fff', icon: <FileText size={12} /> },
+  thunderbird: { bg: '#0a61b8', fg: '#fff', icon: <Mail size={12} /> },
+  outlook: { bg: '#0078D4', fg: '#fff', icon: <Mail size={12} /> },
+  gmail: { bg: '#EA4335', fg: '#fff', icon: <Mail size={12} /> },
+  // MCP / integraciones nativas
+  mcp: { bg: '#7c3aed', fg: '#fff', icon: <Puzzle size={12} /> },
+  'google-calendar': { bg: '#4285F4', fg: '#fff', icon: <Calendar size={12} /> },
+  'apple-calendar': { bg: '#FF3B30', fg: '#fff', icon: <Calendar size={12} /> },
+  'outlook-calendar': { bg: '#0078D4', fg: '#fff', icon: <Calendar size={12} /> },
+  'google-drive': { bg: '#0F9D58', fg: '#fff', icon: <Cloud size={12} /> },
+  onedrive: { bg: '#0078D4', fg: '#fff', icon: <Cloud size={12} /> },
+  dropbox: { bg: '#0061FF', fg: '#fff', icon: <Cloud size={12} /> },
+  notion: { bg: '#000', fg: '#fff', icon: <StickyNote size={12} /> },
+  obsidian: { bg: '#7C3AED', fg: '#fff', icon: <StickyNote size={12} /> },
+  evernote: { bg: '#00A82D', fg: '#fff', icon: <StickyNote size={12} /> },
+  todoist: { bg: '#E44332', fg: '#fff', icon: <ListTodo size={12} /> },
+  ticktick: { bg: '#4772FA', fg: '#fff', icon: <ListTodo size={12} /> },
+  things: { bg: '#3A8AF1', fg: '#fff', icon: <ListTodo size={12} /> },
+  telegram: { bg: '#0088CC', fg: '#fff', icon: <MessageSquare size={12} /> },
+  whatsapp: { bg: '#25D366', fg: '#fff', icon: <MessageSquare size={12} /> },
+  slack: { bg: '#4A154B', fg: '#fff', icon: <MessageSquare size={12} /> },
+  'google-maps': { bg: '#34A853', fg: '#fff', icon: <MapIcon size={12} /> },
+  openstreetmap: { bg: '#7EBC6F', fg: '#fff', icon: <MapIcon size={12} /> },
+  'openweather': { bg: '#30A4E6', fg: '#fff', icon: <Cloud size={12} /> },
+  'home-assistant': { bg: '#18BCF2', fg: '#fff', icon: <Home size={12} /> },
+  'philips-hue': { bg: '#FFC65A', fg: '#000', icon: <Sparkles size={12} /> },
+  'google-home': { bg: '#4285F4', fg: '#fff', icon: <Home size={12} /> },
+  // ME itself
+  me: { bg: '#7aa67a', fg: '#fff', icon: <Calendar size={12} /> },
+};
+
+function AppLogo({ appId, size = 16 }: { appId: string; size?: number }) {
+  const logo = APP_LOGOS[appId.toLowerCase()];
+  if (logo) {
+    return (
+      <span
+        className="rounded-sm flex items-center justify-center shrink-0"
+        style={{ background: logo.bg, color: logo.fg, width: size, height: size }}
+        title={appId}
+      >
+        {logo.icon}
+      </span>
+    );
+  }
+  // Fallback: ícono genérico de herramienta
+  return (
+    <span
+      className="rounded-sm flex items-center justify-center shrink-0 bg-app-input text-text-muted"
+      style={{ width: size, height: size }}
+      title={appId}
+    >
+      <Cog size={size * 0.7} />
+    </span>
+  );
+}
+
+// ============================================================================
+// RenderWindowBlock — mini-ventana embebida para HTML/PDF/Word/Excel
+// ============================================================================
+
+function RenderWindowBlock({ rw }: { rw: RenderWindow }) {
+  const [hidden, setHidden] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [size, setSize] = useState<{ w: number; h: number }>({ w: 480, h: 320 });
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const [dragging, setDragging] = useState<{ dx: number; dy: number } | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const hideCapsule = useWeaver((s) => s.hideCapsule);
+
+  const onRefresh = useCallback(() => setRefreshKey((k) => k + 1), []);
+  const onClose = useCallback(() => setHidden(true), []);
+  const onOpenExternal = useCallback(() => {
+    // Crear blob y abrir
+    const mime = rw.type === 'html' ? 'text/html' : rw.type === 'pdf' ? 'application/pdf' : rw.type === 'md' ? 'text/markdown' : 'application/octet-stream';
+    const blob = new Blob([rw.content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }, [rw]);
+
+  if (hidden) return null;
+
+  // Construir src para iframe
+  const srcDoc = useMemo(() => {
+    if (rw.type === 'html') return rw.content;
+    if (rw.type === 'md') {
+      // Renderizar como markdown simple dentro de HTML
+      return `<!doctype html><html><body style="font-family: -apple-system, system-ui, sans-serif; padding: 1rem; line-height: 1.5;">${escapeHtml(rw.content).replace(/\n/g, '<br>')}</body></html>`;
+    }
+    return '';
+  }, [rw.content, rw.type]);
+
+  // PDF: blob URL
+  const pdfUrl = useMemo(() => {
+    if (rw.type !== 'pdf') return null;
+    const blob = new Blob([rw.content], { type: 'application/pdf' });
+    return URL.createObjectURL(blob);
+  }, [rw.content, rw.type, refreshKey]);
+
+  useEffect(() => {
+    return () => { if (pdfUrl) URL.revokeObjectURL(pdfUrl); };
+  }, [pdfUrl]);
+
+  useEffect(() => {
+    function onMouseMove(e: MouseEvent) {
+      if (!dragging) return;
+      setPos({ x: e.clientX - dragging.dx, y: e.clientY - dragging.dy });
+    }
+    function onMouseUp() { setDragging(null); }
+    if (dragging) {
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
+      return () => {
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+      };
+    }
+  }, [dragging]);
+
+  const style: React.CSSProperties = pos
+    ? { position: 'fixed', left: pos.x, top: pos.y, width: size.w, height: size.h, zIndex: 60 }
+    : { position: 'relative', width: size.w, height: size.h };
+
+  return (
+    <div
+      ref={containerRef}
+      className="my-3 rounded-codex border border-border-accent bg-app-bg overflow-hidden shadow-lg flex flex-col"
+      style={style}
+    >
+      {/* Title bar */}
+      <div
+        className="flex items-center gap-2 px-2 py-1.5 bg-app-elevated border-b border-border cursor-move select-none"
+        onMouseDown={(e) => {
+          const rect = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
+          setDragging({ dx: e.clientX - rect.left, dy: e.clientY - rect.top });
+          setPos({ x: rect.left, y: rect.top });
+        }}
+      >
+        <FileIcon size={12} className="text-accent shrink-0" />
+        <span className="text-xs font-medium truncate flex-1">{rw.title}</span>
+        <button onClick={onRefresh} className="codex-icon-btn w-5 h-5" title="Refrescar">
+          <RefreshCw size={10} />
+        </button>
+        <button onClick={onOpenExternal} className="codex-icon-btn w-5 h-5" title="Abrir externo">
+          <ExternalLink size={10} />
+        </button>
+        <button
+          onClick={() => { hideCapsule(rw.capsuleId); setHidden(true); }}
+          className="codex-icon-btn w-5 h-5"
+          title="Ocultar"
+        >
+          <EyeOff size={10} />
+        </button>
+        <button onClick={onClose} className="codex-icon-btn w-5 h-5" title="Cerrar">
+          <X size={10} />
+        </button>
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 overflow-hidden bg-white relative">
+        {rw.type === 'html' && (
+          <iframe
+            key={refreshKey}
+            srcDoc={srcDoc}
+            title={rw.title}
+            sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+            className="w-full h-full border-0"
+          />
+        )}
+        {rw.type === 'md' && (
+          <iframe
+            key={refreshKey}
+            srcDoc={srcDoc}
+            title={rw.title}
+            className="w-full h-full border-0"
+          />
+        )}
+        {rw.type === 'pdf' && pdfUrl && (
+          <iframe
+            key={refreshKey}
+            src={pdfUrl}
+            title={rw.title}
+            className="w-full h-full border-0"
+          />
+        )}
+        {rw.type === 'docx' && <DocxPreview key={refreshKey} content={rw.content} title={rw.title} />}
+        {rw.type === 'xlsx' && <XlsxPreview key={refreshKey} content={rw.content} title={rw.title} />}
+      </div>
+
+      {/* Resize handle */}
+      <div
+        className="absolute bottom-0 right-0 w-3 h-3 cursor-nwse-resize"
+        onMouseDown={(e) => {
+          e.stopPropagation();
+          const startX = e.clientX;
+          const startY = e.clientY;
+          const startW = size.w;
+          const startH = size.h;
+          function move(ev: MouseEvent) {
+            setSize({ w: Math.max(280, startW + (ev.clientX - startX)), h: Math.max(180, startH + (ev.clientY - startY)) });
+          }
+          function up() {
+            window.removeEventListener('mousemove', move);
+            window.removeEventListener('mouseup', up);
+          }
+          window.addEventListener('mousemove', move);
+          window.addEventListener('mouseup', up);
+        }}
+        style={{
+          backgroundImage: 'linear-gradient(135deg, transparent 50%, var(--text-muted) 50%, var(--text-muted) 60%, transparent 60%, transparent 70%, var(--text-muted) 70%, var(--text-muted) 80%, transparent 80%)',
+          opacity: 0.5,
+        }}
+      />
+    </div>
+  );
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c] ?? c));
+}
+
+// Previews simples para docx/xlsx: renderizan el contenido como texto estructurado.
+// (Sin dependencias pesadas de mammoth/SheetJS — el agente puede generar HTML directamente.)
+function DocxPreview({ content, title }: { content: string; title: string }) {
+  // Asumimos que el agente genera HTML válido cuando type=docx (más flexible que XML real).
+  return (
+    <iframe
+      srcDoc={content}
+      title={title}
+      sandbox="allow-same-origin"
+      className="w-full h-full border-0"
+    />
+  );
+}
+
+function XlsxPreview({ content, title }: { content: string; title: string }) {
+  // Asumimos CSV o HTML-tabla.
+  const isHtml = content.trim().startsWith('<');
+  if (isHtml) {
+    return <iframe srcDoc={content} title={title} className="w-full h-full border-0" />;
+  }
+  // CSV → tabla HTML simple
+  const rows = content.split('\n').filter((r) => r.trim()).map((r) => r.split(','));
+  return (
+    <div className="w-full h-full overflow-auto p-2 text-xs">
+      <table className="border-collapse">
+        <tbody>
+          {rows.map((cells, i) => (
+            <tr key={i}>
+              {cells.map((c, j) => (
+                <td key={j} className="border border-gray-300 px-2 py-0.5">{c}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ============================================================================
 // FileDownloadBlock — botón de descarga para archivos generados
 // ============================================================================
 
-/**
- * Renderiza un archivo generado por el agente como un botón de descarga.
- *
- * El formato es [file:filename:sizeBytes:pathOrLabel]
- * - filename: nombre del archivo (ej. "resumen.md")
- * - sizeBytes: tamaño en bytes
- * - pathOrLabel: en Tauri es la ruta donde se guardó, en navegador es un label legible (ej. "1.2 KB")
- */
 function FileDownloadBlock({
   filename,
   sizeBytes,
@@ -368,18 +815,14 @@ function FileDownloadBlock({
   sizeBytes: number;
   pathOrLabel: string;
 }) {
-  // Determinar si pathOrLabel es una ruta (Tauri) o un label (navegador).
   const isPath = pathOrLabel.startsWith('/') || pathOrLabel.includes('\\');
   const sizeLabel = formatFileSize(sizeBytes);
 
   return (
-    <div className="my-2 px-3 py-2.5 rounded-codex bg-app-elevated border border-border-accent flex items-center gap-3">
-      {/* Icono de archivo */}
+    <div className="my-2 px-3 py-2.5 rounded-codex bg-app-elevated border border-border-accent flex items-center gap-3" style={{ borderRadius: '10px' }}>
       <div className="flex-shrink-0 w-9 h-9 rounded-codex bg-accent/15 flex items-center justify-center">
         <Download size={16} className="text-accent" />
       </div>
-
-      {/* Info del archivo */}
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium text-text-primary truncate">{filename}</div>
         <div className="text-xs text-text-muted truncate">
@@ -387,14 +830,9 @@ function FileDownloadBlock({
           {isPath && <span className="ml-1">· {pathOrLabel}</span>}
         </div>
       </div>
-
-      {/* Botón de descarga (solo en navegador; en Tauri ya se guardó) */}
       {!isPath && (
         <button
-          onClick={() => {
-            // En navegador, el archivo ya se descargó automáticamente.
-            // Este botón es feedback visual.
-          }}
+          onClick={() => { /* en navegador ya se descargó */ }}
           className="flex-shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-codex bg-accent text-bg-app text-xs font-medium hover:bg-accent-strong transition-colors"
           title="Archivo descargado"
         >
@@ -410,14 +848,12 @@ function FileDownloadBlock({
   );
 }
 
-/** Formatea bytes a string legible. */
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** Devuelve el icono SVG (lucide-react) correspondiente al tool. */
 function getToolIcon(toolName: string) {
   const size = 14;
   switch (toolName) {
@@ -433,16 +869,29 @@ function getToolIcon(toolName: string) {
       return <FileCode size={size} />;
     case 'file_list':
       return <FileText size={size} />;
+    case 'me_create_event':
+    case 'me_list_events':
+    case 'me_update_event':
+    case 'me_delete_event':
+      return <Calendar size={size} />;
+    case 'me_create_task':
+    case 'me_list_tasks':
+    case 'me_complete_task':
+      return <ListTodo size={size} />;
+    case 'me_create_note':
+      return <StickyNote size={size} />;
+    case 'me_add_shopping':
+      return <ShoppingCart size={size} />;
+    case 'me_log_health':
+      return <Heart size={size} />;
     default:
       return <Download size={size} />;
   }
 }
 
-/** Devuelve el color CSS para el icono del tool. */
 function getToolColor(toolName: string): string {
   switch (toolName) {
     case 'web_search':
-      return 'var(--accent)';
     case 'web_fetch':
       return 'var(--accent)';
     case 'shell_exec':
@@ -451,9 +900,81 @@ function getToolColor(toolName: string): string {
     case 'file_write':
     case 'file_list':
       return 'var(--warning, #fbbf24)';
+    case 'me_create_event':
+    case 'me_list_events':
+    case 'me_update_event':
+    case 'me_delete_event':
+      return '#7aa67a';
+    case 'me_create_task':
+    case 'me_list_tasks':
+    case 'me_complete_task':
+      return '#6b8cff';
+    case 'me_create_note':
+      return '#c084fc';
+    case 'me_add_shopping':
+      return '#f59e0b';
+    case 'me_log_health':
+      return '#ef4444';
     default:
       return 'var(--text-muted)';
   }
+}
+
+function MarkdownText({ text }: { text: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        code({ className, children, ...props }) {
+          const match = /language-(\w+)/.exec(className || '');
+          const isInline = !className;
+          return !isInline && match ? (
+            <SyntaxHighlighter
+              language={match[1]}
+              style={vscDarkPlus}
+              customStyle={{
+                background: 'var(--bg-app)',
+                border: '1px solid var(--border)',
+                borderRadius: '0.5rem',
+                fontSize: '0.8125rem',
+              }}
+            >
+              {String(children).replace(/\n$/, '')}
+            </SyntaxHighlighter>
+          ) : (
+            <code className="px-1 py-0.5 rounded bg-app-elevated text-xs font-mono" {...props}>
+              {children}
+            </code>
+          );
+        },
+        p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
+        ul: ({ children }) => <ul className="list-disc pl-5 mb-3 space-y-1">{children}</ul>,
+        ol: ({ children }) => <ol className="list-decimal pl-5 mb-3 space-y-1">{children}</ol>,
+        h1: ({ children }) => <h1 className="text-lg font-semibold mb-3 mt-4">{children}</h1>,
+        h2: ({ children }) => <h2 className="text-base font-semibold mb-2 mt-3">{children}</h2>,
+        h3: ({ children }) => <h3 className="text-sm font-semibold mb-2 mt-2">{children}</h3>,
+        a: ({ children, href }) => (
+          <a href={href} target="_blank" rel="noreferrer" className="text-accent hover:underline">
+            {children}
+          </a>
+        ),
+        blockquote: ({ children }) => (
+          <blockquote className="border-l-2 border-border-accent pl-3 text-text-secondary italic mb-3">
+            {children}
+          </blockquote>
+        ),
+        table: ({ children }) => (
+          <div className="overflow-x-auto mb-3">
+            <table className="border-collapse border border-border text-xs">{children}</table>
+          </div>
+        ),
+        th: ({ children }) => <th className="border border-border p-2 bg-app-elevated">{children}</th>,
+        td: ({ children }) => <td className="border border-border p-2">{children}</td>,
+      }}
+    >
+      {text}
+    </ReactMarkdown>
+  );
 }
 
 function PlanCard({ plan }: { plan: { subtasks: Subtask[] } }) {

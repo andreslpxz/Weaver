@@ -24,7 +24,7 @@ import { mcpClient, listPresets, type McpServer, type ToolApproval } from '@/mcp
 import { type McpPreset } from '@/mcp/presets';
 import { skillsRegistry, type Skill } from '@/skills/registry';
 import { skillsInstaller } from '@/skills/installer';
-import { Badge, Button } from '@/components/common/Button';
+import { Badge, Button, cn } from '@/components/common/Button';
 import { runtime } from '@/lib/tauri';
 import { THEMES, type ThemeId } from '@/lib/themes';
 import { useWeaver } from '@/store/weaver';
@@ -205,6 +205,412 @@ export function ComplementosView() {
             Para servidores MCP no incluidos en el catálogo de arriba.
           </p>
         </section>
+
+        {/* Integraciones nativas (no MCP) — separadas por diseño */}
+        <NativeIntegrationsSection />
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// NativeIntegrationsSection — integraciones directas (IMAP/SMTP, Calendarios PC,
+// Nube, Tareas externas, Notas externas, Mensajería, Clima, Mapas, Smart Home)
+// Estas NO son MCP: son conexiones nativas gestionadas por ME.
+// ============================================================================
+
+interface NativeIntegrationDef {
+  id: string;
+  kind: string;
+  label: string;
+  description: string;
+  icon: React.ReactNode;
+  color: string;
+  fields: Array<{ key: string; label: string; type?: 'text' | 'password'; placeholder?: string }>;
+  docsUrl?: string;
+}
+
+const NATIVE_INTEGRATIONS: NativeIntegrationDef[] = [
+  // Correo
+  {
+    id: 'email-imap',
+    kind: 'email',
+    label: 'Correo (IMAP/SMTP)',
+    description: 'Conecta tu cuenta de correo para enviar y recibir mensajes directamente desde Weaver.',
+    icon: <span style={{ background: '#0a61b8', color: '#fff', width: 20, height: 20, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>@</span>,
+    color: '#0a61b8',
+    fields: [
+      { key: 'host', label: 'Servidor IMAP', placeholder: 'imap.gmail.com' },
+      { key: 'smtp_host', label: 'Servidor SMTP', placeholder: 'smtp.gmail.com' },
+      { key: 'username', label: 'Usuario', placeholder: 'tu@correo.com' },
+      { key: 'password', label: 'Contraseña / App password', type: 'password' },
+    ],
+    docsUrl: 'https://support.google.com/mail/answer/185833',
+  },
+  // Calendarios PC
+  {
+    id: 'google-calendar',
+    kind: 'calendar-pc',
+    label: 'Google Calendar',
+    description: 'Sincroniza eventos con tu Google Calendar. El agente puede preguntar "¿PC o aquí?" y editar el de tu PC.',
+    icon: <span style={{ background: '#4285F4', color: '#fff', width: 20, height: 20, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>Cal</span>,
+    color: '#4285F4',
+    fields: [
+      { key: 'client_id', label: 'OAuth Client ID', placeholder: 'xxxxx.apps.googleusercontent.com' },
+      { key: 'client_secret', label: 'OAuth Client Secret', type: 'password' },
+      { key: 'calendar_id', label: 'Calendar ID', placeholder: 'primary' },
+    ],
+    docsUrl: 'https://developers.google.com/calendar/api/guides/overview',
+  },
+  {
+    id: 'outlook-calendar',
+    kind: 'calendar-pc',
+    label: 'Outlook Calendar',
+    description: 'Sincroniza con tu calendario de Outlook/Microsoft 365.',
+    icon: <span style={{ background: '#0078D4', color: '#fff', width: 20, height: 20, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>Out</span>,
+    color: '#0078D4',
+    fields: [
+      { key: 'client_id', label: 'Application (client) ID' },
+      { key: 'client_secret', label: 'Client secret', type: 'password' },
+      { key: 'tenant_id', label: 'Directory (tenant) ID' },
+    ],
+    docsUrl: 'https://learn.microsoft.com/graph/outlook-calendar-concept-overview',
+  },
+  {
+    id: 'apple-calendar',
+    kind: 'calendar-pc',
+    label: 'Apple Calendar',
+    description: 'Calendario de macOS via EventKit (solo en macOS).',
+    icon: <span style={{ background: '#FF3B30', color: '#fff', width: 20, height: 20, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}></span>,
+    color: '#FF3B30',
+    fields: [],
+    docsUrl: 'https://developer.apple.com/documentation/eventkit',
+  },
+  // Nube
+  {
+    id: 'google-drive',
+    kind: 'cloud',
+    label: 'Google Drive',
+    description: 'Acceso a tus archivos de Drive.',
+    icon: <span style={{ background: '#0F9D58', color: '#fff', width: 20, height: 20, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>D</span>,
+    color: '#0F9D58',
+    fields: [
+      { key: 'client_id', label: 'OAuth Client ID' },
+      { key: 'client_secret', label: 'Client Secret', type: 'password' },
+    ],
+  },
+  {
+    id: 'onedrive',
+    kind: 'cloud',
+    label: 'OneDrive',
+    description: 'Acceso a tus archivos de OneDrive.',
+    icon: <span style={{ background: '#0078D4', color: '#fff', width: 20, height: 20, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>OD</span>,
+    color: '#0078D4',
+    fields: [{ key: 'client_id', label: 'Application ID' }, { key: 'client_secret', label: 'Client secret', type: 'password' }],
+  },
+  {
+    id: 'dropbox',
+    kind: 'cloud',
+    label: 'Dropbox',
+    description: 'Acceso a tus archivos de Dropbox.',
+    icon: <span style={{ background: '#0061FF', color: '#fff', width: 20, height: 20, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>Db</span>,
+    color: '#0061FF',
+    fields: [{ key: 'access_token', label: 'Access token', type: 'password' }],
+  },
+  // Tareas externas
+  {
+    id: 'todoist',
+    kind: 'tasks',
+    label: 'Todoist',
+    description: 'Sincroniza tareas con tu cuenta Todoist.',
+    icon: <span style={{ background: '#E44332', color: '#fff', width: 20, height: 20, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>T</span>,
+    color: '#E44332',
+    fields: [{ key: 'api_token', label: 'API token', type: 'password' }],
+  },
+  {
+    id: 'ticktick',
+    kind: 'tasks',
+    label: 'TickTick',
+    description: 'Sincroniza tareas con TickTick.',
+    icon: <span style={{ background: '#4772FA', color: '#fff', width: 20, height: 20, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>Tt</span>,
+    color: '#4772FA',
+    fields: [{ key: 'access_token', label: 'Access token', type: 'password' }],
+  },
+  // Notas externas
+  {
+    id: 'notion',
+    kind: 'notes',
+    label: 'Notion',
+    description: 'Acceso a tus bases de datos y páginas de Notion.',
+    icon: <span style={{ background: '#000', color: '#fff', width: 20, height: 20, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>N</span>,
+    color: '#000',
+    fields: [{ key: 'token', label: 'Integration token', type: 'password' }],
+  },
+  {
+    id: 'obsidian',
+    kind: 'notes',
+    label: 'Obsidian',
+    description: 'Lee y escribe notas en tu bóveda de Obsidian (vía ruta local).',
+    icon: <span style={{ background: '#7C3AED', color: '#fff', width: 20, height: 20, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>Ob</span>,
+    color: '#7C3AED',
+    fields: [{ key: 'vault_path', label: 'Ruta a la bóveda', placeholder: '/home/user/Documents/MiVault' }],
+  },
+  // Mensajería
+  {
+    id: 'telegram',
+    kind: 'messaging',
+    label: 'Telegram',
+    description: 'Envía mensajes vía Telegram Bot API.',
+    icon: <span style={{ background: '#0088CC', color: '#fff', width: 20, height: 20, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>Tg</span>,
+    color: '#0088CC',
+    fields: [
+      { key: 'bot_token', label: 'Bot token', type: 'password' },
+      { key: 'chat_id', label: 'Chat ID destino' },
+    ],
+  },
+  {
+    id: 'whatsapp',
+    kind: 'messaging',
+    label: 'WhatsApp (Twilio)',
+    description: 'Envía mensajes por WhatsApp Business API vía Twilio.',
+    icon: <span style={{ background: '#25D366', color: '#fff', width: 20, height: 20, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>Wa</span>,
+    color: '#25D366',
+    fields: [
+      { key: 'account_sid', label: 'Account SID' },
+      { key: 'auth_token', label: 'Auth token', type: 'password' },
+      { key: 'from', label: 'Número remitente (Twilio)' },
+    ],
+  },
+  {
+    id: 'slack',
+    kind: 'messaging',
+    label: 'Slack',
+    description: 'Publica mensajes en canales de Slack.',
+    icon: <span style={{ background: '#4A154B', color: '#fff', width: 20, height: 20, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>Sl</span>,
+    color: '#4A154B',
+    fields: [
+      { key: 'bot_token', label: 'Bot User OAuth token (xoxb-)', type: 'password' },
+      { key: 'channel', label: 'Canal (#general)' },
+    ],
+  },
+  // Clima (no MCP)
+  {
+    id: 'openweather',
+    kind: 'weather',
+    label: 'OpenWeather',
+    description: 'Datos meteorológicos extendidos (ya integrado en ME > Clima con Open-Meteo; esta opción permite usar OpenWeather si prefieres esa API).',
+    icon: <span style={{ background: '#30A4E6', color: '#fff', width: 20, height: 20, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>W</span>,
+    color: '#30A4E6',
+    fields: [{ key: 'api_key', label: 'API key', type: 'password' }],
+  },
+  // Mapas
+  {
+    id: 'google-maps',
+    kind: 'maps',
+    label: 'Google Maps',
+    description: 'Rutas, lugares y direcciones.',
+    icon: <span style={{ background: '#34A853', color: '#fff', width: 20, height: 20, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>M</span>,
+    color: '#34A853',
+    fields: [{ key: 'api_key', label: 'API key', type: 'password' }],
+  },
+  {
+    id: 'openstreetmap',
+    kind: 'maps',
+    label: 'OpenStreetMap',
+    description: 'Geocoding y rutas vía OSRM / Nominatim (gratis, sin API key).',
+    icon: <span style={{ background: '#7EBC6F', color: '#fff', width: 20, height: 20, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>OSM</span>,
+    color: '#7EBC6F',
+    fields: [],
+  },
+  // Smart home
+  {
+    id: 'home-assistant',
+    kind: 'smart-home',
+    label: 'Home Assistant',
+    description: 'Controla luces, sensores y dispositivos de tu casa.',
+    icon: <span style={{ background: '#18BCF2', color: '#fff', width: 20, height: 20, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>HA</span>,
+    color: '#18BCF2',
+    fields: [
+      { key: 'base_url', label: 'URL base', placeholder: 'http://homeassistant.local:8123' },
+      { key: 'token', label: 'Long-Lived Access Token', type: 'password' },
+    ],
+  },
+  {
+    id: 'philips-hue',
+    kind: 'smart-home',
+    label: 'Philips Hue',
+    description: 'Controla tus bombillas Hue.',
+    icon: <span style={{ background: '#FFC65A', color: '#000', width: 20, height: 20, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>H</span>,
+    color: '#FFC65A',
+    fields: [
+      { key: 'bridge_ip', label: 'IP del bridge' },
+      { key: 'username', label: 'Username (Hue API)', type: 'password' },
+    ],
+  },
+];
+
+const NATIVE_CATEGORIES: Array<{ id: string; label: string }> = [
+  { id: 'email', label: 'Correo' },
+  { id: 'calendar-pc', label: 'Calendarios PC' },
+  { id: 'cloud', label: 'Nube' },
+  { id: 'tasks', label: 'Tareas externas' },
+  { id: 'notes', label: 'Notas externas' },
+  { id: 'messaging', label: 'Mensajería' },
+  { id: 'weather', label: 'Clima' },
+  { id: 'maps', label: 'Mapas' },
+  { id: 'smart-home', label: 'Smart Home' },
+];
+
+function NativeIntegrationsSection() {
+  const { meIntegrations, upsertMeIntegration, deleteMeIntegration, loadMeIntegrations } = useWeaver();
+  const [openConfig, setOpenConfig] = useState<string | null>(null);
+
+  useEffect(() => {
+    loadMeIntegrations();
+  }, [loadMeIntegrations]);
+
+  function isEnabled(defId: string): boolean {
+    return meIntegrations.some((i) => i.id === defId && i.enabled);
+  }
+  function getConfig(defId: string): Record<string, string> {
+    const it = meIntegrations.find((i) => i.id === defId);
+    if (!it) return {};
+    try { return JSON.parse(it.config_json); } catch { return {}; }
+  }
+  async function toggle(def: NativeIntegrationDef) {
+    const existing = meIntegrations.find((i) => i.id === def.id);
+    if (existing && existing.enabled) {
+      await upsertMeIntegration({ ...existing, enabled: false });
+    } else {
+      await upsertMeIntegration({
+        id: def.id,
+        kind: def.kind,
+        label: def.label,
+        config_json: existing?.config_json ?? '{}',
+        enabled: true,
+        created_at: existing?.created_at ?? Date.now(),
+      });
+    }
+  }
+  async function saveConfig(def: NativeIntegrationDef, config: Record<string, string>) {
+    const existing = meIntegrations.find((i) => i.id === def.id);
+    await upsertMeIntegration({
+      id: def.id,
+      kind: def.kind,
+      label: def.label,
+      config_json: JSON.stringify(config),
+      enabled: existing?.enabled ?? false,
+      created_at: existing?.created_at ?? Date.now(),
+    });
+    setOpenConfig(null);
+  }
+
+  return (
+    <section className="mt-10 border-t border-border pt-6">
+      <div className="mb-4">
+        <h2 className="text-sm font-semibold mb-1 flex items-center gap-2">
+          <span className="text-accent">⚡</span> Integraciones nativas
+        </h2>
+        <p className="text-xs text-text-muted">
+          Conexiones directas (no MCP) con servicios externos. El agente puede usar estas integraciones
+          cuando le pidas cosas como "envía un correo", "enciende las luces", "¿cómo llego a…?" o "organiza mi calendario de la PC".
+        </p>
+      </div>
+
+      {NATIVE_CATEGORIES.map((cat) => {
+        const defs = NATIVE_INTEGRATIONS.filter((d) => d.kind === cat.id);
+        if (defs.length === 0) return null;
+        return (
+          <div key={cat.id} className="mb-5">
+            <div className="text-[10px] uppercase text-text-muted mb-1.5 px-1">{cat.label}</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {defs.map((def) => {
+                const enabled = isEnabled(def.id);
+                const config = getConfig(def.id);
+                return (
+                  <div key={def.id} className={cn('codex-card p-3 flex items-start gap-2.5', enabled && 'border-accent')}>
+                    <div className="shrink-0 mt-0.5">{def.icon}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-sm truncate">{def.label}</span>
+                        {enabled && <Badge color="success">activa</Badge>}
+                      </div>
+                      <p className="text-xs text-text-muted mt-0.5 line-clamp-2">{def.description}</p>
+                      {def.fields.length > 0 && (
+                        <button
+                          onClick={() => setOpenConfig(openConfig === def.id ? null : def.id)}
+                          className="text-[10px] text-accent hover:underline mt-1"
+                        >
+                          {openConfig === def.id ? 'Ocultar' : 'Configurar'}
+                        </button>
+                      )}
+                      {openConfig === def.id && def.fields.length > 0 && (
+                        <ConfigForm
+                          def={def}
+                          initial={config}
+                          onSave={saveConfig}
+                          onCancel={() => setOpenConfig(null)}
+                        />
+                      )}
+                    </div>
+                    <button
+                      onClick={() => toggle(def)}
+                      className={cn(
+                        'shrink-0 text-xs px-2 py-1 rounded-codex border transition-colors',
+                        enabled
+                          ? 'border-success text-success hover:bg-success/10'
+                          : 'border-border text-text-secondary hover:border-accent hover:text-accent',
+                      )}
+                    >
+                      {enabled ? 'Activada' : 'Activar'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
+function ConfigForm({
+  def, initial, onSave, onCancel,
+}: {
+  def: NativeIntegrationDef;
+  initial: Record<string, string>;
+  onSave: (def: NativeIntegrationDef, config: Record<string, string>) => void;
+  onCancel: () => void;
+}) {
+  const [values, setValues] = useState<Record<string, string>>(initial);
+  return (
+    <div className="mt-2 space-y-1.5 p-2 rounded-codex bg-app-input/40 border border-border">
+      {def.fields.map((f) => (
+        <div key={f.key}>
+          <label className="text-[10px] uppercase text-text-muted">{f.label}</label>
+          <input
+            type={f.type ?? 'text'}
+            value={values[f.key] ?? ''}
+            onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}
+            placeholder={f.placeholder}
+            className="codex-input w-full px-2 py-1 text-xs"
+          />
+        </div>
+      ))}
+      <div className="flex gap-1 pt-1">
+        <Button variant="primary" onClick={() => onSave(def, values)}>Guardar</Button>
+        <Button variant="ghost" onClick={onCancel}>Cancelar</Button>
+        {def.docsUrl && (
+          <a
+            href={def.docsUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="text-[10px] text-accent hover:underline ml-auto self-center"
+          >
+            Documentación ↗
+          </a>
+        )}
       </div>
     </div>
   );

@@ -13,6 +13,7 @@ import {
   Folder,
   FolderPlus,
   MoreHorizontal,
+  CalendarDays,
 } from 'lucide-react';
 import { useWeaver, type ViewId } from '@/store/weaver';
 import { cn } from '@/components/common/Button';
@@ -35,6 +36,7 @@ const SECTIONS: { title: string; items: SidebarItem[] }[] = [
   {
     title: 'Workspace',
     items: [
+      { id: 'me', label: 'ME', icon: <CalendarDays size={14} /> },
       { id: 'complementos', label: 'Complementos', icon: <Puzzle size={14} /> },
       { id: 'automatizaciones', label: 'Automatizaciones', icon: <Sparkles size={14} /> },
     ],
@@ -84,6 +86,9 @@ export function Sidebar() {
         </button>
         <button onClick={() => newConversation()} className="codex-icon-btn" title="Nuevo chat">
           <Plus size={16} />
+        </button>
+        <button onClick={() => setView('me')} className="codex-icon-btn" title="ME">
+          <CalendarDays size={16} />
         </button>
         <button onClick={() => setView('complementos')} className="codex-icon-btn" title="Complementos">
           <Puzzle size={16} />

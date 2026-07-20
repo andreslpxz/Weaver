@@ -101,10 +101,104 @@ export const ADVANCED_TOOLS: ToolDef[] = [
       mime_type: { type: 'string', description: 'Tipo MIME opcional (ej. "text/markdown", "application/json")' },
     },
   },
+  // ===================== ME: Calendario y vida =====================
+  {
+    name: 'me_create_event',
+    description:
+      'Crea un evento en el calendario ME (la sección personal de Weaver). ' +
+      'Antes de usar esta tool, si el usuario no especificó "calendario de aquí" o "calendario ME", ' +
+      'pregunta: "¿Quieres que lo agregue al calendario ME (aquí) o al calendario de tu PC (Google Calendar, Outlook, Apple Calendar)?" ' +
+      'Si responde "ME" o "aquí", usa esta tool. Si responde "PC", pídele que configure la integración en ME > Complementos > Integraciones nativas.',
+    category: 'fs',
+    parameters: {
+      title: { type: 'string', description: 'Título del evento' },
+      start_ts: { type: 'number', description: 'Timestamp en milisegundos (epoch) del inicio' },
+      end_ts: { type: 'number', description: 'Timestamp en milisegundos (epoch) del fin' },
+      description: { type: 'string', description: 'Descripción opcional' },
+      location: { type: 'string', description: 'Ubicación opcional' },
+      calendar_id: { type: 'string', description: 'ID del calendario (personal, work, family). Default: personal' },
+      all_day: { type: 'boolean', description: 'Evento de todo el día. Default: false' },
+    },
+  },
+  {
+    name: 'me_list_events',
+    description: 'Lista los eventos del calendario ME dentro de un rango de fechas.',
+    category: 'fs',
+    parameters: {
+      from_ts: { type: 'number', description: 'Timestamp inicial (epoch ms). Default: ahora' },
+      to_ts: { type: 'number', description: 'Timestamp final (epoch ms). Default: ahora + 30 días' },
+    },
+  },
+  {
+    name: 'me_create_task',
+    description: 'Crea una tarea en la lista de ME.',
+    category: 'fs',
+    parameters: {
+      title: { type: 'string', description: 'Texto de la tarea' },
+      priority: { type: 'number', description: '0 = ninguna, 1 = media, 2 = alta. Default: 0' },
+      due_ts: { type: 'number', description: 'Fecha límite (epoch ms). Opcional.' },
+      list_id: { type: 'string', description: 'ID de la lista. Default: inbox' },
+    },
+  },
+  {
+    name: 'me_create_note',
+    description: 'Crea una nota rápida en ME.',
+    category: 'fs',
+    parameters: {
+      title: { type: 'string', description: 'Título opcional' },
+      body: { type: 'string', description: 'Contenido de la nota' },
+    },
+  },
+  {
+    name: 'me_add_shopping',
+    description: 'Añade un producto a la lista de la compra de ME.',
+    category: 'fs',
+    parameters: {
+      name: { type: 'string', description: 'Nombre del producto' },
+      qty: { type: 'string', description: 'Cantidad (ej. "2 litros")' },
+      category: { type: 'string', description: 'Categoría: produce, dairy, meat, bakery, pantry, frozen, beverages, snacks, household, other. Default: other' },
+    },
+  },
+  {
+    name: 'me_log_health',
+    description: 'Registra una medición de salud en ME.',
+    category: 'fs',
+    parameters: {
+      kind: { type: 'string', description: 'Tipo: weight, sleep, water, meds, steps, heart' },
+      value: { type: 'string', description: 'Valor' },
+      notes: { type: 'string', description: 'Notas opcionales' },
+    },
+  },
+  {
+    name: 'render_html',
+    description:
+      'Renderiza HTML dentro del chat en una mini-ventana con botones refrescar/cerrar/ocultar/redimensionar. ' +
+      'Útil para mostrar dashboards, tablas interactivas, animaciones, prototipos, etc. ' +
+      'El HTML se ejecuta en un iframe sandboxed.',
+    category: 'fs',
+    parameters: {
+      title: { type: 'string', description: 'Título de la ventana' },
+      html: { type: 'string', description: 'HTML completo a renderizar' },
+    },
+  },
+  {
+    name: 'render_pdf',
+    description: 'Renderiza un PDF (contenido binario como base64 o texto) dentro del chat en una mini-ventana.',
+    category: 'fs',
+    parameters: {
+      title: { type: 'string', description: 'Título' },
+      content: { type: 'string', description: 'Contenido del PDF. Si es texto/HTML, se renderiza como tal. Si es binario, pasar como base64.' },
+    },
+  },
 ];
 
 /** Lista de tools para exponer al LLM (formato OpenAI function calling). */
 export function buildAdvancedToolsList() {
+  const OPTIONAL_KEYS = new Set([
+    'cwd', 'timeout', 'max_results', 'create_dirs', 'max_chars', 'mime_type',
+    'description', 'location', 'calendar_id', 'all_day', 'priority', 'due_ts', 'list_id',
+    'from_ts', 'to_ts', 'notes', 'qty', 'category', 'title',
+  ]);
   return ADVANCED_TOOLS.map((t) => ({
     type: 'function' as const,
     function: {
@@ -113,9 +207,7 @@ export function buildAdvancedToolsList() {
       parameters: {
         type: 'object',
         properties: t.parameters,
-        required: Object.keys(t.parameters).filter(
-          (k) => k !== 'cwd' && k !== 'timeout' && k !== 'max_results' && k !== 'create_dirs' && k !== 'max_chars' && k !== 'mime_type',
-        ),
+        required: Object.keys(t.parameters).filter((k) => !OPTIONAL_KEYS.has(k)),
       },
     },
   }));
@@ -155,6 +247,22 @@ export async function dispatchAdvancedTool(
           String(args.content),
           args.mime_type ? String(args.mime_type) : undefined,
         );
+      case 'me_create_event':
+        return await meCreateEvent(args);
+      case 'me_list_events':
+        return await meListEvents(args);
+      case 'me_create_task':
+        return await meCreateTask(args);
+      case 'me_create_note':
+        return await meCreateNote(args);
+      case 'me_add_shopping':
+        return await meAddShopping(args);
+      case 'me_log_health':
+        return await meLogHealth(args);
+      case 'render_html':
+        return await renderHtml(args);
+      case 'render_pdf':
+        return await renderPdf(args);
       default:
         return { ok: false, output: '', error: `Tool desconocida: ${name}` };
     }
@@ -165,6 +273,140 @@ export async function dispatchAdvancedTool(
       error: e instanceof Error ? e.message : String(e),
     };
   }
+}
+
+// ============================================================================
+// ME tools — usan el store Zustand directamente vía import dinámico
+// ============================================================================
+
+async function meCreateEvent(args: Record<string, unknown>): Promise<ToolExecResult> {
+  const { useWeaver } = await import('@/store/weaver');
+  const now = Date.now();
+  const startTs = Number(args.start_ts);
+  const endTs = Number(args.end_ts) || (startTs + 60 * 60 * 1000);
+  const ev = {
+    id: crypto.randomUUID(),
+    title: String(args.title),
+    description: args.description ? String(args.description) : null,
+    location: args.location ? String(args.location) : null,
+    calendar_id: args.calendar_id ? String(args.calendar_id) : 'personal',
+    start_ts: startTs,
+    end_ts: endTs,
+    all_day: Boolean(args.all_day),
+    color: null,
+    recurrence: null,
+    reminder_minutes: 15,
+    created_at: now,
+    updated_at: now,
+  };
+  await useWeaver.getState().upsertMeEvent(ev);
+  return {
+    ok: true,
+    output: `Evento creado en ME: "${ev.title}" · ${new Date(ev.start_ts).toLocaleString('es-MX')} → ${new Date(ev.end_ts).toLocaleString('es-MX')}`,
+  };
+}
+
+async function meListEvents(args: Record<string, unknown>): Promise<ToolExecResult> {
+  const { useWeaver } = await import('@/store/weaver');
+  await useWeaver.getState().loadMeEvents();
+  const events = useWeaver.getState().meEvents;
+  const fromTs = args.from_ts ? Number(args.from_ts) : Date.now();
+  const toTs = args.to_ts ? Number(args.to_ts) : Date.now() + 30 * 24 * 60 * 60 * 1000;
+  const filtered = events.filter((e) => e.start_ts >= fromTs && e.start_ts <= toTs);
+  if (filtered.length === 0) return { ok: true, output: 'No hay eventos en el rango.' };
+  const lines = filtered.map((e) =>
+    `- ${new Date(e.start_ts).toLocaleString('es-MX')} → ${new Date(e.end_ts).toLocaleString('es-MX')}: ${e.title}${e.location ? ` @ ${e.location}` : ''}`,
+  );
+  return { ok: true, output: `Eventos en ME (${filtered.length}):\n${lines.join('\n')}` };
+}
+
+async function meCreateTask(args: Record<string, unknown>): Promise<ToolExecResult> {
+  const { useWeaver } = await import('@/store/weaver');
+  const t = {
+    id: crypto.randomUUID(),
+    title: String(args.title),
+    notes: null,
+    priority: Number(args.priority ?? 0),
+    done: false,
+    due_ts: args.due_ts ? Number(args.due_ts) : null,
+    list_id: args.list_id ? String(args.list_id) : 'inbox',
+    created_at: Date.now(),
+    completed_at: null,
+  };
+  await useWeaver.getState().upsertMeTask(t);
+  return { ok: true, output: `Tarea creada en ME: "${t.title}"` };
+}
+
+async function meCreateNote(args: Record<string, unknown>): Promise<ToolExecResult> {
+  const { useWeaver } = await import('@/store/weaver');
+  const n = {
+    id: crypto.randomUUID(),
+    title: args.title ? String(args.title) : null,
+    body: String(args.body),
+    color: '#7aa67a',
+    tags_json: null,
+    pinned: false,
+    created_at: Date.now(),
+    updated_at: Date.now(),
+  };
+  await useWeaver.getState().upsertMeNote(n);
+  return { ok: true, output: `Nota creada en ME: "${n.title ?? n.body.slice(0, 40)}…"` };
+}
+
+async function meAddShopping(args: Record<string, unknown>): Promise<ToolExecResult> {
+  const { useWeaver } = await import('@/store/weaver');
+  const it = {
+    id: crypto.randomUUID(),
+    list_id: 'default',
+    name: String(args.name),
+    qty: args.qty ? String(args.qty) : null,
+    category: args.category ? String(args.category) : 'other',
+    checked: false,
+    created_at: Date.now(),
+    checked_at: null,
+  };
+  await useWeaver.getState().upsertMeShopping(it);
+  return { ok: true, output: `Añadido a la lista de compra: "${it.name}"${it.qty ? ` (${it.qty})` : ''}` };
+}
+
+async function meLogHealth(args: Record<string, unknown>): Promise<ToolExecResult> {
+  const { useWeaver } = await import('@/store/weaver');
+  const units: Record<string, string> = { weight: 'kg', sleep: 'h', water: 'ml', steps: '', heart: 'bpm', meds: '' };
+  const kind = String(args.kind);
+  const h = {
+    id: crypto.randomUUID(),
+    kind,
+    value: String(args.value),
+    unit: units[kind] ?? null,
+    ts: Date.now(),
+    notes: args.notes ? String(args.notes) : null,
+  };
+  await useWeaver.getState().upsertMeHealth(h);
+  return { ok: true, output: `Registro de salud añadido: ${kind} = ${h.value}${h.unit ? ' ' + h.unit : ''}` };
+}
+
+// ============================================================================
+// Render tools — devuelven un patrón que el MessageList renderiza
+// ============================================================================
+
+async function renderHtml(args: Record<string, unknown>): Promise<ToolExecResult> {
+  const title = String(args.title ?? 'HTML');
+  const html = String(args.html);
+  const id = crypto.randomUUID();
+  return {
+    ok: true,
+    output: `\n[render:html:${id}:${title}]\n[render-content:${id}:text/html]\n${html}\n[/render-content]\n`,
+  };
+}
+
+async function renderPdf(args: Record<string, unknown>): Promise<ToolExecResult> {
+  const title = String(args.title ?? 'PDF');
+  const content = String(args.content);
+  const id = crypto.randomUUID();
+  return {
+    ok: true,
+    output: `\n[render:pdf:${id}:${title}]\n[render-content:${id}:application/pdf]\n${content}\n[/render-content]\n`,
+  };
 }
 
 // ============================================================================

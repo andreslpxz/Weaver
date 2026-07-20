@@ -8,11 +8,12 @@ import {
   AutomatizacionesView,
   ConfiguracionView,
 } from '@/views/Views';
+import { MeView } from '@/views/MeView';
 import { useWeaver } from '@/store/weaver';
 import { initTheme } from '@/lib/themes';
 
 export default function App() {
-  const { view, loadConversations, themeId } = useWeaver();
+  const { view, loadConversations, themeId, loadMeAll } = useWeaver();
 
   // Inicializar tema al montar.
   useEffect(() => {
@@ -27,7 +28,8 @@ export default function App() {
   // Cargar conversaciones desde SQLite (Tauri) o localStorage al iniciar.
   useEffect(() => {
     loadConversations();
-  }, [loadConversations]);
+    loadMeAll();
+  }, [loadConversations, loadMeAll]);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-app-bg text-text-primary">
@@ -40,6 +42,7 @@ export default function App() {
             <Composer />
           </>
         )}
+        {view === 'me' && <MeView />}
         {view === 'complementos' && <ComplementosView />}
         {view === 'habilidades' && <HabilidadesView />}
         {view === 'automatizaciones' && <AutomatizacionesView />}
