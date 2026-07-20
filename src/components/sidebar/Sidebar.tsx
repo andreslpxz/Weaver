@@ -15,9 +15,12 @@ import {
   CalendarDays,
   X,
   Clock,
+  Menu,
 } from 'lucide-react';
 import { useWeaver, type ViewId } from '@/store/weaver';
 import { cn } from '@/components/common/Button';
+import { WeaverLogo } from '@/components/common/WeaverLogo';
+import { useT } from '@/lib/i18n';
 
 interface SidebarItem {
   id: ViewId | 'new-chat' | 'search';
@@ -30,21 +33,22 @@ const SECTIONS: { title: string; items: SidebarItem[] }[] = [
   {
     title: '',
     items: [
-      { id: 'new-chat', label: 'Nuevo chat', icon: <Plus size={14} /> },
-      { id: 'search', label: 'Buscar', icon: <Search size={14} /> },
+      { id: 'new-chat', label: 'sidebar.newChat', icon: <Plus size={14} /> },
+      { id: 'search', label: 'sidebar.search', icon: <Search size={14} /> },
     ],
   },
   {
-    title: 'Workspace',
+    title: 'sidebar.workspace',
     items: [
-      { id: 'me', label: 'ME', icon: <CalendarDays size={14} /> },
-      { id: 'complementos', label: 'Complementos', icon: <Puzzle size={14} /> },
-      { id: 'automatizaciones', label: 'Schedules', icon: <Clock size={14} /> },
+      { id: 'me', label: 'sidebar.me', icon: <CalendarDays size={14} /> },
+      { id: 'complementos', label: 'sidebar.complementos', icon: <Puzzle size={14} /> },
+      { id: 'automatizaciones', label: 'sidebar.schedules', icon: <Clock size={14} /> },
     ],
   },
 ];
 
 export function Sidebar() {
+  const t = useT();
   const {
     sidebarCollapsed,
     toggleSidebar,
@@ -69,6 +73,31 @@ export function Sidebar() {
   const [convMenuFor, setConvMenuFor] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Detección de viewport móvil.
+  const [isMobile, setIsMobile] = useState(false);
+  // En móvil, el sidebar es un overlay abierto/cerrado.
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768);
+    check();
+    window.addEventListener('resize', check);
+    return () => window.removeEventListener('resize', check);
+  }, []);
+
+  // En móvil: cuando cambias de vista, cerrar el overlay.
+  useEffect(() => {
+    if (isMobile) setMobileOpen(false);
+  }, [view, isMobile]);
+
+  // Exponer un método global para abrir el sidebar desde la TopBar.
+  // (App.tsx puede invocarlo vía evento.)
+  useEffect(() => {
+    const handler = () => setMobileOpen(true);
+    window.addEventListener('weaver:open-sidebar', handler);
+    return () => window.removeEventListener('weaver:open-sidebar', handler);
+  }, []);
 
   useEffect(() => {
     loadProjects();
@@ -125,13 +154,30 @@ export function Sidebar() {
     convsByProject.get(key)!.push(c);
   }
 
-  if (sidebarCollapsed) {
+  // En móvil: el sidebar colapsado no se renderiza nunca.
+  // El sidebar expandido se renderiza como overlay (drawer) si mobileOpen.
+  if (isMobile && !mobileOpen) return null;
+
+  // Wrapper classes: en móvil es un drawer fijo; en desktop es estático.
+  const wrapperClass = isMobile
+    ? 'fixed left-0 top-0 bottom-0 w-72 max-w-[85vw] bg-app-sidebar border-r border-border flex flex-col z-50 shadow-2xl'
+    : 'w-60 bg-app-sidebar border-r border-border flex flex-col';
+
+  // En móvil: backdrop detrás del sidebar.
+  const backdrop = isMobile ? (
+    <div
+      className="fixed inset-0 bg-black/50 z-40 md:hidden"
+      onClick={() => setMobileOpen(false)}
+    />
+  ) : null;
+
+  if (sidebarCollapsed && !isMobile) {
     return (
       <aside className="w-12 bg-app-sidebar border-r border-border flex flex-col items-center py-3 gap-2">
-        <button onClick={toggleSidebar} className="codex-icon-btn" title="Expandir sidebar">
+        <button onClick={toggleSidebar} className="codex-icon-btn" title={t('sidebar.expand')}>
           <ChevronRight size={16} />
         </button>
-        <button onClick={() => newConversation()} className="codex-icon-btn" title="Nuevo chat">
+        <button onClick={() => newConversation()} className="codex-icon-btn" title={t('sidebar.newChat')}>
           <Plus size={16} />
         </button>
         <button
@@ -140,20 +186,20 @@ export function Sidebar() {
             setView('chat');
           }}
           className="codex-icon-btn"
-          title="Buscar"
+          title={t('sidebar.search')}
         >
           <Search size={16} />
         </button>
-        <button onClick={() => setView('me')} className="codex-icon-btn" title="ME">
+        <button onClick={() => setView('me')} className="codex-icon-btn" title={t('sidebar.me')}>
           <CalendarDays size={16} />
         </button>
-        <button onClick={() => setView('complementos')} className="codex-icon-btn" title="Complementos">
+        <button onClick={() => setView('complementos')} className="codex-icon-btn" title={t('sidebar.complementos')}>
           <Puzzle size={16} />
         </button>
-        <button onClick={() => setView('automatizaciones')} className="codex-icon-btn" title="Schedules">
+        <button onClick={() => setView('automatizaciones')} className="codex-icon-btn" title={t('sidebar.schedules')}>
           <Clock size={16} />
         </button>
-        <button onClick={() => setView('configuracion')} className="codex-icon-btn mt-auto" title="Configuración">
+        <button onClick={() => setView('configuracion')} className="codex-icon-btn mt-auto" title={t('sidebar.configuracion')}>
           <Cog size={16} />
         </button>
       </aside>
@@ -177,23 +223,31 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="w-60 bg-app-sidebar border-r border-border flex flex-col">
+    <>
+      {backdrop}
+      <aside className={wrapperClass}>
       {/* Header */}
       <div className="flex items-center justify-between px-3 h-12 border-b border-border">
-        <div className="flex items-center gap-2">
-          <WeaverLogo />
-          <span className="font-semibold text-sm">Weaver</span>
+        <div className="flex items-center gap-2 text-accent">
+          <WeaverLogo size={20} />
+          <span className="font-semibold text-sm text-text-primary">Weaver</span>
         </div>
-        <button onClick={toggleSidebar} className="codex-icon-btn" title="Colapsar">
-          <ChevronLeft size={14} />
-        </button>
+        {isMobile ? (
+          <button onClick={() => setMobileOpen(false)} className="codex-icon-btn" title={t('sidebar.searchClose')}>
+            <X size={14} />
+          </button>
+        ) : (
+          <button onClick={toggleSidebar} className="codex-icon-btn" title={t('sidebar.collapse')}>
+            <ChevronLeft size={14} />
+          </button>
+        )}
       </div>
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto p-2">
         {SECTIONS.map((section, idx) => (
           <div key={idx}>
-            {section.title && <div className="sidebar-section-title">{section.title}</div>}
+            {section.title && <div className="sidebar-section-title">{t(section.title)}</div>}
             {section.items.map((item) => (
               <button
                 key={item.id}
@@ -207,7 +261,7 @@ export function Sidebar() {
                 className={cn('sidebar-item w-full text-left', view === item.id && 'active')}
               >
                 {item.icon}
-                <span className="flex-1">{item.label}</span>
+                <span className="flex-1">{t(item.label)}</span>
                 {item.badge && <span className="text-xs text-text-muted">{item.badge}</span>}
               </button>
             ))}
@@ -237,7 +291,7 @@ export function Sidebar() {
                     }
                   }
                 }}
-                placeholder="Buscar en chats…"
+                placeholder={t('sidebar.searchPlaceholder')}
                 className="codex-input flex-1 px-2 py-1 text-xs bg-transparent border-0 focus:outline-none"
               />
               <button
@@ -246,7 +300,7 @@ export function Sidebar() {
                   setSearchQuery('');
                 }}
                 className="codex-icon-btn w-5 h-5 shrink-0"
-                title="Cerrar búsqueda"
+                title={t('sidebar.searchClose')}
               >
                 <X size={10} />
               </button>
@@ -255,7 +309,7 @@ export function Sidebar() {
               <div className="max-h-80 overflow-y-auto">
                 {searchResults.length === 0 ? (
                   <div className="text-[11px] text-text-muted px-1 py-2 italic">
-                    Sin resultados. Nota: chats antiguos pueden tener mensajes sin cargar.
+                    {t('sidebar.searchEmpty')}
                   </div>
                 ) : (
                   searchResults.map(({ conv, matchInTitle, snippet }) => (
@@ -272,9 +326,9 @@ export function Sidebar() {
                     >
                       <div className="flex items-center gap-1.5">
                         <MessageSquare size={11} className="text-text-muted shrink-0" />
-                        <span className="text-xs font-medium truncate flex-1">{conv.title || 'Nuevo chat'}</span>
+                        <span className="text-xs font-medium truncate flex-1">{conv.title || t('sidebar.newChat')}</span>
                         {matchInTitle && (
-                          <span className="text-[9px] bg-accent/15 text-accent px-1 rounded-full">título</span>
+                          <span className="text-[9px] bg-accent/15 text-accent px-1 rounded-full">{t('sidebar.searchTitleBadge')}</span>
                         )}
                       </div>
                       {snippet && (
@@ -290,11 +344,11 @@ export function Sidebar() {
 
         {/* Proyectos */}
         <div className="sidebar-section-title flex items-center justify-between">
-          <span>Proyectos</span>
+          <span>{t('sidebar.projects')}</span>
           <button
             onClick={() => setShowProjectInput((v) => !v)}
             className="codex-icon-btn w-4 h-4"
-            title="Nuevo proyecto"
+            title={t('sidebar.newProject')}
           >
             <FolderPlus size={10} />
           </button>
@@ -313,7 +367,7 @@ export function Sidebar() {
                   setNewProjectName('');
                 }
               }}
-              placeholder="Nombre del proyecto"
+              placeholder={t('sidebar.projectName')}
               className="codex-input flex-1 px-2 py-1 text-xs"
             />
             <button onClick={addProject} className="codex-btn codex-btn-primary !p-1">
@@ -325,7 +379,7 @@ export function Sidebar() {
         {/* Conversaciones sin proyecto */}
         {(convsByProject.get(null) ?? []).length > 0 && (
           <div className="mt-2">
-            <div className="sidebar-section-title">Sin proyecto</div>
+            <div className="sidebar-section-title">{t('sidebar.noProject')}</div>
             {(convsByProject.get(null) ?? []).map((c) => (
               <ConversationRow
                 key={c.id}
@@ -354,7 +408,7 @@ export function Sidebar() {
                 <button
                   onClick={() => toggleProject(p.id)}
                   className="codex-icon-btn w-4 h-4"
-                  title={isOpen ? 'Colapsar' : 'Expandir'}
+                  title={isOpen ? t('sidebar.collapse') : t('sidebar.expand')}
                 >
                   {isOpen ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
                 </button>
@@ -363,12 +417,12 @@ export function Sidebar() {
                 <span className="text-[10px] text-text-muted">{convs.length}</span>
                 <button
                   onClick={() => {
-                    if (confirm(`¿Eliminar proyecto "${p.name}"? Las conversaciones se moverán a "Sin proyecto".`)) {
+                    if (confirm(`${t('sidebar.deleteProject')} "${p.name}"?`)) {
                       deleteProject(p.id);
                     }
                   }}
                   className="codex-icon-btn w-4 h-4 opacity-0 group-hover:opacity-100"
-                  title="Eliminar proyecto"
+                  title={t('sidebar.deleteProject')}
                 >
                   <Trash2 size={10} />
                 </button>
@@ -376,7 +430,7 @@ export function Sidebar() {
               {isOpen && (
                 <div className="ml-3 border-l border-border pl-1">
                   {convs.length === 0 ? (
-                    <div className="px-2 py-1 text-[10px] text-text-muted italic">vacío</div>
+                    <div className="px-2 py-1 text-[10px] text-text-muted italic">{t('sidebar.empty')}</div>
                   ) : (
                     convs.map((c) => (
                       <ConversationRow
@@ -401,7 +455,7 @@ export function Sidebar() {
         })}
 
         {projects.length === 0 && (convsByProject.get(null) ?? []).length === 0 && (
-          <div className="px-2 py-1.5 text-xs text-text-muted">Sin conversaciones</div>
+          <div className="px-2 py-1.5 text-xs text-text-muted">{t('sidebar.noConversations')}</div>
         )}
       </nav>
 
@@ -412,10 +466,11 @@ export function Sidebar() {
           className={cn('sidebar-item w-full text-left', view === 'configuracion' && 'active')}
         >
           <Cog size={14} />
-          <span className="flex-1">Configuración</span>
+          <span className="flex-1">{t('sidebar.configuracion')}</span>
         </button>
       </div>
     </aside>
+    </>
   );
 }
 
@@ -437,6 +492,7 @@ function ConversationRow({
   onMoveToProject: (pid: string | null) => void;
 }) {
   const projects = useWeaver((s) => s.projects);
+  const t = useT();
   return (
     <div
       className={cn(
@@ -447,14 +503,14 @@ function ConversationRow({
       onClick={onClick}
     >
       <MessageSquare size={14} className="shrink-0" />
-      <span className="flex-1 truncate">{conv.title || 'Nuevo chat'}</span>
+      <span className="flex-1 truncate">{conv.title || t('sidebar.newChat')}</span>
       <button
         onClick={(e) => {
           e.stopPropagation();
           onMenuToggle();
         }}
         className="opacity-0 group-hover:opacity-100 codex-icon-btn w-5 h-5"
-        title="Mover a proyecto"
+        title={t('sidebar.moveTo')}
       >
         <MoreHorizontal size={12} />
       </button>
@@ -464,7 +520,7 @@ function ConversationRow({
           onDelete();
         }}
         className="opacity-0 group-hover:opacity-100 codex-icon-btn w-5 h-5"
-        title="Eliminar"
+        title={t('sidebar.delete')}
       >
         <Trash2 size={10} />
       </button>
@@ -473,12 +529,12 @@ function ConversationRow({
           className="absolute right-0 mt-32 z-30 w-48 bg-app-elevated border border-border-accent rounded-codex shadow-2xl animate-slide-up overflow-hidden"
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="px-2 py-1 text-[10px] text-text-muted uppercase">Mover a</div>
+          <div className="px-2 py-1 text-[10px] text-text-muted uppercase">{t('sidebar.moveTo')}</div>
           <button
             onClick={() => onMoveToProject(null)}
             className="w-full text-left px-2 py-1 text-xs hover:bg-app-input"
           >
-            Sin proyecto
+            {t('sidebar.noProject')}
           </button>
           {projects.map((p) => (
             <button
@@ -493,20 +549,5 @@ function ConversationRow({
         </div>
       )}
     </div>
-  );
-}
-
-function WeaverLogo() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-      <path
-        d="M4 20L20 4M4 4L20 20"
-        stroke="currentColor"
-        strokeWidth="2.5"
-        strokeLinecap="round"
-        className="text-accent"
-      />
-      <circle cx="12" cy="12" r="3" className="fill-accent" />
-    </svg>
   );
 }

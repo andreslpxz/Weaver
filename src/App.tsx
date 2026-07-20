@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { Menu } from 'lucide-react';
 import { Sidebar } from '@/components/sidebar/Sidebar';
 import { Composer } from '@/components/composer/Composer';
 import { MessageList, setSuggestionSetter } from '@/components/chat/MessageList';
@@ -61,12 +62,28 @@ export default function App() {
 function TopBar() {
   const { providerId, modelId, setModelPickerOpen } = useWeaver();
   const providerLabel = providerId.charAt(0).toUpperCase() + providerId.slice(1);
+
+  function openSidebar() {
+    window.dispatchEvent(new CustomEvent('weaver:open-sidebar'));
+  }
+
   return (
-    <header className="h-11 border-b border-border flex items-center justify-between px-4 shrink-0">
-      <div className="text-sm text-text-secondary">Weaver</div>
+    <header className="h-11 border-b border-border flex items-center justify-between px-2 sm:px-4 shrink-0 gap-2">
+      <div className="flex items-center gap-2 min-w-0">
+        {/* Botón hamburguesa solo visible en móvil */}
+        <button
+          onClick={openSidebar}
+          className="codex-icon-btn md:hidden"
+          title="Abrir menú"
+          aria-label="Abrir menú"
+        >
+          <Menu size={16} />
+        </button>
+        <div className="text-sm text-text-secondary truncate">Weaver</div>
+      </div>
       <button
         onClick={() => setModelPickerOpen(true)}
-        className="text-xs text-text-secondary hover:text-text-primary px-2 py-1 rounded-codex hover:bg-app-elevated transition-colors"
+        className="text-xs text-text-secondary hover:text-text-primary px-2 py-1 rounded-codex hover:bg-app-elevated transition-colors truncate"
       >
         {providerLabel} · {modelId}
       </button>

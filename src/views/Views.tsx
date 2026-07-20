@@ -29,6 +29,7 @@ import { Badge, Button, cn } from '@/components/common/Button';
 import { runtime } from '@/lib/tauri';
 import { THEMES, type ThemeId } from '@/lib/themes';
 import { useWeaver } from '@/store/weaver';
+import { useT, useLang } from '@/lib/i18n';
 import { memory } from '@/agent/memory';
 import {
   IMPORT_PROMPT,
@@ -1214,35 +1215,38 @@ function saveSchedules(tasks: ScheduledTask[]) {
 }
 
 const RECURRENCE_LABELS: Record<ScheduledTask['recurrence'], string> = {
-  once: 'Una vez',
-  daily: 'Diario',
-  weekdays: 'Lunes a Viernes',
-  weekly: 'Semanal',
-  monthly: 'Mensual',
+  once: 'schedules.recurrence.once',
+  daily: 'schedules.recurrence.daily',
+  weekdays: 'schedules.recurrence.weekdays',
+  weekly: 'schedules.recurrence.weekly',
+  monthly: 'schedules.recurrence.monthly',
 };
 
 const WEEKDAY_LABELS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+void WEEKDAY_LABELS; // (mantenido por compatibilidad externa; UI usa i18n)
 
-function formatSchedule(t: ScheduledTask): string {
+type TFunc = (key: string, vars?: Record<string, string | number>) => string;
+
+function formatSchedule(t: ScheduledTask, tt: TFunc): string {
   const time = t.time;
   switch (t.recurrence) {
     case 'once':
-      return `Hoy a las ${time}`;
+      return `${tt('schedules.todayAt')} ${time}`;
     case 'daily':
-      return `Cada día a las ${time}`;
+      return `${tt('schedules.everyDayAt')} ${time}`;
     case 'weekdays':
-      return `Lun-Vie a las ${time}`;
+      return `${tt('schedules.weekdaysAt')} ${time}`;
     case 'weekly':
-      return `Cada ${WEEKDAY_LABELS[t.weekday ?? 1]} a las ${time}`;
+      return `${tt('schedules.everyWeekAt')} ${tt(`schedules.weekdays.${t.weekday ?? 1}`)} ${tt('schedules.at')} ${time}`;
     case 'monthly':
-      return `El día ${t.monthDay ?? 1} de cada mes a las ${time}`;
+      return `${tt('schedules.everyMonthDayAt')} ${t.monthDay ?? 1} ${tt('schedules.ofEveryMonthAt')} ${time}`;
     default:
       return time;
   }
 }
 
-function getNextRunLabel(t: ScheduledTask): string {
-  if (!t.enabled) return 'Pausado';
+function getNextRunLabel(t: ScheduledTask, tt: TFunc): string {
+  if (!t.enabled) return tt('schedules.paused');
   const now = new Date();
   const [hh, mm] = t.time.split(':').map(Number);
   const next = new Date(now);
@@ -1288,13 +1292,14 @@ function getNextRunLabel(t: ScheduledTask): string {
   const diff = next.getTime() - now.getTime();
   const hours = Math.floor(diff / 3_600_000);
   const days = Math.floor(hours / 24);
-  if (days > 0) return `Próxima en ${days}d ${hours % 24}h`;
-  if (hours > 0) return `Próxima en ${hours}h`;
+  if (days > 0) return `${tt('schedules.nextIn')} ${days}d ${hours % 24}h`;
+  if (hours > 0) return `${tt('schedules.nextIn')} ${hours}h`;
   const mins = Math.floor(diff / 60_000);
-  return mins > 0 ? `Próxima en ${mins}min` : 'Ahora';
+  return mins > 0 ? `${tt('schedules.nextIn')} ${mins}min` : tt('schedules.now');
 }
 
 export function AutomatizacionesView() {
+  const tt = useT();
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
   const [editing, setEditing] = useState<ScheduledTask | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -1329,7 +1334,7 @@ export function AutomatizacionesView() {
   }
 
   function deleteTask(id: string) {
-    if (!confirm('¿Eliminar esta tarea programada?')) return;
+    if (!confirm(tt('schedules.deleteConfirm'))) return;
     persist(tasks.filter((t) => t.id !== id));
   }
 
@@ -1341,7 +1346,7 @@ export function AutomatizacionesView() {
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-3xl mx-auto px-6 py-10">
         <div className="flex items-center justify-between mb-2">
-          <h1 className="text-3xl font-medium">Schedules</h1>
+          <h1 className="text-3xl font-medium">{tt('schedules.title')}</h1>
           <Button
             variant="primary"
             onClick={() => {
@@ -1349,15 +1354,13 @@ export function AutomatizacionesView() {
               setShowForm(true);
             }}
           >
-            <Plus size={14} className="mr-1" /> Nueva tarea
+            <Plus size={14} className="mr-1" /> {tt('schedules.newTask')}
           </Button>
         </div>
         <p className="text-text-secondary text-sm mb-8">
-          Crea tareas que el agente ejecutará automáticamente en el horario que elijas.
-          Por ejemplo: «organizar mis correos» a las 9:00, «limpiar la carpeta
-          Descargas» cada viernes, o «recordar pagar la luz» el día 5 de cada mes.
-          Las tareas pueden invocar MCPs, herramientas del sistema, o cualquier
-          cosa que sepas pedirle al agente en el chat.
+          {tt('schedules.subtitle')}
+          {' '}
+          {tt('schedules.noteText').slice(0, 200)}…
         </p>
 
         {showForm && (
@@ -1373,10 +1376,10 @@ export function AutomatizacionesView() {
 
         {tasks.length === 0 ? (
           <div className="text-sm text-text-muted p-8 border border-dashed border-border rounded-codex text-center">
-            Aún no hay tareas programadas.
+            {tt('schedules.empty')}
             <br />
             <span className="text-xs">
-              Crea una con el botón <strong>Nueva tarea</strong> de arriba.
+              {tt('schedules.emptyHint')}
             </span>
           </div>
         ) : (
@@ -1388,7 +1391,7 @@ export function AutomatizacionesView() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-sm font-medium truncate">{t.name}</span>
                       <Badge color={t.enabled ? 'success' : 'default'}>
-                        {t.enabled ? 'Activa' : 'Pausada'}
+                        {t.enabled ? tt('schedules.active') : tt('schedules.paused')}
                       </Badge>
                       {t.lastRunStatus && (
                         <Badge
@@ -1406,10 +1409,10 @@ export function AutomatizacionesView() {
                     </div>
                     <div className="text-xs text-text-muted mt-1">
                       <Clock size={10} className="inline mr-1 -mt-0.5" />
-                      {formatSchedule(t)} · <span title="próxima ejecución">{getNextRunLabel(t)}</span>
+                      {formatSchedule(t, tt)} · <span title="próxima ejecución">{getNextRunLabel(t, tt)}</span>
                     </div>
                     <div className="text-xs text-text-secondary mt-1.5 line-clamp-2">
-                      <span className="text-text-muted">Instrucción:</span>{' '}
+                      <span className="text-text-muted">{tt('schedules.instruction')}:</span>{' '}
                       <code className="text-[11px] bg-app-elevated px-1 rounded">{t.instruction}</code>
                     </div>
                     {t.lastRunMessage && (
@@ -1422,7 +1425,7 @@ export function AutomatizacionesView() {
                     <button
                       onClick={() => toggleEnabled(t.id)}
                       className="codex-icon-btn w-7 h-7"
-                      title={t.enabled ? 'Pausar' : 'Activar'}
+                      title={t.enabled ? tt('schedules.pause') : tt('schedules.activate')}
                     >
                       <Power size={12} className={t.enabled ? 'text-success' : 'text-text-muted'} />
                     </button>
@@ -1432,14 +1435,14 @@ export function AutomatizacionesView() {
                         setShowForm(true);
                       }}
                       className="codex-icon-btn w-7 h-7"
-                      title="Editar"
+                      title={tt('schedules.edit')}
                     >
                       <SettingsIcon size={12} />
                     </button>
                     <button
                       onClick={() => deleteTask(t.id)}
                       className="codex-icon-btn w-7 h-7"
-                      title="Eliminar"
+                      title={tt('schedules.delete')}
                     >
                       <Trash2 size={12} />
                     </button>
@@ -1452,11 +1455,7 @@ export function AutomatizacionesView() {
 
         <div className="mt-8 p-3 rounded-codex bg-app-elevated text-xs text-text-secondary leading-relaxed">
           <Shield size={12} className="inline mr-1 -mt-0.5" />
-          <strong>Nota:</strong> el programador (cron) se ejecuta cuando Weaver está abierto.
-          Al llegar la hora, se lanza la instrucción en un chat nuevo y el agente la
-          procesa con las mismas herramientas que tendría a mano (MCPs, shell, archivos,
-          web, ME calendario, etc.). Para tareas que necesiten correr 24/7 sin la app
-          abierta, configura un cron del sistema que llame a <code>weaver --run "instrucción"</code>.
+          <strong>{tt('schedules.note')}:</strong> {tt('schedules.noteText')}
         </div>
       </div>
     </div>
@@ -1472,6 +1471,7 @@ function ScheduleForm({
   onCancel: () => void;
   onSubmit: (t: ScheduledTask) => void;
 }) {
+  const tt = useT();
   const [name, setName] = useState(initial?.name ?? '');
   const [instruction, setInstruction] = useState(initial?.instruction ?? '');
   const [time, setTime] = useState(initial?.time ?? '09:00');
@@ -1500,35 +1500,34 @@ function ScheduleForm({
 
   return (
     <div className="codex-card p-4 mb-4 space-y-3">
-      <div className="text-sm font-medium">{initial ? 'Editar tarea' : 'Nueva tarea programada'}</div>
+      <div className="text-sm font-medium">{initial ? tt('schedules.form.edit') : tt('schedules.form.new')}</div>
       <div>
-        <label className="text-xs text-text-muted block mb-1">Nombre</label>
+        <label className="text-xs text-text-muted block mb-1">{tt('schedules.form.name')}</label>
         <input
           autoFocus
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="Ej: Organizar mis correos"
+          placeholder={tt('schedules.form.namePlaceholder')}
           className="codex-input w-full px-2 py-1.5 text-sm"
         />
       </div>
       <div>
         <label className="text-xs text-text-muted block mb-1">
-          Instrucción para el agente
+          {tt('schedules.form.instruction')}
         </label>
         <textarea
           value={instruction}
           onChange={(e) => setInstruction(e.target.value)}
-          placeholder="Ej: organiza todos mis correos por carpeta según el remitente"
+          placeholder={tt('schedules.form.instructionPlaceholder')}
           className="codex-input w-full px-2 py-1.5 text-sm h-20 resize-y"
         />
         <p className="text-[11px] text-text-muted mt-1">
-          Puedes referenciar MCPs (@mcp:nombre) o herramientas del sistema. La
-          instrucción se ejecuta como si la escribieras en el chat.
+          {tt('schedules.form.instructionHint')}
         </p>
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="text-xs text-text-muted block mb-1">Hora</label>
+          <label className="text-xs text-text-muted block mb-1">{tt('schedules.form.time')}</label>
           <input
             type="time"
             value={time}
@@ -1537,7 +1536,7 @@ function ScheduleForm({
           />
         </div>
         <div>
-          <label className="text-xs text-text-muted block mb-1">Repetición</label>
+          <label className="text-xs text-text-muted block mb-1">{tt('schedules.form.recurrence')}</label>
           <select
             value={recurrence}
             onChange={(e) => setRecurrence(e.target.value as ScheduledTask['recurrence'])}
@@ -1545,7 +1544,7 @@ function ScheduleForm({
           >
             {Object.entries(RECURRENCE_LABELS).map(([k, v]) => (
               <option key={k} value={k}>
-                {v}
+                {tt(v)}
               </option>
             ))}
           </select>
@@ -1553,9 +1552,9 @@ function ScheduleForm({
       </div>
       {recurrence === 'weekly' && (
         <div>
-          <label className="text-xs text-text-muted block mb-1">Día de la semana</label>
+          <label className="text-xs text-text-muted block mb-1">{tt('schedules.form.weekday')}</label>
           <div className="flex gap-1">
-            {WEEKDAY_LABELS.map((d, i) => (
+            {[0, 1, 2, 3, 4, 5, 6].map((i) => (
               <button
                 key={i}
                 onClick={() => setWeekday(i)}
@@ -1564,7 +1563,7 @@ function ScheduleForm({
                   weekday === i && 'codex-btn-primary',
                 )}
               >
-                {d}
+                {tt(`schedules.weekdays.${i}`)}
               </button>
             ))}
           </div>
@@ -1572,7 +1571,7 @@ function ScheduleForm({
       )}
       {recurrence === 'monthly' && (
         <div>
-          <label className="text-xs text-text-muted block mb-1">Día del mes</label>
+          <label className="text-xs text-text-muted block mb-1">{tt('schedules.form.monthDay')}</label>
           <input
             type="number"
             min={1}
@@ -1584,13 +1583,13 @@ function ScheduleForm({
         </div>
       )}
       <div className="flex justify-end gap-2 pt-1">
-        <Button onClick={onCancel}>Cancelar</Button>
+        <Button onClick={onCancel}>{tt('schedules.form.cancel')}</Button>
         <Button
           variant="primary"
           onClick={submit}
           disabled={!name.trim() || !instruction.trim()}
         >
-          {initial ? 'Guardar' : 'Crear tarea'}
+          {initial ? tt('schedules.form.save') : tt('schedules.form.create')}
         </Button>
       </div>
     </div>
@@ -1602,6 +1601,8 @@ function ScheduleForm({
 // ============================================================================
 
 export function ConfiguracionView() {
+  const tt = useT();
+  const [lang, setLang] = useLang();
   const { themeId, setTheme } = useWeaver();
   const [tavilyKey, setTavilyKey] = useState('');
   const [tavilyStatus, setTavilyStatus] = useState<string | null>(null);
@@ -1663,7 +1664,7 @@ export function ConfiguracionView() {
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-2xl mx-auto px-6 py-10 space-y-6">
         <div>
-          <h1 className="text-3xl font-medium mb-2">Configuración</h1>
+          <h1 className="text-3xl font-medium mb-2">{tt('config.title')}</h1>
           <p className="text-text-secondary text-sm">
             Ajustes globales de Weaver. Las API keys se gestionan desde el icono del
             modelo en el composer.
@@ -1695,9 +1696,34 @@ export function ConfiguracionView() {
           )}
         </SettingCard>
 
+        {/* Idioma */}
+        <SettingCard
+          title={tt('config.language')}
+          desc={tt('config.language.hint')}
+        >
+          <div className="flex gap-2">
+            {(['es', 'en'] as const).map((lng) => (
+              <button
+                key={lng}
+                onClick={() => setLang(lng)}
+                className={`text-left px-3 py-2 rounded-codex border transition-colors flex-1 ${
+                  lang === lng
+                    ? 'border-accent bg-accent/10 text-text-primary'
+                    : 'border-border hover:border-border-accent text-text-secondary'
+                }`}
+              >
+                <div className="text-sm font-medium">{tt(`config.language.${lng}`)}</div>
+                <div className="text-[10px] text-text-muted mt-0.5">
+                  {lng === 'es' ? 'Español (por defecto)' : 'English'}
+                </div>
+              </button>
+            ))}
+          </div>
+        </SettingCard>
+
         {/* Tema */}
         <SettingCard
-          title="Tema"
+          title={tt('config.theme')}
           desc="Elige la paleta de colores. Los cambios se aplican al instante."
         >
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
