@@ -28,31 +28,77 @@ export class AnthropicProvider implements LLMProvider {
     if (!this.apiKey) throw new Error('Anthropic requiere API key');
 
     // Multimodal: convertir mensajes con imágenes al formato Anthropic.
+    // Anthropic tiene su propio formato para tools y tool_results:
+    //   - assistant con tool_calls → content: [{type:'text'}, {type:'tool_use', id, name, input}]
+    //   - tool (OpenAI) → user con content: [{type:'tool_result', tool_use_id, content}]
+    const messages: Array<Record<string, unknown>> = [];
+    for (const m of opts.messages) {
+      if (m.role === 'system') continue;
+
+      // Mensaje tipo tool (resultado de tool_call en formato OpenAI).
+      if (m.role === 'tool') {
+        messages.push({
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: m.tool_call_id ?? '',
+              content: m.content ?? '',
+            },
+          ],
+        });
+        continue;
+      }
+
+      // Mensaje assistant con tool_calls (formato OpenAI) → convertir a formato Anthropic.
+      if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
+        const content: unknown[] = [];
+        if (m.content) content.push({ type: 'text', text: m.content });
+        for (const tc of m.tool_calls) {
+          let input: unknown = {};
+          try {
+            input = JSON.parse(tc.function.arguments || '{}');
+          } catch {
+            input = {};
+          }
+          content.push({
+            type: 'tool_use',
+            id: tc.id,
+            name: tc.function.name,
+            input,
+          });
+        }
+        messages.push({ role: 'assistant', content });
+        continue;
+      }
+
+      // Mensaje user con imágenes → formato multimodal de Anthropic.
+      if (m.images && m.images.length > 0 && m.role === 'user') {
+        const content: unknown[] = [];
+        if (m.content) content.push({ type: 'text', text: m.content });
+        for (const img of m.images) {
+          const base64 = img.dataUrl.split(',')[1] ?? '';
+          content.push({
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: img.mime,
+              data: base64,
+            },
+          });
+        }
+        messages.push({ role: m.role, content });
+        continue;
+      }
+
+      // Mensaje normal (user o assistant con solo texto).
+      messages.push({ role: m.role, content: m.content ?? '' });
+    }
+
     const body = {
       model: opts.model,
       max_tokens: opts.maxTokens ?? 4096,
-      messages: opts.messages
-        .filter((m) => m.role !== 'system')
-        .map((m) => {
-          if (m.images && m.images.length > 0 && m.role === 'user') {
-            const content: unknown[] = [];
-            if (m.content) content.push({ type: 'text', text: m.content });
-            for (const img of m.images) {
-              // Anthropic espera: { type: 'image', source: { type: 'base64', media_type, data } }
-              const base64 = img.dataUrl.split(',')[1] ?? '';
-              content.push({
-                type: 'image',
-                source: {
-                  type: 'base64',
-                  media_type: img.mime,
-                  data: base64,
-                },
-              });
-            }
-            return { role: m.role, content };
-          }
-          return { role: m.role, content: m.content };
-        }),
+      messages,
       system: opts.messages.find((m) => m.role === 'system')?.content,
       stream: true,
       ...(opts.tools && opts.tools.length > 0

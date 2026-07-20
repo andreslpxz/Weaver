@@ -329,7 +329,9 @@ export function Composer() {
       );
 
       if (desktopAgentive && runtime.isTauri) {
-        appendMessage({ role: 'assistant', content: '' });
+        // Nota: NO hacemos appendMessage vacío aquí — handleAgentEvent
+        // ya agrega sus propios mensajes (planificando, plan, episodio, etc.).
+        // Un append vacío dejaría un mensaje fantasma al inicio del chat.
         for await (const _event of runAgent(llm, modelId, objectiveText, {
           signal: ac.signal,
           onEvent: handleAgentEvent,
@@ -409,6 +411,15 @@ export function Composer() {
           '- Si web_fetch falla, no insistas. Usa web_search.\n' +
           '- Para crear archivos que el usuario descargue, usa save_file (no file_write).\n' +
           '- Máximo 1 intento de web_fetch por URL.\n\n' +
+          '═══ CIERRE OBLIGATORIO ═══\n' +
+          'Cuando termines de usar herramientas, SIEMPRE debes escribir una respuesta\n' +
+          'final al usuario con esta estructura:\n' +
+          '1. Un RESUMEN BREVE de lo que hiciste (qué tools usaste y para qué).\n' +
+          '2. Los RESULTADOS principales que encontraste o produciste.\n' +
+          '3. Una PREGUNTA DE SEGUIMIENTO al usuario (ej: "¿Quieres que profundice\n' +
+          '   en algún punto?" o "¿Hay algo más en lo que pueda ayudarte?").\n' +
+          'NUNCA termines tu turno sólo con el resultado de una herramienta.\n' +
+          'NUNCA dejes al usuario sin una respuesta textual final.\n\n' +
           'Cuando el usuario te pida algo, ÚSALAS LAS HERRAMIENTAS. No digas que no puedes.\n' +
           'Si tu respuesta se acerca al límite de tokens, termina con <<CONTINUE>>. Al terminar del todo, emite <<END>>.',
       },
@@ -416,7 +427,9 @@ export function Composer() {
     ];
 
     const tools = buildAdvancedToolsList();
-    const MAX_TOOL_ROUNDS = 6;
+    const MAX_TOOL_ROUNDS = 8;
+
+    let producedFinalText = false;
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       const result = await streamChat(llm, modelId, messages, {
@@ -426,7 +439,10 @@ export function Composer() {
       });
 
       // Si no hay tool calls, el LLM ya respondió → terminamos.
-      if (result.toolCalls.length === 0) return;
+      if (result.toolCalls.length === 0) {
+        producedFinalText = true;
+        break;
+      }
 
       // Agregar el mensaje del asistente con tool_calls al historial.
       // IMPORTANTE: content debe ser null (no string vacío) cuando hay tool_calls,
@@ -472,8 +488,30 @@ export function Composer() {
       await new Promise((r) => setTimeout(r, 100));
     }
 
-    // Si llegamos aquí, se agotaron los rounds. Mostrar aviso.
-    updateLastAssistantMessage('\n\n*(Límite de rondas de tools alcanzado)*');
+    // Si el LLM nunca produjo texto final (sólo llamó tools hasta agotar rounds),
+    // forzar una respuesta final SIN tools para que el usuario sí reciba respuesta.
+    if (!producedFinalText) {
+      updateLastAssistantMessage('\n\n');
+      messages.push({
+        role: 'user',
+        content:
+          'Ya usaste las herramientas necesarias. Ahora DEBES responderme en texto plano:\n' +
+          '1) Un resumen breve de lo que hiciste.\n' +
+          '2) Los resultados principales.\n' +
+          '3) Una pregunta de seguimiento.\n' +
+          'No intentes usar más herramientas. Responde directamente.',
+      });
+      try {
+        await streamChat(llm, modelId, messages, {
+          signal,
+          onDelta: (delta) => updateLastAssistantMessage(delta),
+        });
+      } catch (e) {
+        updateLastAssistantMessage(
+          `\n\n*(No se pudo generar el resumen final: ${e instanceof Error ? e.message : String(e)})*`,
+        );
+      }
+    }
   }
 
   /** Formatea el label de un tool call para mostrar en el UI. */
