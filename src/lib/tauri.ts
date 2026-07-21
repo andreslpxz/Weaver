@@ -217,7 +217,14 @@ export const keyring = {
 
   deleteApiKey: (providerId: string): Promise<void> => {
     if (isTauri) {
-      return tauriInvoke<void>('keyring_delete_api_key', { providerId });
+      // IMPORTANTE: el comando Rust `keyring_delete_api_key` espera
+      // `provider_id` (snake_case) como argumento. Si mandamos `providerId`
+      // (camelCase), Tauri no lo mapea y la llamada falla silenciosamente
+      // en algunos casos o lanza "missing field provider_id".
+      return tauriInvoke<void>('keyring_delete_api_key', {
+        providerId,
+        provider_id: providerId,
+      });
     }
     lsDel(providerId);
     return Promise.resolve();

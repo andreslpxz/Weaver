@@ -638,6 +638,8 @@ function McpSection({
     try {
       mcpClient.installPreset(preset, envValues);
       setServers(mcpClient.listServers());
+      // Avisar al Composer que recargue su lista de MCPs para el menú @.
+      window.dispatchEvent(new CustomEvent('weaver:mcp-changed'));
     } catch (e) {
       alert(`Error instalando ${preset.name}: ${e}`);
     } finally {
@@ -649,11 +651,13 @@ function McpSection({
     if (!confirm('¿Eliminar este servidor MCP? Se perderán las aprobaciones de tools.')) return;
     mcpClient.removeServer(id);
     setServers(mcpClient.listServers());
+    window.dispatchEvent(new CustomEvent('weaver:mcp-changed'));
   }
 
   function toggleEnabled(server: McpServer) {
     mcpClient.saveServer({ ...server, enabled: !server.enabled });
     setServers(mcpClient.listServers());
+    window.dispatchEvent(new CustomEvent('weaver:mcp-changed'));
   }
 
   return (

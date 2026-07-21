@@ -173,14 +173,25 @@ export function ModelPickerPopup({ onClose }: { onClose: () => void }) {
         refreshProvidersWithKey();
       }
     } catch (e) {
-      setKeyStatus({ ok: false, message: e instanceof Error ? e.message : String(e) });
+      const msg = e instanceof Error ? e.message : String(e);
+      setKeyStatus({
+        ok: false,
+        message: `No se pudo guardar en el llavero del OS: ${msg}. ` +
+          `En Windows verifica que Credential Manager no esté bloqueado. ` +
+          `Si el problema persiste, reinicia Weaver como administrador.`,
+      });
     }
   }
 
   async function deleteKey(pid: ProviderId) {
-    await apiKeyStore.delete(pid);
-    setHasKey((h) => ({ ...h, [pid]: false }));
-    refreshProvidersWithKey();
+    try {
+      await apiKeyStore.delete(pid);
+      setHasKey((h) => ({ ...h, [pid]: false }));
+      refreshProvidersWithKey();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setKeyStatus({ ok: false, message: `No se pudo eliminar: ${msg}` });
+    }
   }
 
   return (

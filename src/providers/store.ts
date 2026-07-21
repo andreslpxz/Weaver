@@ -50,13 +50,37 @@ export const apiKeyStore = {
   async set(providerId: ProviderId, apiKey: string): Promise<void> {
     cache.set(providerId, apiKey);
     known.add(providerId);
-    await keyringApi.setApiKey(providerId, apiKey);
+    // Propagamos el error para que el UI lo muestre. Antes se tragaba
+    // silenciosamente, lo que hacía que el usuario creyera que se había
+    // guardado cuando en realidad falló (ej: keyring del OS bloqueado).
+    try {
+      await keyringApi.setApiKey(providerId, apiKey);
+    } catch (e) {
+      // Revertir cache porque el guardado falló.
+      cache.set(providerId, undefined);
+      known.delete(providerId);
+      throw e;
+    }
   },
 
   async delete(providerId: ProviderId): Promise<void> {
     cache.set(providerId, undefined);
     known.delete(providerId);
-    await keyringApi.deleteApiKey(providerId);
+    try {
+      await keyringApi.deleteApiKey(providerId);
+    } catch (e) {
+      // Recargar el estado real desde el OS en caso de fallo.
+      try {
+        const raw = await keyringApi.getApiKeyRaw(providerId);
+        if (raw) {
+          cache.set(providerId, raw);
+          known.add(providerId);
+        }
+      } catch {
+        // ignore
+      }
+      throw e;
+    }
   },
 
   has(providerId: ProviderId): boolean {

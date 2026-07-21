@@ -90,6 +90,7 @@ export function Composer() {
     setCognitiveMode,
     projects,
     setView,
+    view,
   } = useWeaver();
 
   // Cargar skills para el menú @
@@ -103,11 +104,13 @@ export function Composer() {
       try { setMcpServers(mcpClient.listServers()); } catch { setMcpServers([]); }
     };
     load();
-    // Recargar cuando se cierre el popup del menú + (por si el usuario
-    // acaba de instalar/desinstalar un servidor MCP en la vista de ajustes).
+    // Recargar en estos casos:
+    // 1. Evento 'weaver:mcp-changed' (instalación/eliminación/toggle en Ajustes).
+    // 2. Cuando el usuario vuelve a la vista 'chat' (por si instaló MCP estando
+    //    en otra vista y el evento se disparó antes de que el Composer existiera).
     window.addEventListener('weaver:mcp-changed', load as EventListener);
     return () => window.removeEventListener('weaver:mcp-changed', load as EventListener);
-  }, []);
+  }, [view]);
 
   // Autosize textarea
   useEffect(() => {

@@ -253,3 +253,43 @@ Stage Summary:
 - Fix: feature completa de @mcp:<nombre> — el usuario escribe @mcp:Figma en su mensaje y las tools de Figma se cargan automáticamente al array de tools del LLM.
 - IMPORTANTE: MCP sigue requiriendo Tauri para funcionar. En modo navegador (npm run dev puro), si el usuario menciona @mcp:, el agente le informará que debe ejecutar la app de escritorio.
 - Próximo paso sugerido: emitir evento 'weaver:mcp-changed' desde la vista Ajustes > MCP cuando el usuario instale/desinstale/apruebe tools, para que el Composer recargue la lista sin recargar la página.
+
+---
+Task ID: bug-fix-win-keyring-mcp-reload
+Agent: main
+Task: El usuario en Windows reporta dos bugs con Tauri:
+1. No se guardan las API keys de los proveedores (OpenAI, Anthropic, etc.).
+2. Después de instalar el MCP de Figma, no aparece @mcp en el menú del Composer.
+
+Work Log:
+- Bug 1 (API keys):
+  - Análisis: en src/lib/tauri.ts, `deleteApiKey` pasaba `{ providerId }` (camelCase) al comando Rust `keyring_delete_api_key`, pero Rust espera `provider_id` (snake_case). Tauri v2 no mapea automáticamente, así que el delete fallaba silenciosamente.
+  - Para `setApiKey` ya estaba bien (usaba `args: { provider_id, api_key }`), pero el apiKeyStore.set propagaba errores silenciosamente: si el keyring fallaba (ej: Credential Manager bloqueado en Windows), el caché quedaba con la key como si estuviera guardada pero en realidad no estaba en el OS.
+  - Fix en src/lib/tauri.ts:
+    * deleteApiKey ahora pasa ambos `{ providerId, provider_id: providerId }` para compatibilidad (Tauri hace match por nombre).
+  - Fix en src/providers/store.ts:
+    * apiKeyStore.set ahora hace try/catch y revierte el caché si el guardado falla, propagando el error.
+    * apiKeyStore.delete también hace try/catch y recarga el estado real desde el OS si falla.
+  - Fix en src/components/model-picker/ModelPickerPopup.tsx:
+    * saveKey ahora muestra un mensaje claro si el keyring falla: "No se pudo guardar en el llavero del OS: <msg>. En Windows verifica que Credential Manager no esté bloqueado. Si el problema persiste, reinicia Weaver como administrador."
+    * deleteKey también hace try/catch y muestra el error.
+- Bug 2 (@mcp no aparece):
+  - Análisis: el Composer cargaba mcpServers en un useEffect al montarse, pero si el usuario instalaba Figma DESPUÉS (estando en la vista Ajustes), el Composer no se enteraba. El useEffect no tenía mecanismo de recarga.
+  - Fix en src/views/Views.tsx:
+    * installPreset, removeServer y toggleEnabled ahora disparan `window.dispatchEvent(new CustomEvent('weaver:mcp-changed'))` después de modificar los servidores.
+  - Fix en src/components/composer/Composer.tsx:
+    * useEffect de mcpServers ahora tiene `[view]` como dependencia. Cuando el usuario vuelve a la vista 'chat' desde Ajustes, el useEffect se re-ejecuta y recarga mcpServers. Esto cubre el caso edge donde el evento 'weaver:mcp-changed' se disparó antes de que el Composer estuviera montado.
+    * También recarga cuando llega el evento 'weaver:mcp-changed'.
+- Verificado: tsc --noEmit EXIT 0 ✓ · vite build exitoso en 6.41s ✓.
+
+Stage Summary:
+- Archivos modificados:
+  - src/lib/tauri.ts: deleteApiKey pasa provider_id (snake_case) para matchear el comando Rust.
+  - src/providers/store.ts: apiKeyStore.set/delete propagan errores y revierten caché en fallo.
+  - src/components/model-picker/ModelPickerPopup.tsx: saveKey/deleteKey muestran errores del keyring al usuario.
+  - src/views/Views.tsx: installPreset/removeServer/toggleEnabled disparan 'weaver:mcp-changed'.
+  - src/components/composer/Composer.tsx: useEffect mcpServers depende de [view], recarga al volver a chat.
+- Causas raíz:
+  1. API keys: deleteApiKey camelCase vs snake_case + errores tragados silenciosamente. Para set, si Windows Credential Manager fallaba (poco frecuente pero posible), el usuario no recibía feedback.
+  2. @mcp: falta de evento de recarga entre Ajustes y Composer.
+- Nota para el usuario: si después de este fix el guardado sigue fallando en Windows, el error ahora se mostrará en el UI con un mensaje claro. Las causas más comunes son: Credential Manager bloqueado por GPO, antivirus interceptando, o falta de permisos. Reiniciar como admin suele resolverlo.
