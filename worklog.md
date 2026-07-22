@@ -293,3 +293,104 @@ Stage Summary:
   1. API keys: deleteApiKey camelCase vs snake_case + errores tragados silenciosamente. Para set, si Windows Credential Manager fallaba (poco frecuente pero posible), el usuario no recibía feedback.
   2. @mcp: falta de evento de recarga entre Ajustes y Composer.
 - Nota para el usuario: si después de este fix el guardado sigue fallando en Windows, el error ahora se mostrará en el UI con un mensaje claro. Las causas más comunes son: Credential Manager bloqueado por GPO, antivirus interceptando, o falta de permisos. Reiniciar como admin suele resolverlo.
+
+---
+Task ID: fix-rust-duplicate-keyring-linux
+Agent: main
+Task: Corregir error de compilación Rust en Linux: `error[E0428]: the name __tauri_command_name_keyring_set_api_key is defined multiple times` al correr `npm run tauri:dev`. Caused by both `commands.rs` (Linux-only, defines keyring_* + AT-SPI + automation) and `commands_crossplatform.rs` (always compiled, defines same keyring_* commands) being in the same crate on Linux, so the `#[tauri::command]` macro emits colliding `__cmd__*` / `__tauri_command_name_*` symbols.
+
+Work Log:
+- Diagnosticado: `lib.rs` declaraba `pub mod commands_crossplatform;` sin `cfg`, así que se compilaba en todas las plataformas. En Linux también se compila `commands.rs` (gated con `#[cfg(target_os = "linux")]`), que redefine los 5 mismos comandos keyring_*.
+- Fix aplicado en `src-tauri/src/lib.rs`: gate `commands_crossplatform` con `#[cfg(not(target_os = "linux"))]`. Así en Linux sólo compila `commands.rs` (que tiene keyring + AT-SPI/automation), y en Windows/macOS sólo compila `commands_crossplatform.rs` (keyring + tools + MCP). Los `invoke_handler!` ya estaban correctamente separados por cfg.
+- Verificado que no hay otras referencias a `commands_crossplatform` fuera del bloque `#[cfg(not(target_os = "linux"))]` en `lib.rs`.
+- Commit `8c1c6ff` y push a main.
+
+Stage Summary:
+- Root cause: `commands_crossplatform` no estaba gated, se compilaba en Linux donde `commands` ya define los mismos keyring commands.
+- Fix: 1 línea en `src-tauri/src/lib.rs` agregando `#[cfg(not(target_os = "linux"))]` antes de `pub mod commands_crossplatform;`.
+- Resultado: `npm run tauri:dev` debería compilar en Linux sin los 10 errores E0428.
+
+---
+Task ID: feat-project-collaboration
+Agent: main
+Task: Implementar colaboración local en proyectos: invitar miembros ilimitados, cada uno con su propio proveedor+modelo (para no saturar el modelo principal), carpetas aisladas por miembro (chats privados), contraseñas para proyecto y miembro, renombrar proyectos, matriz de permisos (ejecutar agent, editar archivos, shell, ver chats ajenos, gestionar miembros), y configurar dónde corren los tools del agent (local / sólo dueño / cada quien).
+
+Work Log:
+- Backend Rust (`src-tauri/src/db/mod.rs`):
+  - Nueva tabla `project_members` con: id, project_id, name, color, provider_id, model_id, role ('owner'|'admin'|'member'|'viewer'), 5 bools de permisos, password_hash, created_at.
+  - Migraciones ALTER (ejecutadas una por una ignorando "duplicate column name"):
+    * `ALTER TABLE projects ADD COLUMN password_hash TEXT`
+    * `ALTER TABLE projects ADD COLUMN agent_execution_scope TEXT DEFAULT 'local'`
+    * `ALTER TABLE conversations ADD COLUMN owner_member_id TEXT`
+  - Updated `Project` struct: +password_hash, +agent_execution_scope.
+  - Updated `Conversation` struct: +owner_member_id.
+  - Nuevo `ProjectMember` struct.
+  - Helper `hash_password(p)` con DefaultHasher + salt estático "weaver-v1|" (suficiente para gate local).
+  - Nuevos comandos:
+    * `projects_set_password(id, password: Option<String>)`
+    * `projects_verify_password(id, password) -> bool`
+    * `projects_set_scope(id, scope: String)`
+    * `members_list(project_id) -> Vec<ProjectMember>`
+    * `members_create(member) -> ProjectMember`
+    * `members_update(member)`
+    * `members_delete(id)` (libera conversaciones del miembro)
+    * `members_set_password(id, password: Option<String>)`
+    * `members_verify_password(id, password) -> bool`
+    * `conversations_set_owner(conv_id, member_id: Option<String>)`
+  - `projects_delete` ahora también borra miembros del proyecto.
+- `src-tauri/src/lib.rs`: registrados los 10 nuevos comandos en AMBOS invoke_handler blocks (Linux y crossplatform).
+- TypeScript bindings (`src/lib/tauri.ts`):
+  - `ProjectRow` +password_hash, +agent_execution_scope.
+  - `ConversationRow` +owner_member_id.
+  - Nuevo `ProjectMemberRow` con todos los campos.
+  - Wrappers en `sqlite`: setProjectPassword, verifyProjectPassword, setProjectScope, listMembers, createMember, updateMember, deleteMember, setMemberPassword, verifyMemberPassword, setConversationOwner.
+- Store (`src/store/weaver.ts`):
+  - `Project` interface: +passwordHash, +agentExecutionScope.
+  - `Conversation` interface: +ownerMemberId.
+  - Nuevo `ProjectMember` interface.
+  - Nuevas acciones: setProjectPassword, setProjectScope, setConversationOwner, loadMembers, createMember, updateMember, deleteMember, setMemberPassword.
+  - Nuevo estado: `members: ProjectMember[]`, `activeMemberId: string | null`.
+  - Nuevas acciones: `setActiveMember(id)`, `getActiveMember()`.
+  - `loadProjects` mapea los nuevos campos. Fallback navegador también.
+  - `deleteProject` limpia members del estado.
+- Modal (`src/components/projects/ProjectSettingsModal.tsx`, nuevo archivo 544 líneas):
+  - Sección General: renombrar proyecto (onBlur guarda).
+  - Sección Scope: 3 tarjetas (Local / Sólo dueño / Cada quien) con icono, label y descripción.
+  - Sección Contraseña: input + botón Guardar/Quitar. Muestra estado "protegido" o "sin protección".
+  - Sección Miembros: lista con count, formulario para añadir (nombre + rol), fila expandible por miembro con:
+    * Rol (select: owner/admin/member/viewer).
+    * Proveedor propio (select de PROVIDERS o "Usa el global").
+    * Modelo propio (select dependiente del provider).
+    * Matriz de 5 permisos (toggles): Ejecutar agent, Editar archivos, Usar shell, Ver chats ajenos, Gestionar miembros.
+    * Contraseña del miembro (input + botón Fijar/Cambiar).
+    * Botón eliminar.
+- Sidebar (`src/components/sidebar/Sidebar.tsx`):
+  - Botón "Cambiar de miembro" (UserCircle icon) por proyecto.
+  - Switcher desplegable: "Tú (dueño)" + lista de miembros con color, candado si tienen contraseña, punto azul si activos.
+  - Cambiar a miembro con contraseña → modal de prompt. Verifica via `sqlite.verifyMemberPassword`.
+  - Icono Lock en projects con password_hash.
+  - Modal ProjectSettingsModal renderizado al final.
+- Composer (`src/components/composer/Composer.tsx`):
+  - Sobreescribe `providerId`/`modelId` globales con los del `activeMember` cuando existe.
+  - Así cada miembro usa su propio proveedor+modelo en sus chats (no satura el modelo principal).
+- Verificado: tsc --noEmit EXIT 0 ✓ · vite build exitoso en 5.46s ✓.
+
+Stage Summary:
+- Archivos modificados/creados:
+  - src-tauri/src/db/mod.rs (esquema + structs + 10 comandos nuevos + hash_password helper)
+  - src-tauri/src/lib.rs (registro en ambos invoke_handler blocks)
+  - src/lib/tauri.ts (bindings TS)
+  - src/store/weaver.ts (interfaces + estado + acciones)
+  - src/components/projects/ProjectSettingsModal.tsx (NUEVO)
+  - src/components/sidebar/Sidebar.tsx (switcher + prompt + integración modal)
+  - src/components/composer/Composer.tsx (override provider+model del active member)
+- Cómo usarlo:
+  1. Click en el icono Users de un proyecto → modal de ajustes.
+  2. Añade miembros (Ana, Carlos, etc.) con su rol.
+  3. Para cada miembro, expande y configura: proveedor propio + modelo propio + permisos + contraseña opcional.
+  4. Click en UserCircle al lado del proyecto → switcher. Elige "Tú" o un miembro. Si el miembro tiene contraseña, se pide.
+  5. Cuando un miembro está activo, el Composer usa SU provider+model en lugar del global. Así cada quien paga su consumo.
+- Limitaciones locales (por ser app desktop sin server):
+  - La "sincronización entre máquinas" no es automática. Cada máquina tiene su SQLite.
+  - El scope 'owner_only' / 'each_user' es una directriz que la UI respeta (no enforcement real más allá de la matriz de permisos local).
+  - Las API keys por miembro todavía usan el keyring global del provider (no hay "member:<id>:openai" todavía). Para v2: extender apiKeyStore para soportar keys miembro-específicas.

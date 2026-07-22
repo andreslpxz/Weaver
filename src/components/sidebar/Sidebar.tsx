@@ -16,11 +16,16 @@ import {
   X,
   Clock,
   Menu,
+  Users,
+  UserCircle,
+  Lock,
 } from 'lucide-react';
-import { useWeaver, type ViewId } from '@/store/weaver';
+import { useWeaver, type ViewId, type Project, type ProjectMember } from '@/store/weaver';
 import { cn } from '@/components/common/Button';
 import { WeaverLogo } from '@/components/common/WeaverLogo';
 import { useT } from '@/lib/i18n';
+import { sqlite, runtime } from '@/lib/tauri';
+import { ProjectSettingsModal } from '@/components/projects/ProjectSettingsModal';
 
 interface SidebarItem {
   id: ViewId | 'new-chat' | 'search';
@@ -65,6 +70,10 @@ export function Sidebar() {
     deleteProject,
     setConversationProject,
     loadMessages,
+    members,
+    loadMembers,
+    activeMemberId,
+    setActiveMember,
   } = useWeaver();
 
   const [showProjectInput, setShowProjectInput] = useState(false);
@@ -73,6 +82,13 @@ export function Sidebar() {
   const [convMenuFor, setConvMenuFor] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [settingsFor, setSettingsFor] = useState<Project | null>(null);
+  /** Miembro pendiente de activar (esperando contraseña si la tiene). */
+  const [pendingMember, setPendingMember] = useState<ProjectMember | null>(null);
+  const [pwPrompt, setPwPrompt] = useState('');
+  const [pwError, setPwError] = useState<string | null>(null);
+  /** Proyecto expandido para mostrar su switcher de miembros. */
+  const [memberSwitcherFor, setMemberSwitcherFor] = useState<string | null>(null);
 
   // Detección de viewport móvil.
   const [isMobile, setIsMobile] = useState(false);
@@ -102,6 +118,50 @@ export function Sidebar() {
   useEffect(() => {
     loadProjects();
   }, [loadProjects]);
+
+  // Cargar miembros del proyecto cuando se expande su switcher.
+  useEffect(() => {
+    if (memberSwitcherFor) loadMembers(memberSwitcherFor);
+  }, [memberSwitcherFor, loadMembers]);
+
+  // Cerrar switcher de miembros si el proyecto se borra.
+  useEffect(() => {
+    if (memberSwitcherFor && !projects.find((p) => p.id === memberSwitcherFor)) {
+      setMemberSwitcherFor(null);
+    }
+  }, [projects, memberSwitcherFor]);
+
+  /** Cambia al miembro indicado. Si tiene contraseña, pídele primero.
+   *  Si no tiene, actívalo directamente. */
+  async function switchToMember(m: ProjectMember) {
+    if (m.passwordHash) {
+      setPendingMember(m);
+      setPwPrompt('');
+      setPwError(null);
+    } else {
+      setActiveMember(m.id);
+    }
+  }
+
+  /** Verifica la contraseña del miembro pendiente y lo activa si coincide. */
+  async function confirmMemberPassword() {
+    if (!pendingMember) return;
+    try {
+      const ok = runtime.isTauri
+        ? await sqlite.verifyMemberPassword(pendingMember.id, pwPrompt)
+        : true;
+      if (ok) {
+        setActiveMember(pendingMember.id);
+        setPendingMember(null);
+        setPwPrompt('');
+        setPwError(null);
+      } else {
+        setPwError('Contraseña incorrecta.');
+      }
+    } catch (e) {
+      setPwError(`Error: ${e}`);
+    }
+  }
 
   // Atajo: Ctrl/Cmd+K abre la búsqueda.
   useEffect(() => {
@@ -414,7 +474,30 @@ export function Sidebar() {
                 </button>
                 <Folder size={12} className="text-accent shrink-0" />
                 <span className="flex-1 text-sm text-text-primary truncate">{p.name}</span>
+                {p.passwordHash && (
+                  <Lock size={9} className="text-text-muted shrink-0" />
+                )}
                 <span className="text-[10px] text-text-muted">{convs.length}</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMemberSwitcherFor(memberSwitcherFor === p.id ? null : p.id);
+                  }}
+                  className="codex-icon-btn w-4 h-4 opacity-0 group-hover:opacity-100"
+                  title="Cambiar de miembro"
+                >
+                  <UserCircle size={10} />
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSettingsFor(p);
+                  }}
+                  className="codex-icon-btn w-4 h-4 opacity-0 group-hover:opacity-100"
+                  title="Ajustes del proyecto (miembros, permisos, contraseña)"
+                >
+                  <Users size={10} />
+                </button>
                 <button
                   onClick={() => {
                     if (confirm(`${t('sidebar.deleteProject')} "${p.name}"?`)) {
@@ -427,6 +510,58 @@ export function Sidebar() {
                   <Trash2 size={10} />
                 </button>
               </div>
+              {/* Switcher de miembros: elige quién eres dentro de este proyecto. */}
+              {memberSwitcherFor === p.id && (
+                <div className="ml-3 mt-0.5 mb-1 border border-border rounded-codex bg-app-elevated p-1.5">
+                  <div className="text-[9px] uppercase text-text-muted tracking-wider mb-1">
+                    Cambiar de miembro
+                  </div>
+                  <button
+                    onClick={() => setActiveMember(null)}
+                    className={cn(
+                      'w-full text-left px-1.5 py-1 rounded text-xs flex items-center gap-1.5',
+                      activeMemberId === null
+                        ? 'bg-app-bg text-text-primary'
+                        : 'text-text-secondary hover:bg-app-bg',
+                    )}
+                  >
+                    <UserCircle size={11} className="text-accent" />
+                    <span className="flex-1 truncate">Tú (dueño)</span>
+                    {activeMemberId === null && (
+                      <span className="text-[9px] text-accent">●</span>
+                    )}
+                  </button>
+                  {members
+                    .filter((m) => m.projectId === p.id)
+                    .map((m) => (
+                      <button
+                        key={m.id}
+                        onClick={() => switchToMember(m)}
+                        className={cn(
+                          'w-full text-left px-1.5 py-1 rounded text-xs flex items-center gap-1.5',
+                          activeMemberId === m.id
+                            ? 'bg-app-bg text-text-primary'
+                            : 'text-text-secondary hover:bg-app-bg',
+                        )}
+                      >
+                        <span
+                          className="w-2 h-2 rounded-full shrink-0"
+                          style={{ background: m.color ?? '#7aa67a' }}
+                        />
+                        <span className="flex-1 truncate">{m.name}</span>
+                        {m.passwordHash && <Lock size={9} className="text-text-muted" />}
+                        {activeMemberId === m.id && (
+                          <span className="text-[9px] text-accent">●</span>
+                        )}
+                      </button>
+                    ))}
+                  {members.filter((m) => m.projectId === p.id).length === 0 && (
+                    <div className="px-1.5 py-1 text-[10px] text-text-muted italic">
+                      Sin miembros. Ábreles Ajustes para invitar.
+                    </div>
+                  )}
+                </div>
+              )}
               {isOpen && (
                 <div className="ml-3 border-l border-border pl-1">
                   {convs.length === 0 ? (
@@ -470,6 +605,63 @@ export function Sidebar() {
         </button>
       </div>
     </aside>
+
+    {settingsFor && (
+      <ProjectSettingsModal
+        project={settingsFor}
+        onClose={() => setSettingsFor(null)}
+      />
+    )}
+
+    {/* Prompt de contraseña para miembro protegido. */}
+    {pendingMember && (
+      <div
+        className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+        onClick={() => setPendingMember(null)}
+      >
+        <div
+          className="bg-app-bg border border-border-accent rounded-codex shadow-2xl w-full max-w-sm p-4"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <Lock size={14} className="text-accent" />
+            <h3 className="text-sm font-semibold">Acceso a "{pendingMember.name}"</h3>
+          </div>
+          <p className="text-[11px] text-text-muted mb-2">
+            Este miembro tiene contraseña. Ingrésala para chatear como él.
+          </p>
+          <input
+            type="password"
+            autoFocus
+            value={pwPrompt}
+            onChange={(e) => {
+              setPwPrompt(e.target.value);
+              setPwError(null);
+            }}
+            onKeyDown={(e) => e.key === 'Enter' && confirmMemberPassword()}
+            className="codex-input w-full px-2 py-1.5 text-sm"
+            placeholder="Contraseña del miembro"
+          />
+          {pwError && (
+            <p className="text-[10px] text-red-400 mt-1">{pwError}</p>
+          )}
+          <div className="flex gap-2 mt-3 justify-end">
+            <button
+              onClick={() => setPendingMember(null)}
+              className="codex-btn px-3 py-1.5 text-xs"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={confirmMemberPassword}
+              className="codex-btn px-3 py-1.5 text-xs"
+            >
+              Entrar
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
     </>
   );
 }

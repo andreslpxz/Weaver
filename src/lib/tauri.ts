@@ -290,6 +290,8 @@ export interface ProjectRow {
   name: string;
   color: string | null;
   created_at: number;
+  password_hash: string | null;
+  agent_execution_scope: string | null;
 }
 
 export interface ConversationRow {
@@ -298,6 +300,25 @@ export interface ConversationRow {
   title: string;
   created_at: number;
   updated_at: number;
+  owner_member_id: string | null;
+}
+
+/** Miembro de un proyecto. Cada uno puede usar su propio proveedor+modelo. */
+export interface ProjectMemberRow {
+  id: string;
+  project_id: string;
+  name: string;
+  color: string | null;
+  provider_id: string | null;
+  model_id: string | null;
+  role: 'owner' | 'admin' | 'member' | 'viewer';
+  can_run_agent: boolean;
+  can_edit_files: boolean;
+  can_use_shell: boolean;
+  can_see_other_chats: boolean;
+  can_manage_members: boolean;
+  password_hash: string | null;
+  created_at: number;
 }
 
 export interface MessageRow {
@@ -430,6 +451,26 @@ export const sqlite = {
     isTauri ? tauriInvoke<void>('projects_delete', { id }) : Promise.resolve(),
   renameProject: (id: string, name: string) =>
     isTauri ? tauriInvoke<void>('projects_rename', { id, name }) : Promise.resolve(),
+  setProjectPassword: (id: string, password: string | null) =>
+    isTauri ? tauriInvoke<void>('projects_set_password', { id, password }) : Promise.resolve(),
+  verifyProjectPassword: (id: string, password: string) =>
+    isTauri ? tauriInvoke<boolean>('projects_verify_password', { id, password }) : Promise.resolve(true),
+  setProjectScope: (id: string, scope: 'local' | 'owner_only' | 'each_user') =>
+    isTauri ? tauriInvoke<void>('projects_set_scope', { id, scope }) : Promise.resolve(),
+
+  // --- Project members (colaboración local) ---
+  listMembers: (projectId: string) =>
+    isTauri ? tauriInvoke<ProjectMemberRow[]>('members_list', { projectId }) : Promise.resolve([]),
+  createMember: (member: ProjectMemberRow) =>
+    isTauri ? tauriInvoke<ProjectMemberRow>('members_create', { member }) : Promise.resolve(member),
+  updateMember: (member: ProjectMemberRow) =>
+    isTauri ? tauriInvoke<void>('members_update', { member }) : Promise.resolve(),
+  deleteMember: (id: string) =>
+    isTauri ? tauriInvoke<void>('members_delete', { id }) : Promise.resolve(),
+  setMemberPassword: (id: string, password: string | null) =>
+    isTauri ? tauriInvoke<void>('members_set_password', { id, password }) : Promise.resolve(),
+  verifyMemberPassword: (id: string, password: string) =>
+    isTauri ? tauriInvoke<boolean>('members_verify_password', { id, password }) : Promise.resolve(true),
 
   // --- Conversations ---
   listConversations: (projectId?: string) =>
@@ -443,6 +484,10 @@ export const sqlite = {
   setConversationProject: (convId: string, projectId: string | null) =>
     isTauri
       ? tauriInvoke<void>('conversations_set_project', { convId, projectId })
+      : Promise.resolve(),
+  setConversationOwner: (convId: string, memberId: string | null) =>
+    isTauri
+      ? tauriInvoke<void>('conversations_set_owner', { convId, memberId })
       : Promise.resolve(),
   renameConversation: (id: string, title: string) =>
     isTauri ? tauriInvoke<void>('conversations_rename', { id, title }) : Promise.resolve(),

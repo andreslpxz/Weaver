@@ -17,7 +17,7 @@ import { apiKeyStore } from '@/providers/store';
 import type { Attachment } from '@/lib/attachments';
 import type { ThemeId } from '@/lib/themes';
 import { getActiveTheme, applyTheme } from '@/lib/themes';
-import { sqlite, runtime, type ProjectRow, type MeEvent, type MeCalendar, type MeTask, type MeNote, type MeHealth, type MeShoppingItem, type MeIntegration } from '@/lib/tauri';
+import { sqlite, runtime, type ProjectRow, type ProjectMemberRow, type MeEvent, type MeCalendar, type MeTask, type MeNote, type MeHealth, type MeShoppingItem, type MeIntegration } from '@/lib/tauri';
 
 export type ViewId = 'chat' | 'complementos' | 'habilidades' | 'automatizaciones' | 'configuracion' | 'me';
 
@@ -31,12 +31,37 @@ export interface Conversation {
   agentState: 'idle' | 'planning' | 'executing' | 'reflecting' | 'error';
   createdAt: number;
   updatedAt: number;
+  /** Si está fijado, la conversación es privada del miembro indicado
+   *  (aislamiento tipo "carpeta" dentro del proyecto). */
+  ownerMemberId: string | null;
 }
 
 export interface Project {
   id: string;
   name: string;
   color: string | null;
+  createdAt: number;
+  passwordHash: string | null;
+  agentExecutionScope: 'local' | 'owner_only' | 'each_user';
+}
+
+/** Miembro de un proyecto de colaboración. Cada uno puede usar su propio
+ *  proveedor+modelo (la API key se guarda en el keyring del OS bajo
+ *  provider_id = `member:<memberId>`). */
+export interface ProjectMember {
+  id: string;
+  projectId: string;
+  name: string;
+  color: string | null;
+  providerId: string | null;
+  modelId: string | null;
+  role: 'owner' | 'admin' | 'member' | 'viewer';
+  canRunAgent: boolean;
+  canEditFiles: boolean;
+  canUseShell: boolean;
+  canSeeOtherChats: boolean;
+  canManageMembers: boolean;
+  passwordHash: string | null;
   createdAt: number;
 }
 
@@ -64,7 +89,25 @@ interface WeaverState {
   createProject: (name: string, color?: string) => Promise<Project | null>;
   deleteProject: (id: string) => Promise<void>;
   renameProject: (id: string, name: string) => Promise<void>;
+  setProjectPassword: (id: string, password: string | null) => Promise<void>;
+  setProjectScope: (id: string, scope: Project['agentExecutionScope']) => Promise<void>;
   setConversationProject: (convId: string, projectId: string | null) => Promise<void>;
+  setConversationOwner: (convId: string, memberId: string | null) => Promise<void>;
+
+  // --- Miembros de proyecto (colaboración local) ---
+  members: ProjectMember[];
+  /** Miembro "activo" del proyecto actual. Si está fijado, el chat usa el
+   *  provider+model de este miembro en lugar del global. Si es null, se usa
+   *  el provider+model global (es decir, "tú" como dueño del proyecto). */
+  activeMemberId: string | null;
+  setActiveMember: (memberId: string | null) => void;
+  /** Devuelve el miembro activo del proyecto indicado (o null). */
+  getActiveMember: () => ProjectMember | null;
+  loadMembers: (projectId: string) => Promise<void>;
+  createMember: (member: Omit<ProjectMember, 'id' | 'createdAt' | 'passwordHash'>) => Promise<ProjectMember | null>;
+  updateMember: (member: ProjectMember) => Promise<void>;
+  deleteMember: (id: string) => Promise<void>;
+  setMemberPassword: (id: string, password: string | null) => Promise<void>;
 
   // --- Conversaciones ---
   conversations: Conversation[];
@@ -190,13 +233,21 @@ export const useWeaver = create<WeaverState>((set, get) => ({
           name: r.name,
           color: r.color,
           createdAt: r.created_at,
+          passwordHash: r.password_hash,
+          agentExecutionScope: (r.agent_execution_scope as Project['agentExecutionScope']) ?? 'local',
         })),
       });
     } else {
       // Fallback navegador: localStorage
       try {
         const raw = localStorage.getItem('weaver:projects');
-        set({ projects: raw ? JSON.parse(raw) : [] });
+        const parsed: Project[] = raw ? JSON.parse(raw) : [];
+        // Garantizar campos nuevos en datos antiguos.
+        for (const p of parsed) {
+          if (!p.passwordHash) p.passwordHash = null;
+          if (!p.agentExecutionScope) p.agentExecutionScope = 'local';
+        }
+        set({ projects: parsed });
       } catch {
         set({ projects: [] });
       }
@@ -211,6 +262,8 @@ export const useWeaver = create<WeaverState>((set, get) => ({
         name: row.name,
         color: row.color,
         createdAt: row.created_at,
+        passwordHash: row.password_hash,
+        agentExecutionScope: (row.agent_execution_scope as Project['agentExecutionScope']) ?? 'local',
       };
       set((s) => ({ projects: [...s.projects, proj] }));
       return proj;
@@ -220,6 +273,8 @@ export const useWeaver = create<WeaverState>((set, get) => ({
       name,
       color: color ?? null,
       createdAt: Date.now(),
+      passwordHash: null,
+      agentExecutionScope: 'local',
     };
     set((s) => ({ projects: [...s.projects, proj] }));
     try {
@@ -236,6 +291,7 @@ export const useWeaver = create<WeaverState>((set, get) => ({
       conversations: s.conversations.map((c) =>
         c.projectId === id ? { ...c, projectId: null } : c,
       ),
+      members: s.members.filter((m) => m.projectId !== id),
     }));
     if (runtime.isBrowser) {
       try {
@@ -256,6 +312,22 @@ export const useWeaver = create<WeaverState>((set, get) => ({
       } catch { /* ignore */ }
     }
   },
+  setProjectPassword: async (id, password) => {
+    if (runtime.isTauri) {
+      await sqlite.setProjectPassword(id, password);
+    }
+    set((s) => ({
+      projects: s.projects.map((p) => (p.id === id ? { ...p, passwordHash: password ? 'set' : null } : p)),
+    }));
+  },
+  setProjectScope: async (id, scope) => {
+    if (runtime.isTauri) {
+      await sqlite.setProjectScope(id, scope);
+    }
+    set((s) => ({
+      projects: s.projects.map((p) => (p.id === id ? { ...p, agentExecutionScope: scope } : p)),
+    }));
+  },
   setConversationProject: async (convId, projectId) => {
     if (runtime.isTauri) {
       await sqlite.setConversationProject(convId, projectId);
@@ -263,6 +335,149 @@ export const useWeaver = create<WeaverState>((set, get) => ({
     set((s) => ({
       conversations: s.conversations.map((c) =>
         c.id === convId ? { ...c, projectId } : c,
+      ),
+    }));
+  },
+  setConversationOwner: async (convId, memberId) => {
+    if (runtime.isTauri) {
+      await sqlite.setConversationOwner(convId, memberId);
+    }
+    set((s) => ({
+      conversations: s.conversations.map((c) =>
+        c.id === convId ? { ...c, ownerMemberId: memberId } : c,
+      ),
+    }));
+  },
+
+  // --- Miembros de proyecto (colaboración local) ---
+  members: [],
+  activeMemberId: null,
+  setActiveMember: (memberId) => set({ activeMemberId: memberId }),
+  getActiveMember: () => {
+    const { members, activeMemberId } = get();
+    return members.find((m) => m.id === activeMemberId) ?? null;
+  },
+  loadMembers: async (projectId) => {
+    if (runtime.isTauri) {
+      try {
+        const rows = await sqlite.listMembers(projectId);
+        set({
+          members: rows.map((r) => ({
+            id: r.id,
+            projectId: r.project_id,
+            name: r.name,
+            color: r.color,
+            providerId: r.provider_id,
+            modelId: r.model_id,
+            role: r.role,
+            canRunAgent: r.can_run_agent,
+            canEditFiles: r.can_edit_files,
+            canUseShell: r.can_use_shell,
+            canSeeOtherChats: r.can_see_other_chats,
+            canManageMembers: r.can_manage_members,
+            passwordHash: r.password_hash,
+            createdAt: r.created_at,
+          })),
+        });
+      } catch {
+        set({ members: [] });
+      }
+    } else {
+      try {
+        const raw = localStorage.getItem(`weaver:members:${projectId}`);
+        set({ members: raw ? JSON.parse(raw) : [] });
+      } catch {
+        set({ members: [] });
+      }
+    }
+  },
+  createMember: async (member) => {
+    const id = crypto.randomUUID();
+    const createdAt = Date.now();
+    const newMember: ProjectMember = { ...member, id, createdAt, passwordHash: null };
+    if (runtime.isTauri) {
+      const row: ProjectMemberRow = {
+        id,
+        project_id: member.projectId,
+        name: member.name,
+        color: member.color,
+        provider_id: member.providerId,
+        model_id: member.modelId,
+        role: member.role,
+        can_run_agent: member.canRunAgent,
+        can_edit_files: member.canEditFiles,
+        can_use_shell: member.canUseShell,
+        can_see_other_chats: member.canSeeOtherChats,
+        can_manage_members: member.canManageMembers,
+        password_hash: null,
+        created_at: createdAt,
+      };
+      try {
+        await sqlite.createMember(row);
+      } catch (e) {
+        console.error('createMember', e);
+        return null;
+      }
+    } else {
+      const list = [...useWeaver.getState().members, newMember];
+      try {
+        localStorage.setItem(`weaver:members:${member.projectId}`, JSON.stringify(list));
+      } catch { /* ignore */ }
+    }
+    set((s) => ({ members: [...s.members, newMember] }));
+    return newMember;
+  },
+  updateMember: async (member) => {
+    if (runtime.isTauri) {
+      const row: ProjectMemberRow = {
+        id: member.id,
+        project_id: member.projectId,
+        name: member.name,
+        color: member.color,
+        provider_id: member.providerId,
+        model_id: member.modelId,
+        role: member.role,
+        can_run_agent: member.canRunAgent,
+        can_edit_files: member.canEditFiles,
+        can_use_shell: member.canUseShell,
+        can_see_other_chats: member.canSeeOtherChats,
+        can_manage_members: member.canManageMembers,
+        password_hash: member.passwordHash,
+        created_at: member.createdAt,
+      };
+      await sqlite.updateMember(row);
+    } else {
+      const list = useWeaver.getState().members.map((m) => (m.id === member.id ? member : m));
+      try {
+        localStorage.setItem(`weaver:members:${member.projectId}`, JSON.stringify(list));
+      } catch { /* ignore */ }
+    }
+    set((s) => ({ members: s.members.map((m) => (m.id === member.id ? member : m)) }));
+  },
+  deleteMember: async (id) => {
+    const member = useWeaver.getState().members.find((m) => m.id === id);
+    if (runtime.isTauri) {
+      await sqlite.deleteMember(id);
+    } else if (member) {
+      const list = useWeaver.getState().members.filter((m) => m.id !== id);
+      try {
+        localStorage.setItem(`weaver:members:${member.projectId}`, JSON.stringify(list));
+      } catch { /* ignore */ }
+    }
+    set((s) => ({
+      members: s.members.filter((m) => m.id !== id),
+      conversations: s.conversations.map((c) =>
+        c.ownerMemberId === id ? { ...c, ownerMemberId: null } : c,
+      ),
+    }));
+  },
+  setMemberPassword: async (id, password) => {
+    if (runtime.isTauri) {
+      await sqlite.setMemberPassword(id, password);
+    }
+    set((s) => ({
+      members: s.members.map((m) =>
+        m.id === id ? { ...m, passwordHash: password ? 'set' : null } : m,
       ),
     }));
   },
@@ -289,6 +504,7 @@ export const useWeaver = create<WeaverState>((set, get) => ({
           agentState: 'idle' as const,
           createdAt: c.created_at,
           updatedAt: c.updated_at,
+          ownerMemberId: c.owner_member_id,
         }));
         set({ conversations, activeConversationId: conversations[0]?.id ?? null });
         // Cargar mensajes de la conversación activa.
@@ -353,6 +569,7 @@ export const useWeaver = create<WeaverState>((set, get) => ({
       agentState: 'idle',
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      ownerMemberId: null,
     };
     set((s) => ({
       conversations: [conv, ...s.conversations],

@@ -20,6 +20,13 @@ pub fn open() -> Result<DbState> {
     let path = db_path()?;
     let conn = Connection::open(path).context("no se pudo abrir SQLite")?;
     conn.execute_batch(MIGRATIONS).context("migrations")?;
+    // Aplicar migraciones ALTER una por una: SQLite no soporta
+    // ADD COLUMN IF NOT EXISTS, así que ignoramos "duplicate column name".
+    for stmt in MIGRATIONS_ALTER.split(';') {
+        let trimmed = stmt.trim();
+        if trimmed.is_empty() { continue; }
+        let _ = conn.execute_batch(trimmed); // ignorar error si la columna ya existe
+    }
     Ok(DbState(Mutex::new(conn)))
 }
 
@@ -164,6 +171,40 @@ CREATE TABLE IF NOT EXISTS me_integrations (
     enabled INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
 );
+
+-- ===================== Colaboración: miembros de proyecto =====================
+-- Un proyecto puede tener N miembros. Cada miembro tiene su propio
+-- proveedor + modelo (la API key vive en el keyring del OS, bajo
+-- provider_id = "member:<member_id>"). Así cada quien paga su consumo.
+-- Las conversaciones pueden aislarse por miembro (carpetas privadas).
+CREATE TABLE IF NOT EXISTS project_members (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    color TEXT,
+    provider_id TEXT,
+    model_id TEXT,
+    role TEXT NOT NULL DEFAULT 'member',              -- 'owner' | 'admin' | 'member' | 'viewer'
+    can_run_agent INTEGER NOT NULL DEFAULT 1,
+    can_edit_files INTEGER NOT NULL DEFAULT 1,
+    can_use_shell INTEGER NOT NULL DEFAULT 0,
+    can_see_other_chats INTEGER NOT NULL DEFAULT 0,
+    can_manage_members INTEGER NOT NULL DEFAULT 0,
+    password_hash TEXT,                                -- gate local opcional por miembro
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_members_project ON project_members(project_id);
+"#;
+
+/// Migraciones ALTER para DBs existentes. SQLite no soporta
+/// `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, así que las ejecutamos una por
+/// una e ignoramos el error "duplicate column name". Esto hace que la misma
+/// db funcione tanto si se creó antes como después de añadir estas columnas.
+const MIGRATIONS_ALTER: &str = r#"
+ALTER TABLE projects ADD COLUMN password_hash TEXT;
+ALTER TABLE projects ADD COLUMN agent_execution_scope TEXT DEFAULT 'local';
+ALTER TABLE conversations ADD COLUMN owner_member_id TEXT;
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -193,6 +234,10 @@ pub struct Project {
     pub name: String,
     pub color: Option<String>,
     pub created_at: i64,
+    /// Hash de contraseña opcional del proyecto (gate local).
+    pub password_hash: Option<String>,
+    /// 'local' | 'owner_only' | 'each_user' — dónde corren los tools del agent.
+    pub agent_execution_scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -202,6 +247,9 @@ pub struct Conversation {
     pub title: String,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Si está fijado, la conversación es privada del miembro indicado
+    /// (aislamiento tipo "carpeta" dentro del proyecto).
+    pub owner_member_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,6 +272,24 @@ pub struct SkillRow {
     pub body: String,
     pub source: String,
     pub file_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectMember {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    pub color: Option<String>,
+    pub provider_id: Option<String>,
+    pub model_id: Option<String>,
+    pub role: String,
+    pub can_run_agent: bool,
+    pub can_edit_files: bool,
+    pub can_use_shell: bool,
+    pub can_see_other_chats: bool,
+    pub can_manage_members: bool,
+    pub password_hash: Option<String>,
+    pub created_at: i64,
 }
 
 // ============================================================================
@@ -326,8 +392,15 @@ pub fn memory_delete_fact(key: String, state: State<'_, DbState>) -> Result<(), 
 #[tauri::command]
 pub fn projects_list(state: State<'_, DbState>) -> Result<Vec<Project>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let mut stmt = conn.prepare("SELECT id, name, color, created_at FROM projects ORDER BY created_at ASC").map_err(|e| e.to_string())?;
-    let rows = stmt.query_map([], |r| Ok(Project { id: r.get(0)?, name: r.get(1)?, color: r.get(2)?, created_at: r.get(3)? })).map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT id, name, color, created_at, password_hash, agent_execution_scope FROM projects ORDER BY created_at ASC").map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |r| Ok(Project {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        color: r.get(2)?,
+        created_at: r.get(3)?,
+        password_hash: r.get(4)?,
+        agent_execution_scope: r.get(5)?,
+    })).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     for r in rows { out.push(r.map_err(|e| e.to_string())?); }
     Ok(out)
@@ -338,14 +411,15 @@ pub fn projects_create(name: String, color: Option<String>, state: State<'_, DbS
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp_millis();
-    conn.execute("INSERT INTO projects (id, name, color, created_at) VALUES (?, ?, ?, ?)", params![id, name, color, now]).map_err(|e| e.to_string())?;
-    Ok(Project { id, name, color, created_at: now })
+    conn.execute("INSERT INTO projects (id, name, color, created_at, password_hash, agent_execution_scope) VALUES (?, ?, ?, ?, NULL, 'local')", params![id, name, color, now]).map_err(|e| e.to_string())?;
+    Ok(Project { id, name, color, created_at: now, password_hash: None, agent_execution_scope: Some("local".to_string()) })
 }
 
 #[tauri::command]
 pub fn projects_delete(id: String, state: State<'_, DbState>) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     conn.execute("UPDATE conversations SET project_id = NULL WHERE project_id = ?", params![id]).map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM project_members WHERE project_id = ?", params![id]).map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM projects WHERE id = ?", params![id]).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -357,6 +431,155 @@ pub fn projects_rename(id: String, name: String, state: State<'_, DbState>) -> R
     Ok(())
 }
 
+/// Fija (o limpia con None) la contraseña de un proyecto. La contraseña se
+/// hashea con SHA-256 + salt estático (suficiente para gate local; no es
+/// un sistema de alta seguridad).
+#[tauri::command]
+pub fn projects_set_password(id: String, password: Option<String>, state: State<'_, DbState>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let hash = password.map(|p| hash_password(&p));
+    conn.execute("UPDATE projects SET password_hash = ? WHERE id = ?", params![hash, id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Verifica la contraseña de un proyecto. Devuelve true si no tiene contraseña
+/// (acceso libre) o si la contraseña coincide.
+#[tauri::command]
+pub fn projects_verify_password(id: String, password: String, state: State<'_, DbState>) -> Result<bool, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let stored: Option<String> = conn.query_row(
+        "SELECT password_hash FROM projects WHERE id = ?",
+        params![id],
+        |r| r.get(0),
+    ).ok().flatten();
+    Ok(match stored {
+        None => true,
+        Some(h) => h == hash_password(&password),
+    })
+}
+
+/// Fija el scope de ejecución del agent para un proyecto:
+/// 'local' (default), 'owner_only', 'each_user'.
+#[tauri::command]
+pub fn projects_set_scope(id: String, scope: String, state: State<'_, DbState>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute("UPDATE projects SET agent_execution_scope = ? WHERE id = ?", params![scope, id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn hash_password(p: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    // Salt estático simple para dificultar tablas rainbow triviales.
+    let salted = format!("weaver-v1|{}", p);
+    salted.hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
+// ============================================================================
+// Miembros de proyecto (colaboración local)
+// ============================================================================
+
+fn map_member(r: &rusqlite::Row) -> rusqlite::Result<ProjectMember> {
+    Ok(ProjectMember {
+        id: r.get(0)?,
+        project_id: r.get(1)?,
+        name: r.get(2)?,
+        color: r.get(3)?,
+        provider_id: r.get(4)?,
+        model_id: r.get(5)?,
+        role: r.get(6)?,
+        can_run_agent: r.get::<_, i64>(7)? != 0,
+        can_edit_files: r.get::<_, i64>(8)? != 0,
+        can_use_shell: r.get::<_, i64>(9)? != 0,
+        can_see_other_chats: r.get::<_, i64>(10)? != 0,
+        can_manage_members: r.get::<_, i64>(11)? != 0,
+        password_hash: r.get(12)?,
+        created_at: r.get(13)?,
+    })
+}
+
+const MEMBER_COLS: &str = "id, project_id, name, color, provider_id, model_id, role, can_run_agent, can_edit_files, can_use_shell, can_see_other_chats, can_manage_members, password_hash, created_at";
+
+#[tauri::command]
+pub fn members_list(project_id: String, state: State<'_, DbState>) -> Result<Vec<ProjectMember>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let sql = format!("SELECT {} FROM project_members WHERE project_id = ? ORDER BY created_at ASC", MEMBER_COLS);
+    let mut s = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = s.query_map(params![project_id], map_member).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for r in rows { out.push(r.map_err(|e| e.to_string())?); }
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn members_create(member: ProjectMember, state: State<'_, DbState>) -> Result<ProjectMember, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let now = chrono::Utc::now().timestamp_millis();
+    conn.execute(
+        "INSERT INTO project_members (id, project_id, name, color, provider_id, model_id, role, can_run_agent, can_edit_files, can_use_shell, can_see_other_chats, can_manage_members, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        params![
+            member.id, member.project_id, member.name, member.color,
+            member.provider_id, member.model_id, member.role,
+            member.can_run_agent as i64, member.can_edit_files as i64,
+            member.can_use_shell as i64, member.can_see_other_chats as i64,
+            member.can_manage_members as i64, member.password_hash, now,
+        ],
+    ).map_err(|e| e.to_string())?;
+    let mut out = member;
+    out.created_at = now;
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn members_update(member: ProjectMember, state: State<'_, DbState>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE project_members SET name = ?, color = ?, provider_id = ?, model_id = ?, role = ?, can_run_agent = ?, can_edit_files = ?, can_use_shell = ?, can_see_other_chats = ?, can_manage_members = ?, password_hash = ? WHERE id = ?",
+        params![
+            member.name, member.color, member.provider_id, member.model_id, member.role,
+            member.can_run_agent as i64, member.can_edit_files as i64,
+            member.can_use_shell as i64, member.can_see_other_chats as i64,
+            member.can_manage_members as i64, member.password_hash, member.id,
+        ],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn members_delete(id: String, state: State<'_, DbState>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    // Liberar conversaciones que eran de este miembro (las hace compartidas).
+    conn.execute("UPDATE conversations SET owner_member_id = NULL WHERE owner_member_id = ?", params![id]).map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM project_members WHERE id = ?", params![id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Fija la contraseña de un miembro (None para quitarla).
+#[tauri::command]
+pub fn members_set_password(id: String, password: Option<String>, state: State<'_, DbState>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let hash = password.map(|p| hash_password(&p));
+    conn.execute("UPDATE project_members SET password_hash = ? WHERE id = ?", params![hash, id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Verifica la contraseña de un miembro. true si no tiene o si coincide.
+#[tauri::command]
+pub fn members_verify_password(id: String, password: String, state: State<'_, DbState>) -> Result<bool, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let stored: Option<String> = conn.query_row(
+        "SELECT password_hash FROM project_members WHERE id = ?",
+        params![id],
+        |r| r.get(0),
+    ).ok().flatten();
+    Ok(match stored {
+        None => true,
+        Some(h) => h == hash_password(&password),
+    })
+}
+
 // ============================================================================
 // Conversaciones + mensajes
 // ============================================================================
@@ -366,11 +589,11 @@ pub fn conversations_list(project_id: Option<String>, state: State<'_, DbState>)
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     if let Some(pid) = project_id {
-        let mut s = conn.prepare("SELECT id, project_id, title, created_at, updated_at FROM conversations WHERE project_id = ? ORDER BY updated_at DESC").map_err(|e| e.to_string())?;
+        let mut s = conn.prepare("SELECT id, project_id, title, created_at, updated_at, owner_member_id FROM conversations WHERE project_id = ? ORDER BY updated_at DESC").map_err(|e| e.to_string())?;
         let rows = s.query_map(params![pid], map_conv).map_err(|e| e.to_string())?;
         for r in rows { out.push(r.map_err(|e| e.to_string())?); }
     } else {
-        let mut s = conn.prepare("SELECT id, project_id, title, created_at, updated_at FROM conversations ORDER BY updated_at DESC").map_err(|e| e.to_string())?;
+        let mut s = conn.prepare("SELECT id, project_id, title, created_at, updated_at, owner_member_id FROM conversations ORDER BY updated_at DESC").map_err(|e| e.to_string())?;
         let rows = s.query_map([], map_conv).map_err(|e| e.to_string())?;
         for r in rows { out.push(r.map_err(|e| e.to_string())?); }
     }
@@ -378,21 +601,36 @@ pub fn conversations_list(project_id: Option<String>, state: State<'_, DbState>)
 }
 
 fn map_conv(r: &rusqlite::Row) -> rusqlite::Result<Conversation> {
-    Ok(Conversation { id: r.get(0)?, project_id: r.get(1)?, title: r.get(2)?, created_at: r.get(3)?, updated_at: r.get(4)? })
+    Ok(Conversation {
+        id: r.get(0)?,
+        project_id: r.get(1)?,
+        title: r.get(2)?,
+        created_at: r.get(3)?,
+        updated_at: r.get(4)?,
+        owner_member_id: r.get(5)?,
+    })
 }
 
 #[tauri::command]
 pub fn conversations_create(id: String, project_id: Option<String>, title: String, state: State<'_, DbState>) -> Result<Conversation, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let now = chrono::Utc::now().timestamp_millis();
-    conn.execute("INSERT INTO conversations (id, project_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)", params![id, project_id, title, now, now]).map_err(|e| e.to_string())?;
-    Ok(Conversation { id, project_id, title, created_at: now, updated_at: now })
+    conn.execute("INSERT INTO conversations (id, project_id, title, created_at, updated_at, owner_member_id) VALUES (?, ?, ?, ?, ?, NULL)", params![id, project_id, title, now, now]).map_err(|e| e.to_string())?;
+    Ok(Conversation { id, project_id, title, created_at: now, updated_at: now, owner_member_id: None })
 }
 
 #[tauri::command]
 pub fn conversations_set_project(conv_id: String, project_id: Option<String>, state: State<'_, DbState>) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     conn.execute("UPDATE conversations SET project_id = ?, updated_at = ? WHERE id = ?", params![project_id, chrono::Utc::now().timestamp_millis(), conv_id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Fija (o limpia) el dueño de una conversación → carpeta aislada del miembro.
+#[tauri::command]
+pub fn conversations_set_owner(conv_id: String, member_id: Option<String>, state: State<'_, DbState>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute("UPDATE conversations SET owner_member_id = ?, updated_at = ? WHERE id = ?", params![member_id, chrono::Utc::now().timestamp_millis(), conv_id]).map_err(|e| e.to_string())?;
     Ok(())
 }
 

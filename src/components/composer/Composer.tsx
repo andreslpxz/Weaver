@@ -68,8 +68,8 @@ export function Composer() {
   const plusBtnRef = useRef<HTMLButtonElement>(null);
 
   const {
-    providerId,
-    modelId,
+    providerId: globalProviderId,
+    modelId: globalModelId,
     setModelPickerOpen,
     modelPickerOpen,
     appendMessage,
@@ -93,6 +93,15 @@ export function Composer() {
     setView,
     view,
   } = useWeaver();
+
+  // Si hay un miembro activo con su propio provider+model, usarlo en lugar del global.
+  // Esto es lo que permite "cada persona usa su propio modelo" dentro de un proyecto.
+  const activeMemberId = useWeaver((s) => s.activeMemberId);
+  const activeMember = useWeaver((s) =>
+    s.members.find((m) => m.id === activeMemberId) ?? null,
+  );
+  const providerId = (activeMember?.providerId as typeof globalProviderId | null) ?? globalProviderId;
+  const modelId = activeMember?.modelId ?? globalModelId;
 
   // Cargar skills para el menú @
   useEffect(() => {
