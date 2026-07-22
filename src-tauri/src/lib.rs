@@ -14,6 +14,7 @@
 pub mod backend;
 #[cfg(target_os = "linux")]
 pub mod commands;
+#[cfg(not(target_os = "linux"))]
 pub mod commands_crossplatform;
 pub mod db;
 pub mod keyring;
