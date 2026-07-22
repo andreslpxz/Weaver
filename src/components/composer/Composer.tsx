@@ -19,6 +19,7 @@ import {
   Monitor,
   Network,
   X,
+  Settings as SettingsIcon,
 } from 'lucide-react';
 import { useWeaver } from '@/store/weaver';
 import { getProvider, PROVIDERS } from '@/providers/registry';
@@ -163,6 +164,7 @@ export function Composer() {
       const q = atMatch[1].toLowerCase();
       const items: MentionItem[] = [];
       // Skills
+      let skillsAdded = 0;
       for (const s of skills) {
         if (!q || s.name.toLowerCase().includes(q)) {
           items.push({
@@ -172,7 +174,21 @@ export function Composer() {
             icon: 'brain',
             insert: `@skill:${s.name}`,
           });
+          skillsAdded++;
         }
+      }
+      // Pista si no hay skills instaladas y el usuario está buscando skills
+      if (skillsAdded === 0 && (!q || 'skill'.includes(q) || 'habilidad'.includes(q) || 'habilidades'.includes(q))) {
+        items.push({
+          type: 'hint',
+          label: skills.length === 0 ? 'No hay skills instaladas' : 'Ninguna skill coincide',
+          desc: skills.length === 0
+            ? 'Abre Habilidades para instalar o crear una skill'
+            : `Tienes ${skills.length} skill(s) — prueba con otro término`,
+          icon: 'settings',
+          insert: '',
+          action: () => setView('habilidades'),
+        });
       }
       // Proyectos
       for (const p of projects) {
@@ -199,6 +215,7 @@ export function Composer() {
         }
       }
       // Servidores MCP instalados
+      let mcpAdded = 0;
       for (const s of mcpServers) {
         if (!s.enabled) continue;
         if (!q || s.name.toLowerCase().includes(q)) {
@@ -210,7 +227,28 @@ export function Composer() {
             icon: 'puzzle',
             insert: `@mcp:${s.name}`,
           });
+          mcpAdded++;
         }
+      }
+      // Pista si no hay servidores MCP instalados/activos y el usuario busca MCP
+      if (mcpAdded === 0 && (!q || 'mcp'.includes(q))) {
+        const enabledCount = mcpServers.filter((s) => s.enabled).length;
+        items.push({
+          type: 'hint',
+          label: mcpServers.length === 0
+            ? 'No hay servidores MCP instalados'
+            : enabledCount === 0
+              ? 'No hay servidores MCP activos'
+              : 'Ningún servidor MCP coincide',
+          desc: mcpServers.length === 0
+            ? 'Abre Ajustes → MCP para instalar Figma, Notion, etc.'
+            : enabledCount === 0
+              ? 'Activa al menos uno en Ajustes → MCP'
+              : 'Prueba con otro término',
+          icon: 'settings',
+          insert: '',
+          action: () => setView('configuracion'),
+        });
       }
       // Adjuntos recientes
       for (const a of draftAttachments) {
@@ -803,6 +841,13 @@ export function Composer() {
   }
 
   function applyMention(item: MentionItem) {
+    // Si es una pista (hint) con acción (ej: "ir a Ajustes"), ejecutarla
+    // en vez de insertar texto.
+    if (item.action) {
+      item.action();
+      setMentionOpen(false);
+      return;
+    }
     const ta = taRef.current;
     if (!ta) return;
     const cursor = ta.selectionStart;
@@ -937,7 +982,7 @@ export function Composer() {
             {mentionOpen && mentionItems.length > 0 && (
               <div className="absolute bottom-full left-1 mb-1 z-30 w-80 max-h-64 overflow-y-auto bg-app-elevated border border-border-accent rounded-codex shadow-2xl animate-slide-up">
                 <div className="px-2 py-1 text-[10px] text-text-muted uppercase tracking-wider border-b border-border">
-                  Menciones — skills, proyectos, proveedores, archivos
+                  Menciones — skills, proyectos, proveedores, MCP, archivos
                 </div>
                 {mentionItems.map((item, i) => (
                   <button
@@ -946,11 +991,11 @@ export function Composer() {
                     onClick={() => applyMention(item)}
                     className={`w-full flex items-center gap-2 px-2 py-1.5 text-left transition-colors ${
                       i === mentionIndex ? 'bg-app-input' : 'hover:bg-app-input'
-                    }`}
+                    } ${item.type === 'hint' ? 'italic' : ''}`}
                   >
                     <MentionIcon icon={item.icon} />
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm text-text-primary truncate">{item.label}</div>
+                      <div className={`text-sm truncate ${item.type === 'hint' ? 'text-text-muted' : 'text-text-primary'}`}>{item.label}</div>
                       <div className="text-[10px] text-text-muted truncate">{item.desc}</div>
                     </div>
                     <span className="text-[9px] px-1 py-0.5 rounded bg-app-bg text-text-muted uppercase">
@@ -1263,11 +1308,13 @@ function ToggleSwitch({ on }: { on: boolean }) {
 // ============================================================================
 
 interface MentionItem {
-  type: 'skill' | 'provider' | 'file' | 'project' | 'command' | 'mcp';
+  type: 'skill' | 'provider' | 'file' | 'project' | 'command' | 'mcp' | 'hint';
   label: string;
   desc: string;
-  icon: 'brain' | 'globe' | 'file' | 'image' | 'puzzle';
+  icon: 'brain' | 'globe' | 'file' | 'image' | 'puzzle' | 'settings';
   insert: string;
+  /** Si está presente, al hacer click se ejecuta esta acción (en vez de insertar texto). */
+  action?: () => void;
 }
 
 function MentionIcon({ icon }: { icon: MentionItem['icon'] }) {
@@ -1281,6 +1328,8 @@ function MentionIcon({ icon }: { icon: MentionItem['icon'] }) {
       return <ImageIcon {...props} />;
     case 'puzzle':
       return <Puzzle {...props} />;
+    case 'settings':
+      return <SettingsIcon {...props} />;
     case 'file':
     default:
       return <FileText {...props} />;
