@@ -446,32 +446,179 @@
 
 ---
 
-## Roadmap
+## Sesión 9 — Modo IDE completo + 4 bugs de UX
 
-| Fase | Estado | PR |
-|------|--------|-----|
-| 1 — Fundación | [x] Hecha | #1 |
-| 2 — Núcleo Linux (AT-SPI + automation) | [x] Hecho | #1 |
-| 3 — Proveedores IA (22) | [x] 22/22 | #1, #4 |
-| 4 — UI Codex-style | [x] Hecho | #1, #3, #5 |
-| 5 — Bucle agéntico | [x] Completo | #1 |
-| 6 — MCP + skills.sh | [x] MCP runtime real + esqueleto skills.sh | #6 |
-| 7 — Pulido Linux + empaquetado | [~] Wayland detection + CI multiplataforma; portal TBD | #6 |
-| W1-W6 — Windows | [~] W2-W4 + W5 + W6 implementados; CI falla por icon.ico | #6, #7, #8 |
-| M1-M6 — macOS | [~] M2-M4 implementados; CI falla por diferencias de API en crates | #6, #8 |
+### Tareas
 
-### Pendiente para próximas iteraciones
+#### Modo IDE (PRs previos + commits)
+- [x] Layout dual Normal/IDE persistido en localStorage (`appMode`)
+- [x] IdeLayout: TopBar + ActivityBar + FileExplorer (w-56) + CodeEditor (Monaco, centro) + BottomPanel (Cambios/Terminal) + AgentPanel (w-96) + StatusBar
+- [x] **ActivityBar**: 4 view buttons + 3 panel toggles (PanelLeft/Bottom/Right) + botón "Normal" para volver
+- [x] **FileExplorer**: breadcrumb nav, crear archivo, refresh, `sqlite.fileList` con Tauri
+- [x] **CodeEditor**: Monaco con tabs, dirty indicator, Ctrl+S, line numbers, IntelliSense, minimap, bracket pair colorization, sticky scroll, tema `weaver` que lee CSS vars
+- [x] **DiffViewer**: lista archivos modificados por el agente (created/modified/deleted) con timestamp relativo
+- [x] **Terminal**: command input con history, built-ins (help/clear/cd), ejecuta vía `sqlite.shellExec`
+- [x] **CwdPicker**: native folder picker (`@tauri-apps/plugin-dialog`) + manual path input
+- [x] **StatusBar**: cwd, archivo activo, líneas, dirty, tabs, marks, provider·model, toggles
+- [x] Persistencia de `ideCwd` por proyecto en localStorage
 
-- [ ] **Adjuntar app** real: picker AT-SPI que liste ventanas abiertas (estilo Codex "Adjuntar Google Chrome")
-- [ ] Persistir conversaciones completas a SQLite al cambiar entre ellas (ahora solo al crearse)
-- [ ] Comando Tauri `bedrock_invoke` con SigV4 nativo
-- [ ] Skills auto-aprendidas: persistir a `~/.weaver/skills/learned/` tras reflexión exitosa
-- [ ] **Fase 7 — xdg-desktop-portal RemoteDesktop**: implementar `PortalSession` real para Wayland puro
-- [ ] **Windows Fase W2**: implementar `WindowsBackend` con `uiautomation` crate
-- [ ] **Windows Fase W3**: acciones InvokePattern / ValuePattern / TextPattern
-- [ ] **Windows Fase W4**: Win32 clipboard + EnumWindows + SendInput
-- [ ] **Windows Fase W5**: code signing con certificado EV
-- [ ] **macOS Fase M2**: implementar `MacosBackend` con `accessibility` crate
-- [ ] **macOS Fase M3**: AXPress / AXSetValue / CGEvent
-- [ ] **macOS Fase M4**: NSPasteboard + NSWorkspace + NSRunningApplication
-- [ ] **macOS Fase M5**: code signing + notarización con `xcrun notarytool`
+#### Line marks verde/rojo reales (commit 7329aa0)
+- [x] **`fileWrite` emite `weaver:agent-file-change`** con `lines: LineMark[]` calculado por diff línea-a-línea
+- [x] Líneas nuevas al final → added (verde); líneas con contenido cambiado → removed (rojo, "reemplazada")
+- [x] IdeLayout escucha el evento: actualiza DiffViewer + aplica marks al tab + abre el archivo si no estaba abierto
+- [x] Hover sobre el glyph margin: "Agente: línea agregada" / "Agente: línea eliminada/reemplazada"
+- [x] Minimap + overview ruler con color verde/rojo para los cambios
+
+#### 4 bugs de UX (commit 7329aa0)
+- [x] **Menú "..." mal posicionado**: ConversationRow sin `relative` → menu aparecía "hasta la derecha" con `mt-32` fijo. Fix: `relative` + `top-full mt-1` + `z-50` + `shrink-0` en botones.
+- [x] **HTML no se renderizaba**: MarkdownText sin `rehypeRaw` → HTML crudo del agente era escapado. Fix: import + `rehypePlugins={[rehypeRaw]}` + componentes HTML custom (div, span, details, summary, button).
+- [x] **Botón enviar no aparecía en IDE**: Composer con `flex-wrap` hacía que se envolviera en panel w-96. Fix: `flex-nowrap` + `shrink-0` + `composer-model-picker` oculta en `html.ide-mode` + `composer-outer` con padding reducido.
+- [x] **Line marks amarillo quitado**: el usuario pidió solo 2 colores (verde agregadas / rojo eliminadas o reemplazadas). Mapé "modified" → rojo.
+
+---
+
+## Estado actual por módulo (Sesión 9 final)
+
+### Backend Rust (src-tauri/)
+- [x] `backend/linux/atspi/` — Cliente AT-SPI2 sobre D-Bus (zbus puro): `list_applications()`, `query_tree()` recursivo, `get_focused_subtree()`, `click`, `double_click`, `type_text`, `press_key`, `get_text`, `get_extents`, `focus`
+- [x] `backend/linux/automation/` — Teclado (wtype/xdotool), ratón, clipboard (wl-clipboard/xclip), ventanas (wmctrl)
+- [x] `backend/linux/wayland/` — Detección + guía de instalación (stub PortalSession pendiente)
+- [x] `backend/windows/uiautomation/` — `UiaClient` + `read_node()` recursivo + InvokePattern/ValuePattern/TextPattern + `WindowsBackend` 16/16 métodos
+- [x] `backend/windows/win32/` — clipboard, EnumWindows + activate, SendInput (mouse + keyboard + key combos)
+- [x] `backend/macos/ax/` — `AxClient` + `read_node()` recursivo + AXPress/AXSetValue + `MacosBackend` 16/16 métodos
+- [x] `backend/macos/appkit/` — NSPasteboard, NSWorkspace + NSRunningApplication, CGEvent input
+- [x] `keyring/` — API keys vía libsecret (Linux), Keychain (macOS), Credential Manager (Windows)
+- [x] `db/` — SQLite con 7 tablas + 24 comandos CRUD
+- [x] `tools/` — shell_exec + file ops (file_write ahora emite eventos de cambio) con expansión de `~/`
+- [x] `mcp.rs` — Runtime MCP completo (JSON-RPC 2.0, 7 comandos Tauri)
+- [x] 52 comandos Tauri registrados en total
+
+### Frontend TypeScript (src/)
+- [x] `providers/` — 22 proveedores en 6 familias: OpenAI-compat (15), Anthropic, Google Gemini, Ollama (2), VertexAI, Bedrock
+- [x] `providers/adapters/` — 6 adapters con multimodal real (openai-compat, anthropic, gemini, ollama, bedrock, vertexai)
+- [x] `providers/store.ts` — API keys globales + member-specific (`member:<id>:<provider>`) con fallback graceful
+- [x] `agent/` — Bucle agéntico completo: planner (HTN-lite), executor (ReAct, 11 tools), critic, reflection, memory, loop
+- [x] `lib/textToolParser.ts` — Parser de tool calls en formato texto (Mistral/Hermes/Llama) para modelos sin function calling nativo
+- [x] `lib/cognitive.ts` — Modo cognitivo: graphify + query del grafo del proyecto (file/folder/module/function/class/etc.)
+- [x] `lib/tauri.ts` — Wrappers con fallback navegador
+- [x] `lib/chain.ts` — Encadenamiento automático >8,192 tokens
+- [x] `lib/attachments.ts` — Drag-and-drop + paste de imágenes + tipos texto/imagen/binario
+- [x] `lib/themes.ts` — 6 temas (Sage Dark, Pure Black OLED, Soft Gray, Midnight Blue, Warm Paper, Cobalt)
+- [x] `lib/tools.ts` — shell/web/fs/cognitive tools (file_write emite `weaver:agent-file-change`)
+- [x] `lib/scheduler.ts` — Cron jobs para automatizaciones
+- [x] `components/sidebar/` — Sidebar con proyectos + miembros + conversaciones + menú "Mover a" bien posicionado
+- [x] `components/composer/` — Popup + estilo Codex (modos plan/perseguir/cognitivo), menú @, attachments, model picker
+- [x] `components/chat/MessageList.tsx` — Markdown + GFM + rehypeRaw (HTML crudo) + tool capsules + render windows + plan card + copy/regenerate/brain
+- [x] `components/ide/` — Modo IDE completo: IdeLayout, ActivityBar, FileExplorer, CodeEditor (Monaco + line marks verde/rojo), DiffViewer, Terminal, AgentPanel, CwdPicker, StatusBar
+- [x] `components/model-picker/` — ModelPickerPopup con gestión de API keys
+- [x] `components/projects/ProjectSettingsModal.tsx` — Gating de permisos + API key propia por miembro + roles admin/owner
+- [x] `views/` — 4 vistas: Complementos, Habilidades, Automatizaciones, Configuración
+- [x] `store/weaver.ts` — Zustand con conversaciones, proyectos, miembros, temas, modos, attachments, appMode (normal/ide), ideCwd
+- [x] `skills/` — Parser SKILL.md + installer
+- [x] `mcp/client.ts` — Cliente MCP en TS (7 wrappers)
+
+### CI / Empaquetado
+- [x] `.github/workflows/build-linux.yml` — .deb + .AppImage + .rpm ✓
+- [~] `.github/workflows/build-windows.yml` — Code signing implementado; CI falla por `icon.ico` con formato incorrecto
+- [~] `.github/workflows/build-macos.yml` — Universal binary configurado; CI falla por diferencias de API en `objc2-core-graphics`, `accessibility` crates
+
+### Documentación
+- [x] `PLAN.md`, `ARCHITECTURE.md`, `PROGRESS.md`, `README.md`
+- [x] `PLAN_WINDOWS.md`, `PLAN_MACOS.md`
+- [x] `docs/signing.md`
+
+---
+
+## Estadísticas actualizadas
+
+- **Líneas de código**: ~7,500 TS/TSX + ~1,800 Rust = ~9,300 LOC
+- **Archivos fuente**: 45+ archivos
+- **Proveedores IA**: 22 (de 6 familias)
+- **Comandos Tauri**: 52
+- **Tablas SQLite**: 7
+- **Temas**: 6
+- **Modos de UI**: 2 (Normal + IDE)
+- **Commits locales**: 9 sesiones (b52187a, c2f8e4f, 49e536f, aa9deaa, eb0470e, 7329aa0, …)
+
+---
+
+## Roadmap actualizado
+
+| Fase | Estado | Notas |
+|------|--------|-------|
+| 1 — Fundación | [x] Hecha | PR #1 |
+| 2 — Núcleo Linux (AT-SPI + automation) | [x] Hecho | PR #1 |
+| 3 — Proveedores IA (22) | [x] 22/22 | PR #1, #4 |
+| 4 — UI Codex-style | [x] Hecho | PR #1, #3, #5 |
+| 5 — Bucle agéntico | [x] Completo | PR #1 |
+| 6 — MCP + skills.sh | [x] MCP runtime real + esqueleto skills.sh | PR #6 |
+| 7 — Pulido Linux + empaquetado | [~] Wayland detection + CI multiplataforma; portal TBD | PR #6 |
+| Modo IDE | [x] Completo: Monaco + terminal + line marks verde/rojo reales | commits recientes |
+| Colaboración local | [x] Miembros + permisos + API keys propias + gating | commits previos |
+| W1-W6 — Windows | [~] W2-W6 implementados; CI falla por `icon.ico` | PR #6, #7, #8 |
+| M1-M6 — macOS | [~] M2-M4 implementados; CI falla por diferencias de API en crates | PR #6, #8 |
+
+---
+
+### ✅ YA ESTÁ COMPLETO
+
+**Linux (plataforma primaria):**
+- Backend AT-SPI2 + automation (teclado/ratón/clipboard/ventanas)
+- 22 proveedores IA con multimodal real
+- Bucle agéntico con planner/executor/critic/reflection/memory
+- ReAct loop con 11 tools (shell_exec, file_read/write/list, web_search/fetch, cognitive_graphify/query, me_*)
+- Parser de tool calls en formato texto (Mistral/Hermes/Llama)
+- Modo cognitivo (grafo del proyecto)
+- Modo plan, modo perseguir objetivo
+- Skills (parser SKILL.md + installer)
+- MCP runtime real (Rust) + cliente TS
+- SQLite con 7 tablas (episodios, hechos, proyectos, conversaciones, mensajes, skills, miembros)
+- 6 temas visuales
+- Modo IDE completo (Monaco + terminal + diff viewer + line marks verde/rojo)
+- Modo Normal con popup Codex-style, menú @, attachments, drag-and-drop, paste de imágenes
+- HTML rendering en mensajes del agente (rehype-raw)
+- Colaboración local: miembros, roles (owner/admin/member), permisos, contraseñas, API keys miembro-específicas
+- Sidebar con proyectos agrupados + menú "Mover a" bien posicionado
+- Encadenamiento automático >8,192 tokens
+- Scheduler/cron para automatizaciones
+- CI Linux generando .deb/.AppImage/.rpm
+
+**Windows (en CI):**
+- W2: UIAutomation wrapper + `WindowsBackend` 16/16 métodos
+- W3: InvokePattern/ValuePattern/TextPattern (click, type_text, get_text, focus)
+- W4: Win32 clipboard + EnumWindows + SendInput (mouse + keyboard + key combos)
+- W5: code signing implementado (job `sign` en CI)
+- W6: tests con apps reales (Notepad, Edge, VSCode) en `tests/windows/`
+
+**macOS (en CI):**
+- M2: AXUIElement wrapper + `MacosBackend` 16/16 métodos
+- M3: AXPress/AXSetValue + CGEvent fallback
+- M4: NSPasteboard + NSWorkspace + NSRunningApplication + CGEvent input
+- Verificación de permiso Accessibility con prompt nativo
+
+### ⏳ FALTA
+
+**Linux (Fase 7):**
+- [ ] **xdg-desktop-portal RemoteDesktop real** — implementar `PortalSession` para Wayland puro (sin XWayland). Ahora solo hay detección + stub + mensaje de ayuda.
+
+**Windows (CI):**
+- [ ] **Arreglar `icon.ico`** — el archivo actual no es formato 3.00, CI de Windows falla en el paso de empaquetado. Solución: regenerar el .ico con ImageMagick desde un PNG 256x256 (`magick icon.png -define icon:auto-resize=256,128,64,48,32,16 icon.ico`).
+- [ ] **Validar runner real de Windows** — los tests W6 están como `#[ignore]`, correrlos en CI cuando el icon esté arreglado.
+
+**macOS (CI):**
+- [ ] **Arreglar diferencias de API en crates** — `CGEventCreate`, `CGEventSourceCreate`, `AXUIElement::attribute` tienen firmas distintas entre versiones de `objc2-core-graphics` y `accessibility`. Requiere ajustes menores en tipos (`CGEventSourceStateID`, `Option<&CGEvent>` vs `&CFRetained<CGEvent>`).
+- [ ] **M5: code signing + notarización** — `xcrun notarytool submit` con Apple ID. Falta workflow de CI.
+
+**Features pendientes:**
+- [ ] **Adjuntar app real** — picker AT-SPI/UIA/AX que liste ventanas abiertas (estilo Codex "Adjuntar Google Chrome"). Ahora el botón "Adjuntar app" abre AppPicker pero no conecta realmente con el árbol de accesibilidad.
+- [ ] **Persistir conversaciones completas a SQLite al cambiar entre ellas** — ahora solo se persisten al crearse; al switchear se pierden mensajes del store en memoria.
+- [ ] **`bedrock_invoke` con SigV4 nativo** — en Rust. Ahora Bedrock va por proxy URL (en navegador).
+- [ ] **Skills auto-aprendidas** — persistir a `~/.weaver/skills/learned/` tras reflexión exitosa del agente.
+- [ ] **Hook del agent executor para `shell_exec` con `sed`/`echo >`** — ahora solo `file_write` directo emite `weaver:agent-file-change`. Si el agente edita vía `shell_exec`, los line marks no se actualizan (podríamos parsear el comando o hacer un diff post-ejecución).
+- [ ] **Sync Supabase/self-hosted** — sincronizar conversaciones entre dispositivos (proyecto futuro).
+
+**Pendientes menores (nice-to-have):**
+- [ ] Code-splitting del bundle (1.5 MB > 500 kB warning) — manualChunks en vite.config.ts
+- [ ] Diff Myers real (lib `diff`) en lugar del diff por índice actual en `fileWrite`
+- [ ] i18n: algunas strings siguen hardcodeadas en español
+
