@@ -394,3 +394,60 @@ Stage Summary:
   - La "sincronización entre máquinas" no es automática. Cada máquina tiene su SQLite.
   - El scope 'owner_only' / 'each_user' es una directriz que la UI respeta (no enforcement real más allá de la matriz de permisos local).
   - Las API keys por miembro todavía usan el keyring global del provider (no hay "member:<id>:openai" todavía). Para v2: extender apiKeyStore para soportar keys miembro-específicas.
+
+---
+Task ID: feat-member-api-keys-permission-gating
+Agent: main
+Task: (1) Implementar API keys miembro-específicas en el keyring del OS (member:<id>:<provider>), para que cada persona pague realmente su consumo. (2) Gate permissions: sólo el dueño o un admin pueden modificar miembros/permisos/scope/contraseñas. Un admin puede promover a otro miembro a admin.
+
+Work Log:
+- `src/providers/store.ts`:
+  - Cambiado `cache` y `known` de Map<ProviderId> a Map<string> (para soportar keys compuestas `member:<id>:<provider>`).
+  - Nuevo helper `memberKey(memberId, providerId)` → `member:<memberId>:<providerId>`.
+  - Nuevas APIs:
+    * `getForMember(memberId, providerId)` → busca la key propia; si no existe, cae a la global (fallback graceful para miembros sin key propia).
+    * `setForMember(memberId, providerId, apiKey)` → guarda la key propia.
+    * `deleteForMember(memberId, providerId)` → borra la key propia (no afecta a la global).
+    * `hasForMember(memberId, providerId)` → check síncrono en caché.
+    * `hasForMemberAsync(memberId, providerId)` → check real en OS keyring.
+- `src/providers/index.ts`:
+  - Nueva interfaz `CreateProviderOpts { apiKeyOverride?: string }`.
+  - `createProvider(id, opts?)` acepta override. Si se pasa, se usa en lugar de `apiKeyStore.get(id)`.
+- `src/components/composer/Composer.tsx`:
+  - Import `apiKeyStore`.
+  - En `pursueObjective`: si hay `activeMember`, obtener su API key vía `apiKeyStore.getForMember(activeMember.id, providerId)` y pasarla como `apiKeyOverride` a `createProvider`. Así el chat usa la key del miembro activo (o la global si el miembro no tiene propia).
+- `src/store/weaver.ts`:
+  - `regenerateLast`: respeta activeMember (provider + model + API key).
+  - `autoTitle`: respeta activeMember (provider + model + API key).
+  - Ambos usan `apiKeyStore.getForMember` para obtener la key correcta.
+- `src/components/projects/ProjectSettingsModal.tsx` (reescrito, 622 líneas):
+  - **Gating de permisos**: computa `canManage = activeMemberId === null || activeMember?.canManageMembers`. Todas las acciones de escritura (saveName, saveScope, saveProjectPassword, addMember, togglePerm, changeRole, changeProvider, changeModel, saveMemberPassword, removeMember, saveMemberApiKey, clearMemberApiKey) terminan early si `!canManage`.
+  - **Banner amarillo** cuando `!canManage`: "Estás viendo como X, no tienes permiso para gestionar…"
+  - **Inputs disabled + opacity-60** cuando `!canManage`.
+  - **No se puede degradar/eliminar al owner** (m.role === 'owner' → alert).
+  - **No puedes eliminarte a ti mismo** como admin (para evitar quedarte sin acceso).
+  - **Sección "API key propia" por miembro**:
+    * Input password + botones Fijar/Cambiar/Borrar.
+    * Muestra placeholder contextual: "Propia: abcd…wxyz — escribir nueva…" / "Global: abcd…wxyz — escribir para fijar propia…" / "Sin key — escribe para fijar la propia…".
+    * Hint debajo: explica el estado actual (tiene propia / cae a global / no hay ninguna).
+    * Llama a `apiKeyStore.setForMember` / `deleteForMember`.
+    * Refresca el estado mostrado tras guardar.
+  - **Rol admin**: hint explícito "Los admins pueden gestionar miembros, invitar nuevos y promover a otros admins."
+  - **TogglePerm "Gestionar miembros"**: disabled si el miembro es owner (el owner siempre puede, no se puede quitar).
+  - Badge "(tú)" al lado del nombre del miembro activo.
+- Verificado: tsc --noEmit EXIT 0 ✓ · vite build exitoso en 4.89s ✓.
+
+Stage Summary:
+- Archivos modificados:
+  - src/providers/store.ts (nuevas APIs getForMember/setForMember/deleteForMember/hasForMember/hasForMemberAsync)
+  - src/providers/index.ts (createProvider acepta apiKeyOverride)
+  - src/components/composer/Composer.tsx (pasa apiKeyOverride del activeMember)
+  - src/store/weaver.ts (regenerateLast y autoTitle respetan activeMember)
+  - src/components/projects/ProjectSettingsModal.tsx (reescrito: gating de permisos + sección API key por miembro)
+- Respuesta a la pregunta del usuario:
+  - "¿Sólo el admin puede modificar permisos?" → Sí. El dueño (activeMemberId === null) y los admins (canManageMembers === true) son los únicos que pueden editar. Los demás ven todo en modo sólo lectura con banner amarillo.
+  - "¿Un admin puede poner a otro como admin?" → Sí. Como el admin tiene canManageMembers, puede cambiar el rol de cualquier miembro (excepto el owner) a 'admin'. Y ese nuevo admin podrá a su vez gestionar miembros.
+- Cómo se aislan las API keys:
+  - En el OS keyring (Windows Credential Manager / macOS Keychain / Linux Secret Service), la entrada para la key global es `openai`, `anthropic`, etc.
+  - La entrada para la key propia del miembro X es `member:<uuid-de-X>:openai`. Son entradas totalmente independientes en el keyring.
+  - `getForMember` busca primero la propia; si no existe, cae a la global (así un miembro sin key propia puede seguir usando la del dueño si así se quiere).

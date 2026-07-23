@@ -28,6 +28,7 @@ import { ModelPickerPopup } from '@/components/model-picker/ModelPickerPopup';
 import { AttachmentChips } from '@/components/composer/AttachmentChips';
 import { AppPicker, type PickedApp } from '@/components/composer/AppPicker';
 import { createProvider } from '@/providers';
+import { apiKeyStore } from '@/providers/store';
 import { runAgent } from '@/agent/loop';
 import { streamChat, streamUntilDone } from '@/lib/chain';
 import {
@@ -424,7 +425,11 @@ export function Composer() {
     abortRef.current = ac;
 
     try {
-      const llm = await createProvider(providerId);
+      // Si hay un miembro activo, usar su API key específica (o fallback a la global).
+      const apiKeyOverride = activeMember
+        ? await apiKeyStore.getForMember(activeMember.id, providerId)
+        : undefined;
+      const llm = await createProvider(providerId, { apiKeyOverride });
 
       // Detección de tipo de tarea:
       // 1. desktopAgentive: tareas que requieren operar apps de escritorio

@@ -4,6 +4,9 @@
  *
  * El store de API keys vive en `./store.ts` y usa el keyring del OS vía
  * los comandos Tauri (`keyring_*`).
+ *
+ * Para colaboración local en proyectos, se puede pasar `apiKeyOverride`
+ * para usar la API key miembro-específica (ver `apiKeyStore.getForMember`).
  */
 
 import type { LLMProvider, ProviderId } from './types';
@@ -16,7 +19,16 @@ import { BedrockProvider } from './adapters/bedrock';
 import { VertexAIProvider } from './adapters/vertexai';
 import { apiKeyStore } from './store';
 
-export async function createProvider(id: ProviderId): Promise<LLMProvider> {
+export interface CreateProviderOpts {
+  /** Si se pasa, se usa en lugar de la key global del keyring.
+   *  Útil para miembros de proyecto que tienen su propia key. */
+  apiKeyOverride?: string;
+}
+
+export async function createProvider(
+  id: ProviderId,
+  opts?: CreateProviderOpts,
+): Promise<LLMProvider> {
   const info = getProvider(id);
   if (!info) throw new Error(`Proveedor desconocido: ${id}`);
 
@@ -25,7 +37,9 @@ export async function createProvider(id: ProviderId): Promise<LLMProvider> {
     return new OllamaProvider(info);
   }
 
-  const apiKey = info.noApiKey ? undefined : await apiKeyStore.get(id);
+  const apiKey = info.noApiKey
+    ? undefined
+    : opts?.apiKeyOverride ?? (await apiKeyStore.get(id));
 
   switch (info.family) {
     case 'openai-compat':

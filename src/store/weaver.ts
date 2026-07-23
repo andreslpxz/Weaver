@@ -817,8 +817,15 @@ export const useWeaver = create<WeaverState>((set, get) => ({
     s.setAgentState('executing');
     try {
       const { createProvider } = await import('@/providers');
+      const { apiKeyStore } = await import('@/providers/store');
       const { streamUntilDone } = await import('@/lib/chain');
-      const llm = await createProvider(s.providerId);
+      // Si hay un miembro activo, usar su API key específica.
+      const activeMember = s.members.find((m) => m.id === s.activeMemberId);
+      const providerId = (activeMember?.providerId as typeof s.providerId | null) ?? s.providerId;
+      const apiKeyOverride = activeMember
+        ? await apiKeyStore.getForMember(activeMember.id, providerId)
+        : undefined;
+      const llm = await createProvider(providerId, { apiKeyOverride });
       // Vaciar el mensaje a regenerar.
       const emptyMsg: Message = { ...conv.messages[idx], content: '', reasoning: undefined };
       const newMsgs = [...conv.messages];
@@ -833,7 +840,7 @@ export const useWeaver = create<WeaverState>((set, get) => ({
         content:
           'Eres Weaver, un asistente de escritorio amable y conciso. Si tu respuesta se acerca al límite de tokens, termina con la línea exacta <<CONTINUE>>. Al terminar del todo, emite <<END>>.',
       };
-      const full = await streamUntilDone(llm, s.modelId, [systemMsg, ...context], {
+      const full = await streamUntilDone(llm, activeMember?.modelId ?? s.modelId, [systemMsg, ...context], {
         maxChains: 5,
         onDelta: (delta) => {
           set((st) => ({
@@ -1221,9 +1228,16 @@ async function maybeAutoTitleConversation(convId: string, userText: string) {
   inFlightTitles.add(convId);
   try {
     const { createProvider } = await import('@/providers');
+    const { apiKeyStore } = await import('@/providers/store');
     const { streamChat } = await import('@/lib/chain');
     const s = useWeaver.getState();
-    const llm = await createProvider(s.providerId);
+    // Respetar el activeMember (mismo provider+model+API key que el chat).
+    const activeMember = s.members.find((m) => m.id === s.activeMemberId);
+    const providerId = (activeMember?.providerId as typeof s.providerId | null) ?? s.providerId;
+    const apiKeyOverride = activeMember
+      ? await apiKeyStore.getForMember(activeMember.id, providerId)
+      : undefined;
+    const llm = await createProvider(providerId, { apiKeyOverride });
     const prompt: Message[] = [
       {
         role: 'system',
@@ -1239,7 +1253,7 @@ async function maybeAutoTitleConversation(convId: string, userText: string) {
         content: text.slice(0, 800),
       },
     ];
-    const result = await streamChat(llm, s.modelId, prompt, {});
+    const result = await streamChat(llm, activeMember?.modelId ?? s.modelId, prompt, {});
     let title = result.text.trim();
     // Limpiar comillas, "Título:", etc.
     title = title
