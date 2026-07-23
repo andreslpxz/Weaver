@@ -20,6 +20,8 @@ import {
   Power,
   Circle,
   Clock,
+  MessageSquare,
+  Code2,
 } from 'lucide-react';
 import { mcpClient, listPresets, type McpServer, type ToolApproval } from '@/mcp/client';
 import { type McpPreset } from '@/mcp/presets';
@@ -1607,7 +1609,7 @@ function ScheduleForm({
 export function ConfiguracionView() {
   const tt = useT();
   const [lang, setLang] = useLang();
-  const { themeId, setTheme } = useWeaver();
+  const { themeId, setTheme, appMode, setAppMode } = useWeaver();
   const [tavilyKey, setTavilyKey] = useState('');
   const [tavilyStatus, setTavilyStatus] = useState<string | null>(null);
   const [tavilyHas, setTavilyHas] = useState(false);
@@ -1752,6 +1754,61 @@ export function ConfiguracionView() {
               </button>
             ))}
           </div>
+        </SettingCard>
+
+        {/* Modo de interfaz */}
+        <SettingCard
+          title="Modo de interfaz"
+          desc="Cambia la apariencia completa de Weaver. Normal = chat clásico. IDE = editor de archivos + agente lateral."
+        >
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => setAppMode('normal')}
+              className={`text-left p-3 rounded-codex border transition-colors ${
+                appMode === 'normal'
+                  ? 'border-accent bg-accent/10'
+                  : 'border-border hover:border-border-accent'
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <MessageSquare size={14} className={appMode === 'normal' ? 'text-accent' : 'text-text-muted'} />
+                <span className="text-sm font-medium">Normal</span>
+                {appMode === 'normal' && (
+                  <span className="ml-auto text-[9px] uppercase tracking-wider text-accent">Activo</span>
+                )}
+              </div>
+              <div className="text-[10px] text-text-muted">
+                Chat con sidebar de conversaciones y proyectos. Todo lo que llevas actualmente.
+              </div>
+            </button>
+
+            <button
+              onClick={() => setAppMode('ide')}
+              className={`text-left p-3 rounded-codex border transition-colors ${
+                appMode === 'ide'
+                  ? 'border-accent bg-accent/10'
+                  : 'border-border hover:border-border-accent'
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <Code2 size={14} className={appMode === 'ide' ? 'text-accent' : 'text-text-muted'} />
+                <span className="text-sm font-medium">IDE</span>
+                {appMode === 'ide' && (
+                  <span className="ml-auto text-[9px] uppercase tracking-wider text-accent">Activo</span>
+                )}
+              </div>
+              <div className="text-[10px] text-text-muted">
+                Estilo VSCode/OpenCode: explorador de archivos, editor con tabs, agente a la derecha y cambios del agente abajo.
+              </div>
+            </button>
+          </div>
+
+          {appMode === 'ide' && (
+            <div className="mt-3 p-2.5 rounded-codex bg-accent/5 border border-accent/20 text-[11px] text-text-secondary">
+              <div className="font-medium text-accent mb-1">Modo IDE activado</div>
+              Al volver al chat (vista Chat), verás el editor. Los accesos MCP, Schedules, Me y Configuración siguen disponibles en el ActivityBar izquierdo. Cambia entre modos en cualquier momento desde aquí.
+            </div>
+          )}
         </SettingCard>
 
         {/* Tavily API key */}

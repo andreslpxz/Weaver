@@ -141,6 +141,13 @@ interface WeaverState {
   themeId: ThemeId;
   setTheme: (id: ThemeId) => void;
 
+  // --- Modo de interfaz: 'normal' (chat) o 'ide' (editor + agente lateral) ---
+  appMode: 'normal' | 'ide';
+  setAppMode: (m: 'normal' | 'ide') => void;
+  /** Directorio de trabajo actual para el Modo IDE. Persistido por proyecto. */
+  ideCwd: string | null;
+  setIdeCwd: (path: string | null) => void;
+
   // --- Modos del agente (toggles en el popup +) ---
   /** Modo plan: el agente primero propone un plan y espera confirmación antes de ejecutar. */
   planMode: boolean;
@@ -793,6 +800,42 @@ export const useWeaver = create<WeaverState>((set, get) => ({
   setTheme: (id) => {
     applyTheme(id);
     set({ themeId: id });
+  },
+
+  // --- Modo de interfaz (Normal vs IDE) ---
+  appMode: (() => {
+    try {
+      const stored = localStorage.getItem('weaver:appMode');
+      return stored === 'ide' ? 'ide' : 'normal';
+    } catch {
+      return 'normal';
+    }
+  })(),
+  setAppMode: (m) => {
+    try {
+      localStorage.setItem('weaver:appMode', m);
+    } catch {
+      // ignore
+    }
+    set({ appMode: m });
+  },
+
+  // --- Directorio de trabajo del Modo IDE ---
+  ideCwd: (() => {
+    try {
+      return localStorage.getItem('weaver:ideCwd');
+    } catch {
+      return null;
+    }
+  })(),
+  setIdeCwd: (path) => {
+    try {
+      if (path) localStorage.setItem('weaver:ideCwd', path);
+      else localStorage.removeItem('weaver:ideCwd');
+    } catch {
+      // ignore
+    }
+    set({ ideCwd: path });
   },
 
   // --- Modos del agente ---
