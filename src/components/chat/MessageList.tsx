@@ -280,7 +280,8 @@ interface ParsedSegment {
 function parseMessageContent(content: string): ParsedSegment[] {
   const segments: ParsedSegment[] = [];
   // Regex que captura: tool, result, file, render-open, render-close, render-content-open, render-content-close, app
-  const pattern = /(\[tool \w+: [^\]]+\]|\[result \w+: [\s\S]*?\]|\[file:[^\]]+\]|\[render:[a-z]+:[a-f0-9-]+:[^\]]+\]|\[render-content:[a-f0-9-]+:[a-z+]+\]|\[\/render-content\]|\[app:\w+:[^\]]+\])/g;
+  // Nota: el mime en render-content puede contener /, +, números y letras (ej: text/html, application/pdf).
+  const pattern = /(\[tool \w+: [^\]]+\]|\[result \w+: [\s\S]*?\]|\[file:[^\]]+\]|\[render:[a-z]+:[a-f0-9-]+:[^\]]+\]|\[render-content:[a-f0-9-]+:[a-z0-9/+\-]+\]|\[\/render-content\]|\[app:\w+:[^\]]+\])/g;
   const parts = content.split(pattern).filter((p) => p !== undefined && p !== '');
 
   const pendingCapsules: CapsuleGroup[] = [];

@@ -819,6 +819,10 @@ export function Composer() {
         return `listando: ${args.path ?? ''}`;
       case 'save_file':
         return `generando: ${args.filename ?? 'archivo'}`;
+      case 'render_html':
+        return `renderizando HTML: "${args.title ?? 'sin título'}"`;
+      case 'render_pdf':
+        return `renderizando PDF: "${args.title ?? 'sin título'}"`;
       default:
         // Tools MCP con prefijo mcp__<serverId>__<toolName>
         if (toolName.startsWith('mcp__')) {
@@ -841,7 +845,9 @@ export function Composer() {
       return `[result ${_toolName}: ❌ ${shortErr}]`;
     }
     const output = result.output;
-    if (output.startsWith('[file:')) {
+    // Patrones que DEBEN preservarse completos (no truncarse) porque el
+    // MessageList los parsea para renderizar ventanas especiales.
+    if (output.startsWith('[file:') || output.startsWith('[render:')) {
       return output;
     }
     const truncated = output.slice(0, 150);
@@ -890,8 +896,8 @@ export function Composer() {
       : 'Dime lo que quieres hacer… (usa @ para mencionar skills, proyectos, proveedores)';
 
   return (
-    <div className="px-4 pb-4 pt-2 relative">
-      <div className="max-w-3xl mx-auto relative">
+    <div className="px-2 sm:px-4 pb-2 sm:pb-4 pt-2 relative">
+      <div className="w-full max-w-3xl mx-auto relative">
         {/* Drag overlay */}
         {isDragOver && (
           <div
@@ -1021,14 +1027,16 @@ export function Composer() {
             )}
           </div>
 
-          {/* Bottom row: + popup | model picker | clip | mic | send */}
-          <div className="flex items-center gap-2 px-1 relative">
+          {/* Bottom row: + popup | model picker | mic | send
+              Sin el paperclip redundante (el + ya abre el menú de adjuntar).
+              En pantallas estrechas (IDE) los modos se ocultan. */}
+          <div className="flex items-center gap-1.5 px-1 relative flex-wrap">
             {/* Botón + (abajo, al lado del model picker) — popup tipo Codex/Claude */}
             <div className="relative">
               <button
                 ref={plusBtnRef}
                 onClick={() => setPlusOpen((v) => !v)}
-                className="codex-icon-btn w-7 h-7"
+                className="codex-icon-btn w-7 h-7 shrink-0"
                 title="Añadir (archivo, carpeta, URL, modos…)"
               >
                 <Plus size={16} />
@@ -1192,58 +1200,51 @@ export function Composer() {
               )}
             </div>
 
-            {/* Model picker */}
+            {/* Model picker — se comprime en pantallas estrechas */}
             <button
               onClick={() => setModelPickerOpen(!modelPickerOpen)}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-codex border border-border-accent text-xs text-text-primary hover:bg-app-elevated transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-codex border border-border-accent text-xs text-text-primary hover:bg-app-elevated transition-colors cursor-pointer min-w-0"
               title="Cambiar modelo"
             >
-              <span className="opacity-70">{provider?.label.split(' ')[0]}</span>
-              <span className="font-medium">{modelLabel}</span>
-              <ChevronDown size={12} className="opacity-60" />
+              <span className="opacity-70 truncate max-w-[80px] sm:max-w-none">{provider?.label.split(' ')[0]}</span>
+              <span className="font-medium truncate max-w-[100px] sm:max-w-none">{modelLabel}</span>
+              <ChevronDown size={12} className="opacity-60 shrink-0" />
             </button>
 
-            {/* Indicadores de modos activos */}
+            {/* Indicadores de modos activos — ocultos en pantallas estrechas */}
             {planMode && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent border border-accent/30 inline-flex items-center gap-1">
+              <span className="hidden md:inline-flex text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent border border-accent/30 items-center gap-1">
                 <Map size={9} /> Plan
               </span>
             )}
             {pursueObjective && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent border border-accent/30 inline-flex items-center gap-1">
+              <span className="hidden md:inline-flex text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent border border-accent/30 items-center gap-1">
                 <Target size={9} /> Perseguir
               </span>
             )}
             {cognitiveMode && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent border border-accent/30 inline-flex items-center gap-1">
+              <span className="hidden md:inline-flex text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent border border-accent/30 items-center gap-1">
                 <Network size={9} /> Cognitivo
               </span>
             )}
 
-            <div className="flex-1" />
+            <div className="flex-1 min-w-0" />
 
-            {/* Clip (a la derecha, abre el mismo popup) */}
-            <IconButton
-              title="Adjuntar"
-              className="w-7 h-7"
-              onClick={() => setPlusOpen((v) => !v)}
-            >
-              <Paperclip size={14} />
-            </IconButton>
+            {/* El botón + ya cubre adjuntar (paperclip redundante eliminado) */}
 
-            <IconButton title="Voz" className="w-7 h-7">
+            <IconButton title="Voz" className="w-7 h-7 shrink-0">
               <Mic size={14} />
             </IconButton>
 
             {isRunning ? (
-              <Button variant="danger" onClick={handleStop} className="!p-1.5">
+              <Button variant="danger" onClick={handleStop} className="!p-1.5 shrink-0">
                 <Square size={14} fill="currentColor" />
               </Button>
             ) : (
               <button
                 onClick={handleSend}
                 disabled={!value.trim() && draftAttachments.length === 0}
-                className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-accent text-app-bg hover:bg-accent-strong transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-accent text-app-bg hover:bg-accent-strong transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shrink-0"
                 title="Enviar (Enter)"
               >
                 <ArrowUp size={16} strokeWidth={2.5} />
@@ -1286,7 +1287,7 @@ export function Composer() {
         )}
 
         <div className="text-center mt-2">
-          <span className="text-xs text-text-muted">
+          <span className="text-[10px] sm:text-xs text-text-muted">
             {draftAttachments.length > 0
               ? `${draftAttachments.length} adjunto(s) · arrastrar más o pulsar + para añadir`
               : 'Weaver puede equivocarse. Verifica acciones críticas.'}
