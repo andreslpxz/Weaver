@@ -5,45 +5,46 @@
  *  ┌─────────────────────────────────────────────────────────────┐
  *  │ TopBar: proyecto + provider/modelo + toggle Normal/IDE       │
  *  ├──────┬──────────────┬──────────────────────┬─────────────────┤
- *  │ Act  │ FileExplorer │ CodeEditor (tabs)    │ AgentPanel      │
+ *  │ Act  │ FileExplorer │ CodeEditor (Monaco)  │ AgentPanel      │
  *  │ Bar  │              │                      │                 │
  *  │      │              ├──────────────────────┤                 │
- *  │      │              │ DiffViewer (cambios) │                 │
+ *  │      │              │ BottomPanel          │                 │
+ *  │      │              │ (Cambios / Terminal) │                 │
  *  ├──────┴──────────────┴──────────────────────┴─────────────────┤
- *  │ StatusBar: cwd | archivo activo | líneas | provider · model   │
+ *  │ StatusBar: cwd | archivo | líneas | provider · model         │
  *  └─────────────────────────────────────────────────────────────┘
  *
- * El ActivityBar (izq, estrecho) preserva los accesos del modo Normal:
- * MCP, Schedules, Me, Configuración.
- *
- * El AgentPanel reutiliza MessageList + Composer del modo chat para no
- * duplicar la lógica del agente.
+ * Cuando un panel se oculta, su botón toggle se mueve al ActivityBar
+ * o al borde correspondiente, para que se pueda volver a mostrar sin
+ * reiniciar.
  */
 
 import { useState, useCallback, useEffect } from 'react';
 import {
-  PanelLeftClose,
-  PanelRightClose,
   Code2,
   MessageSquare,
   GitBranch,
-  Settings as SettingsIcon,
-  X,
+  Terminal as TerminalIcon,
+  PanelLeft,
+  PanelRight,
+  PanelBottom,
 } from 'lucide-react';
 import { useWeaver } from '@/store/weaver';
 import { runtime } from '@/lib/tauri';
 import { ActivityBar } from './ActivityBar';
 import { FileExplorer } from './FileExplorer';
-import { CodeEditor, type EditorTab } from './CodeEditor';
+import { CodeEditor, type EditorTab, type LineMark } from './CodeEditor';
 import { AgentPanel } from './AgentPanel';
 import { DiffViewer, type FileChange } from './DiffViewer';
+import { Terminal } from './Terminal';
 import { StatusBar } from './StatusBar';
 import { CwdPicker } from './CwdPicker';
 
 export interface IdeLayoutProps {
-  /** Cambia al modo Normal (desde el botón del topbar). */
   onExitToNormal: () => void;
 }
+
+type BottomTab = 'changes' | 'terminal';
 
 export function IdeLayout({ onExitToNormal }: IdeLayoutProps) {
   const { ideCwd, providerId, modelId, setModelPickerOpen } = useWeaver();
@@ -52,10 +53,10 @@ export function IdeLayout({ onExitToNormal }: IdeLayoutProps) {
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
   const [bottomOpen, setBottomOpen] = useState(true);
+  const [bottomTab, setBottomTab] = useState<BottomTab>('changes');
   const [changes, setChanges] = useState<FileChange[]>([]);
   const [showCwdPicker, setShowCwdPicker] = useState(!ideCwd);
 
-  // Si el usuario cambia el cwd después de tenerlo vacío, ocultamos el picker.
   useEffect(() => {
     if (ideCwd) setShowCwdPicker(false);
   }, [ideCwd]);
@@ -84,19 +85,52 @@ export function IdeLayout({ onExitToNormal }: IdeLayoutProps) {
     });
   }
 
-  // Cuando el agente termina de ejecutar tools de escritura, podemos
-  // detectar qué archivos tocó y mostrarlos en el DiffViewer. Por ahora,
-  // DiffViewer escucha eventos `weaver:agent-file-change` emitidos desde
-  // el loop del agente (o desde el shell_exec en Tauri).
+  // Escuchar cambios del agente en archivos. Cuando un cambio llega:
+  //  - lo agregamos al DiffViewer
+  //  - si el archivo está abierto en un tab, le aplicamos las lineMarks
+  //  - si no está abierto, lo abrimos automáticamente con las marks
   useEffect(() => {
     function onAgentChange(e: Event) {
-      const detail = (e as CustomEvent<FileChange>).detail;
+      const detail = (e as CustomEvent<FileChange & { lines?: LineMark[] }>).detail;
       if (!detail) return;
+
+      // Agregar al DiffViewer.
       setChanges((prev) => {
-        // Reemplazar si ya existe para ese path.
         const filtered = prev.filter((c) => c.path !== detail.path);
         return [detail, ...filtered].slice(0, 50);
       });
+
+      // Si el archivo está abierto en un tab, actualizar sus marks.
+      setTabs((prev) =>
+        prev.map((t) =>
+          t.path === detail.path
+            ? { ...t, lineMarks: detail.lines ?? [] }
+            : t,
+        ),
+      );
+
+      // Si no está abierto, abrirlo (sólo si el evento trajo líneas).
+      const hasLines = (detail.lines?.length ?? 0) > 0;
+      if (hasLines) {
+        setTabs((prev) => {
+          if (prev.some((t) => t.path === detail.path)) return prev;
+          return [
+            ...prev,
+            {
+              path: detail.path,
+              name: detail.name,
+              content: '',
+              dirty: false,
+              loading: true,
+              lineMarks: detail.lines ?? [],
+            },
+          ];
+        });
+        setActiveTab(detail.path);
+      }
+
+      // Auto-switch al tab de cambios en el bottom panel.
+      setBottomTab('changes');
     }
     window.addEventListener('weaver:agent-file-change', onAgentChange);
     return () => window.removeEventListener('weaver:agent-file-change', onAgentChange);
@@ -148,9 +182,16 @@ export function IdeLayout({ onExitToNormal }: IdeLayoutProps) {
       </header>
 
       {/* ===== Body ===== */}
-      <div className="flex-1 flex min-h-0">
+      <div className="flex-1 flex min-h-0 relative">
         {/* Activity Bar (iconos fijos) */}
-        <ActivityBar />
+        <ActivityBar
+          leftOpen={leftOpen}
+          rightOpen={rightOpen}
+          bottomOpen={bottomOpen}
+          onToggleLeft={() => setLeftOpen((v) => !v)}
+          onToggleRight={() => setRightOpen((v) => !v)}
+          onToggleBottom={() => setBottomOpen((v) => !v)}
+        />
 
         {/* File Explorer (panel izquierdo, colapsable) */}
         {leftOpen && (
@@ -162,16 +203,16 @@ export function IdeLayout({ onExitToNormal }: IdeLayoutProps) {
               <button
                 onClick={() => setLeftOpen(false)}
                 className="codex-icon-btn w-5 h-5"
-                title="Ocultar panel"
+                title="Ocultar explorador"
               >
-                <PanelLeftClose size={12} />
+                <PanelLeft size={12} />
               </button>
             </div>
             <FileExplorer cwd={ideCwd} onOpenFile={openFile} activePath={activeTab} />
           </div>
         )}
 
-        {/* Center: editor + diff (colapsable) */}
+        {/* Center: editor + bottom panel */}
         <div className="flex-1 flex flex-col min-w-0">
           {/* Editor area */}
           <div className="flex-1 min-h-0 flex flex-col">
@@ -201,23 +242,42 @@ export function IdeLayout({ onExitToNormal }: IdeLayoutProps) {
             )}
           </div>
 
-          {/* Diff viewer (bottom) */}
+          {/* Bottom panel (changes / terminal) */}
           {bottomOpen && (
-            <div className="h-44 border-t border-border flex flex-col min-h-0">
-              <div className="h-7 flex items-center justify-between px-2 border-b border-border bg-app-sidebar">
-                <div className="flex items-center gap-2">
-                  <GitBranch size={11} className="text-accent" />
-                  <span className="text-[10px] uppercase tracking-wider text-text-muted font-medium">
-                    Cambios del agente
-                  </span>
-                  {changes.length > 0 && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-accent/20 text-accent">
-                      {changes.length}
-                    </span>
-                  )}
+            <div className="h-48 border-t border-border flex flex-col min-h-0">
+              {/* Tabs del bottom panel */}
+              <div className="h-7 flex items-center justify-between border-b border-border bg-app-sidebar">
+                <div className="flex items-stretch h-full">
+                  <button
+                    onClick={() => setBottomTab('changes')}
+                    className={`px-3 flex items-center gap-1.5 text-[10px] uppercase tracking-wider font-medium border-r border-border transition-colors ${
+                      bottomTab === 'changes'
+                        ? 'text-text-primary bg-app-bg'
+                        : 'text-text-muted hover:text-text-primary hover:bg-app-elevated/50'
+                    }`}
+                  >
+                    <GitBranch size={11} />
+                    Cambios
+                    {changes.length > 0 && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-accent/20 text-accent">
+                        {changes.length}
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setBottomTab('terminal')}
+                    className={`px-3 flex items-center gap-1.5 text-[10px] uppercase tracking-wider font-medium border-r border-border transition-colors ${
+                      bottomTab === 'terminal'
+                        ? 'text-text-primary bg-app-bg'
+                        : 'text-text-muted hover:text-text-primary hover:bg-app-elevated/50'
+                    }`}
+                  >
+                    <TerminalIcon size={11} />
+                    Terminal
+                  </button>
                 </div>
-                <div className="flex items-center gap-1">
-                  {changes.length > 0 && (
+                <div className="flex items-center gap-1 pr-1">
+                  {bottomTab === 'changes' && changes.length > 0 && (
                     <button
                       onClick={() => setChanges([])}
                       className="text-[10px] text-text-muted hover:text-text-primary px-1.5 py-0.5 rounded"
@@ -228,13 +288,18 @@ export function IdeLayout({ onExitToNormal }: IdeLayoutProps) {
                   <button
                     onClick={() => setBottomOpen(false)}
                     className="codex-icon-btn w-5 h-5"
-                    title="Ocultar panel"
+                    title="Ocultar panel inferior"
                   >
-                    <X size={12} />
+                    <PanelBottom size={12} />
                   </button>
                 </div>
               </div>
-              <DiffViewer changes={changes} onOpenFile={openFile} />
+              {/* Contenido del bottom panel */}
+              {bottomTab === 'changes' ? (
+                <DiffViewer changes={changes} onOpenFile={openFile} />
+              ) : (
+                <Terminal cwd={ideCwd} />
+              )}
             </div>
           )}
         </div>
@@ -252,9 +317,9 @@ export function IdeLayout({ onExitToNormal }: IdeLayoutProps) {
               <button
                 onClick={() => setRightOpen(false)}
                 className="codex-icon-btn w-5 h-5"
-                title="Ocultar panel"
+                title="Ocultar agente"
               >
-                <PanelRightClose size={12} />
+                <PanelRight size={12} />
               </button>
             </div>
             <AgentPanel />
@@ -270,6 +335,7 @@ export function IdeLayout({ onExitToNormal }: IdeLayoutProps) {
         lineCount={activeTabObj ? activeTabObj.content.split('\n').length : 0}
         isDirty={activeTabObj?.dirty ?? false}
         tabsCount={tabs.length}
+        marksCount={activeTabObj?.lineMarks?.length ?? 0}
         leftOpen={leftOpen}
         rightOpen={rightOpen}
         bottomOpen={bottomOpen}
@@ -279,9 +345,7 @@ export function IdeLayout({ onExitToNormal }: IdeLayoutProps) {
       />
 
       {/* ===== Cwd Picker Modal ===== */}
-      {showCwdPicker && (
-        <CwdPicker onClose={() => setShowCwdPicker(false)} />
-      )}
+      {showCwdPicker && <CwdPicker onClose={() => setShowCwdPicker(false)} />}
 
       {/* Aviso en modo navegador (sin Tauri) */}
       {!runtime.isTauri && (

@@ -1,7 +1,14 @@
 /**
  * ActivityBar — barra estrecha de iconos al estilo VSCode.
- * Preserva los accesos del modo Normal: MCP, Schedules, Me, Configuración.
- * Permite volver al modo Normal rápidamente.
+ *
+ * Combina:
+ *  - Accesos del modo Normal: MCP, Schedules, Me, Configuración
+ *  - Toggle de paneles del IDE: explorador, terminal/cambios, agente
+ *  - Botón para volver al modo Normal
+ *
+ * Los toggles de paneles aquí son CRÍTICOS: cuando un panel se oculta
+ * desde su propio botón interior, el ActivityBar es el único lugar
+ * desde donde se puede volver a mostrar (sin reiniciar la app).
  */
 
 import {
@@ -10,6 +17,9 @@ import {
   CalendarDays,
   Settings as SettingsIcon,
   MessageSquare,
+  PanelLeft,
+  PanelRight,
+  PanelBottom,
 } from 'lucide-react';
 import { useWeaver, type ViewId } from '@/store/weaver';
 import { cn } from '@/components/common/Button';
@@ -27,7 +37,23 @@ const ITEMS: ActivityItem[] = [
   { id: 'configuracion', label: 'Configuración', icon: <SettingsIcon size={16} /> },
 ];
 
-export function ActivityBar() {
+interface ActivityBarProps {
+  leftOpen: boolean;
+  rightOpen: boolean;
+  bottomOpen: boolean;
+  onToggleLeft: () => void;
+  onToggleRight: () => void;
+  onToggleBottom: () => void;
+}
+
+export function ActivityBar({
+  leftOpen,
+  rightOpen,
+  bottomOpen,
+  onToggleLeft,
+  onToggleRight,
+  onToggleBottom,
+}: ActivityBarProps) {
   const { view, setView, setAppMode } = useWeaver();
 
   return (
@@ -53,6 +79,58 @@ export function ActivityBar() {
           </button>
         );
       })}
+
+      {/* Separador */}
+      <div className="w-6 h-px bg-border my-1" />
+
+      {/* Toggles de paneles IDE */}
+      <button
+        onClick={onToggleLeft}
+        title={leftOpen ? 'Ocultar explorador' : 'Mostrar explorador'}
+        className={cn(
+          'w-9 h-9 rounded-codex flex items-center justify-center mb-1 transition-colors',
+          leftOpen
+            ? 'text-text-primary bg-app-elevated'
+            : 'text-text-muted hover:text-text-primary hover:bg-app-elevated/50',
+        )}
+      >
+        <PanelLeft size={16} />
+        {leftOpen && (
+          <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 bg-accent rounded-r" />
+        )}
+      </button>
+
+      <button
+        onClick={onToggleBottom}
+        title={bottomOpen ? 'Ocultar panel inferior' : 'Mostrar panel inferior'}
+        className={cn(
+          'w-9 h-9 rounded-codex flex items-center justify-center mb-1 transition-colors',
+          bottomOpen
+            ? 'text-text-primary bg-app-elevated'
+            : 'text-text-muted hover:text-text-primary hover:bg-app-elevated/50',
+        )}
+      >
+        <PanelBottom size={16} />
+        {bottomOpen && (
+          <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 bg-accent rounded-r" />
+        )}
+      </button>
+
+      <button
+        onClick={onToggleRight}
+        title={rightOpen ? 'Ocultar agente' : 'Mostrar agente'}
+        className={cn(
+          'w-9 h-9 rounded-codex flex items-center justify-center mb-1 transition-colors',
+          rightOpen
+            ? 'text-text-primary bg-app-elevated'
+            : 'text-text-muted hover:text-text-primary hover:bg-app-elevated/50',
+        )}
+      >
+        <PanelRight size={16} />
+        {rightOpen && (
+          <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 bg-accent rounded-r" />
+        )}
+      </button>
 
       <div className="flex-1" />
 

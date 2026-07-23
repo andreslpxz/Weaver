@@ -6,7 +6,8 @@
  */
 
 import { useState } from 'react';
-import { FolderOpen, X, Loader2 } from 'lucide-react';
+import { FolderOpen, X, Loader2, Folder } from 'lucide-react';
+import { open } from '@tauri-apps/plugin-dialog';
 import { useWeaver } from '@/store/weaver';
 import { sqlite, runtime } from '@/lib/tauri';
 
@@ -16,6 +17,28 @@ export function CwdPicker({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [items, setItems] = useState<Array<{ name: string; is_dir: boolean; size: number }>>([]);
+
+  async function pickNative() {
+    if (!runtime.isTauri) {
+      setError('El picker nativo requiere Tauri. Escribe la ruta manualmente.');
+      return;
+    }
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        defaultPath: ideCwd ?? undefined,
+        title: 'Elegir carpeta de trabajo del IDE',
+      });
+      if (typeof selected === 'string' && selected) {
+        setPath(selected);
+        setIdeCwd(selected);
+        onClose();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
 
   async function pick() {
     const trimmed = path.trim();
@@ -37,7 +60,6 @@ export function CwdPicker({ onClose }: { onClose: () => void }) {
         setError('La carpeta existe pero está vacía, o la ruta no es válida.');
       } else {
         setIdeCwd(trimmed);
-        // Cerramos si todo OK (dejamos ver el preview un instante)
         setTimeout(() => onClose(), 400);
       }
     } catch (e) {
@@ -73,9 +95,21 @@ export function CwdPicker({ onClose }: { onClose: () => void }) {
             para los comandos shell del agente.
           </p>
 
+          {/* Picker nativo */}
+          {runtime.isTauri && (
+            <button
+              onClick={pickNative}
+              className="w-full flex items-center justify-center gap-2 px-3 py-2 border border-border rounded-codex bg-app-elevated hover:bg-accent/10 hover:border-accent transition-colors text-xs"
+            >
+              <Folder size={14} className="text-accent" />
+              Abrir selector de carpeta nativo…
+            </button>
+          )}
+
+          {/* Manual entry */}
+          <div className="text-[10px] text-text-muted text-center">— o escribe la ruta —</div>
           <div className="flex gap-2">
             <input
-              autoFocus
               value={path}
               onChange={(e) => setPath(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && pick()}

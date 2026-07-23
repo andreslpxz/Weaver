@@ -22,6 +22,7 @@ interface StatusBarProps {
   lineCount: number;
   isDirty: boolean;
   tabsCount: number;
+  marksCount: number;
   leftOpen: boolean;
   rightOpen: boolean;
   bottomOpen: boolean;
@@ -37,6 +38,7 @@ export function StatusBar({
   lineCount,
   isDirty,
   tabsCount,
+  marksCount,
   leftOpen,
   rightOpen,
   bottomOpen,
@@ -60,7 +62,7 @@ export function StatusBar({
         <button
           onClick={onToggleBottom}
           className="flex items-center gap-1 hover:bg-app-bg/20 px-1.5 py-0.5 rounded"
-          title={bottomOpen ? 'Ocultar cambios' : 'Mostrar cambios'}
+          title={bottomOpen ? 'Ocultar panel inferior' : 'Mostrar panel inferior'}
         >
           <PanelBottom size={11} />
         </button>
@@ -87,6 +89,19 @@ export function StatusBar({
           <>
             <span className="text-app-bg/40">·</span>
             <span>{tabsCount} tab{tabsCount > 1 ? 's' : ''}</span>
+          </>
+        )}
+
+        {marksCount > 0 && (
+          <>
+            <span className="text-app-bg/40">·</span>
+            <span className="flex items-center gap-1">
+              <span
+                className="w-1.5 h-1.5 rounded-full"
+                style={{ background: '#eab308' }}
+              />
+              {marksCount} cambios agente
+            </span>
           </>
         )}
       </div>
