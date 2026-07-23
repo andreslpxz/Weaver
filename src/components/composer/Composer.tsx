@@ -896,7 +896,7 @@ export function Composer() {
       : 'Dime lo que quieres hacer… (usa @ para mencionar skills, proyectos, proveedores)';
 
   return (
-    <div className="px-2 sm:px-4 pb-2 sm:pb-4 pt-2 relative">
+    <div className="composer-outer px-2 sm:px-4 pb-2 sm:pb-4 pt-2 relative">
       <div className="w-full max-w-3xl mx-auto relative">
         {/* Drag overlay */}
         {isDragOver && (
@@ -1029,10 +1029,10 @@ export function Composer() {
 
           {/* Bottom row: + popup | model picker | mic | send
               Sin el paperclip redundante (el + ya abre el menú de adjuntar).
-              En pantallas estrechas (IDE) los modos se ocultan. */}
-          <div className="flex items-center gap-1.5 px-1 relative flex-wrap">
+              En modo IDE el model picker se oculta (ya está en la StatusBar). */}
+          <div className="flex items-center gap-1.5 px-1 relative flex-nowrap overflow-hidden">
             {/* Botón + (abajo, al lado del model picker) — popup tipo Codex/Claude */}
-            <div className="relative">
+            <div className="relative shrink-0">
               <button
                 ref={plusBtnRef}
                 onClick={() => setPlusOpen((v) => !v)}
@@ -1200,10 +1200,10 @@ export function Composer() {
               )}
             </div>
 
-            {/* Model picker — se comprime en pantallas estrechas */}
+            {/* Model picker — se comprime en pantallas estrechas, en IDE se oculta */}
             <button
               onClick={() => setModelPickerOpen(!modelPickerOpen)}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-codex border border-border-accent text-xs text-text-primary hover:bg-app-elevated transition-colors cursor-pointer min-w-0"
+              className="composer-model-picker inline-flex items-center gap-1 px-2 py-1 rounded-codex border border-border-accent text-xs text-text-primary hover:bg-app-elevated transition-colors cursor-pointer min-w-0 shrink-0"
               title="Cambiar modelo"
             >
               <span className="opacity-70 truncate max-w-[80px] sm:max-w-none">{provider?.label.split(' ')[0]}</span>

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { cn } from '@/components/common/Button';
@@ -925,6 +926,7 @@ function MarkdownText({ text }: { text: string }) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
+      rehypePlugins={[rehypeRaw]}
       components={{
         code({ className, children, ...props }) {
           const match = /language-(\w+)/.exec(className || '');
@@ -971,6 +973,29 @@ function MarkdownText({ text }: { text: string }) {
         ),
         th: ({ children }) => <th className="border border-border p-2 bg-app-elevated">{children}</th>,
         td: ({ children }) => <td className="border border-border p-2">{children}</td>,
+        // Permite HTML crudo del agente (tablas, divs, detalles, estilos inline).
+        // rehypeRaw ya parsea el HTML embebido en markdown.
+        div: ({ children, ...props }) => <div {...props}>{children}</div>,
+        span: ({ children, ...props }) => <span {...props}>{children}</span>,
+        details: ({ children, ...props }) => (
+          <details className="mb-3 border border-border rounded-codex p-2" {...props}>
+            {children}
+          </details>
+        ),
+        summary: ({ children }) => (
+          <summary className="cursor-pointer text-sm font-medium text-text-primary">
+            {children}
+          </summary>
+        ),
+        button: ({ children, ...props }) => (
+          <button
+            type="button"
+            className="px-2 py-0.5 rounded bg-accent/15 text-accent text-xs hover:bg-accent/25 transition-colors"
+            {...props}
+          >
+            {children}
+          </button>
+        ),
       }}
     >
       {text}

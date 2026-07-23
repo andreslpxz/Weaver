@@ -688,7 +688,7 @@ function ConversationRow({
   return (
     <div
       className={cn(
-        'group flex items-center gap-2 px-2 py-1.5 rounded-codex text-sm cursor-pointer',
+        'group relative flex items-center gap-2 px-2 py-1.5 rounded-codex text-sm cursor-pointer',
         'text-text-secondary hover:text-text-primary hover:bg-app-elevated transition-colors',
         active && 'bg-app-elevated text-text-primary',
       )}
@@ -701,7 +701,7 @@ function ConversationRow({
           e.stopPropagation();
           onMenuToggle();
         }}
-        className="opacity-0 group-hover:opacity-100 codex-icon-btn w-5 h-5"
+        className="opacity-0 group-hover:opacity-100 codex-icon-btn w-5 h-5 shrink-0"
         title={t('sidebar.moveTo')}
       >
         <MoreHorizontal size={12} />
@@ -711,14 +711,14 @@ function ConversationRow({
           e.stopPropagation();
           onDelete();
         }}
-        className="opacity-0 group-hover:opacity-100 codex-icon-btn w-5 h-5"
+        className="opacity-0 group-hover:opacity-100 codex-icon-btn w-5 h-5 shrink-0"
         title={t('sidebar.delete')}
       >
         <Trash2 size={10} />
       </button>
       {menuOpen && (
         <div
-          className="absolute right-0 mt-32 z-30 w-48 bg-app-elevated border border-border-accent rounded-codex shadow-2xl animate-slide-up overflow-hidden"
+          className="absolute right-0 top-full mt-1 z-50 w-48 bg-app-elevated border border-border-accent rounded-codex shadow-2xl animate-slide-up overflow-hidden"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="px-2 py-1 text-[10px] text-text-muted uppercase">{t('sidebar.moveTo')}</div>

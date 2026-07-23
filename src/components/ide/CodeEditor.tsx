@@ -118,21 +118,13 @@ export function CodeEditor({ tabs, activeTab, onSelectTab, onCloseTab, onUpdateC
     const marks = active.lineMarks ?? [];
 
     const decorations: monaco.editor.IModelDeltaDecoration[] = marks.map((m) => {
-      const colorClass =
-        m.type === 'added'
-          ? 'line-mark-added'
-          : m.type === 'removed'
-            ? 'line-mark-removed'
-            : 'line-mark-modified';
-      const glyphClass =
-        m.type === 'added'
-          ? 'glyph-mark-added'
-          : m.type === 'removed'
-            ? 'glyph-mark-removed'
-            : 'glyph-mark-modified';
-
-      const lineColor =
-        m.type === 'added' ? '#22c55e80' : m.type === 'removed' ? '#ef444480' : '#eab30880';
+      // El usuario pidió solo dos colores:
+      //   - verde: líneas agregadas por el agente
+      //   - rojo:  líneas eliminadas O reemplazadas (modified → rojo)
+      const isAdded = m.type === 'added';
+      const colorClass = isAdded ? 'line-mark-added' : 'line-mark-removed';
+      const glyphClass = isAdded ? 'glyph-mark-added' : 'glyph-mark-removed';
+      const lineColor = isAdded ? '#22c55e80' : '#ef444480';
 
       return {
         range: new monaco.Range(m.line, 1, m.line, 1),
@@ -140,7 +132,9 @@ export function CodeEditor({ tabs, activeTab, onSelectTab, onCloseTab, onUpdateC
           isWholeLine: true,
           className: colorClass,
           glyphMarginClassName: glyphClass,
-          glyphMarginHoverMessage: { value: `Agente: ${m.type}` },
+          glyphMarginHoverMessage: {
+            value: isAdded ? 'Agente: línea agregada' : 'Agente: línea eliminada/reemplazada',
+          },
           minimap: { color: lineColor, position: monaco.editor.MinimapPosition.Inline },
           overviewRuler: {
             color: lineColor,

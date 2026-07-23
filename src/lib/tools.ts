@@ -555,7 +555,69 @@ async function fileWrite(path: string, content: string, createDirs: boolean): Pr
     return { ok: false, output: '', error: 'file_write solo disponible en modo Tauri.' };
   }
   try {
+    // Leer contenido previo (si existe) para calcular un diff línea-a-línea
+    // simple. Esto alimenta las "line marks" del CodeEditor en modo IDE.
+    let previousContent: string | null = null;
+    let fileExists = false;
+    try {
+      previousContent = await invokeFileRead(path);
+      fileExists = true;
+    } catch {
+      // El archivo no existe todavía — será "created".
+    }
+
     await invokeFileWrite(path, content, createDirs);
+
+    // Emitir evento para que el IdeLayout marque las líneas cambiadas en el
+    // editor Monaco y registre el cambio en el DiffViewer.
+    // Diff simple: comparamos líneas old vs new. Las líneas que están en new
+    // pero no en old (por índice) → added. Las que están en old pero ya no
+    // están en new → removed. Las que cambiaron de contenido → removed
+    // (consideramos "reemplazadas" → rojo, como pidió el usuario).
+    const oldLines = (previousContent ?? '').split('\n');
+    const newLines = content.split('\n');
+    const lines: { type: 'added' | 'removed'; line: number }[] = [];
+
+    // Detectar líneas añadidas o modificadas (recorremos las líneas nuevas)
+    for (let i = 0; i < newLines.length; i++) {
+      const oldLine = i < oldLines.length ? oldLines[i] : undefined;
+      if (oldLine === undefined) {
+        // Línea completamente nueva (archivo creció)
+        lines.push({ type: 'added', line: i + 1 });
+      } else if (oldLine !== newLines[i]) {
+        // Línea modificada → marcamos como "removed" (rojo) para indicar
+        // que el agente reemplazó contenido aquí. El usuario explícitamente
+        // pidió "rojo para lo que quita o reemplaza".
+        lines.push({ type: 'removed', line: i + 1 });
+      }
+    }
+    // Si el archivo se acortó, las líneas que ya no existen → removed
+    // (no podemos marcar líneas que ya no están, pero registramos el cambio
+    // en el DiffViewer con tipo "modified" si el archivo existía).
+
+    const changeType: 'created' | 'modified' = fileExists ? 'modified' : 'created';
+    const fileName = path.split(/[\\/]/).pop() ?? path;
+
+    // Best-effort: si window existe (no SSR), emitimos el CustomEvent.
+    if (typeof window !== 'undefined') {
+      try {
+        window.dispatchEvent(
+          new CustomEvent('weaver:agent-file-change', {
+            detail: {
+              path,
+              name: fileName,
+              type: changeType,
+              ts: Date.now(),
+              summary: `${lines.length} línea(s) marcada(s) por el agente`,
+              lines,
+            },
+          }),
+        );
+      } catch {
+        // No romper fileWrite si el evento falla.
+      }
+    }
+
     return { ok: true, output: `Escrito: ${path} (${content.length} bytes)` };
   } catch (e) {
     return { ok: false, output: '', error: String(e) };

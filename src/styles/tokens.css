@@ -128,3 +128,20 @@
 .selectable * {
   user-select: text;
 }
+
+/* ============================================================================
+   Modo IDE — ajustes visuales cuando AgentPanel está activo (w-96 = 384px).
+   El AgentPanel añade la clase `ide-mode` al <html> en su useEffect.
+   ========================================================================== */
+html.ide-mode .composer-model-picker {
+  display: none !important;
+}
+html.ide-mode .codex-input {
+  /* Compactar el padding del composer en IDE para ganar espacio horizontal */
+  padding: 0.375rem;
+}
+/* Reducir paddings laterales del composer en IDE */
+html.ide-mode .composer-outer {
+  padding-left: 0.375rem !important;
+  padding-right: 0.375rem !important;
+}

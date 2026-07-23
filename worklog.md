@@ -451,3 +451,27 @@ Stage Summary:
   - En el OS keyring (Windows Credential Manager / macOS Keychain / Linux Secret Service), la entrada para la key global es `openai`, `anthropic`, etc.
   - La entrada para la key propia del miembro X es `member:<uuid-de-X>:openai`. Son entradas totalmente independientes en el keyring.
   - `getForMember` busca primero la propia; si no existe, cae a la global (así un miembro sin key propia puede seguir usando la del dueño si así se quiere).
+
+---
+Task ID: bugfix-ide-menus-html-linemarks
+Agent: main
+Task: Resolver 4 bugs reportados por el usuario: (1) botón enviar no aparece en IDE, (2) menú "..." de chat aparece hasta la derecha en mobile y PC, (3) HTML del agente no se renderiza, (4) line marks: verde para líneas agregadas, rojo para eliminadas/reemplazadas.
+
+Work Log:
+- Bug 1 (botón enviar en IDE): el bottom row del Composer tenía `flex-wrap` lo que hacía que los items se envolvieran a una nueva línea en el panel estrecho (w-96=384px). Cambiado a `flex-nowrap overflow-hidden`, añadido `shrink-0` a todos los items fijos. Añadida clase CSS `composer-model-picker` que se oculta vía `html.ide-mode .composer-model-picker { display: none }` en tokens.css (el model picker ya está en la StatusBar del IDE). Añadida clase `composer-outer` al contenedor exterior para reducir paddings laterales en IDE.
+- Bug 2 (menú "..." mal posicionado): en `ConversationRow` (Sidebar.tsx línea ~689), el contenedor padre NO tenía `relative`, así que el `absolute right-0 mt-32` se posicionaba respecto a un ancestro lejano (probablemente el sidebar completo), apareciendo "hasta la derecha" y con offset vertical fijo de 128px. Fix: añadido `relative` al padre, cambiado `mt-32` por `top-full mt-1`, subido z-index a `z-50`, añadido `shrink-0` a los botones de acción.
+- Bug 3 (HTML no se renderiza): `MarkdownText` en MessageList.tsx usaba ReactMarkdown con `remarkGfm` pero SIN `rehypeRaw`, así que cualquier HTML crudo que el agente emitía era escapado/stripeado. Fix: importado `rehype-raw` (ya estaba en package.json), añadido `rehypePlugins={[rehypeRaw]}` y componentes custom para `div`, `span`, `details`, `summary`, `button` para que el HTML del agente (tablas, divs, detalles, estilos inline) se renderice visualmente.
+- Bug 4 (line marks verde/rojo): el CodeEditor ya tenía 3 categorías (added=verde, removed=rojo, modified=amarillo). El usuario pidió solo 2: verde para agregadas, rojo para eliminadas O reemplazadas. Fix: mapeado `modified` → `removed` (rojo). Hover actualizado: "línea agregada" / "línea eliminada/reemplazada".
+- Bonus (line marks no se llenaban): el evento `weaver:agent-file-change` se escuchaba pero nadie lo emitía. Hook agregado en `fileWrite` (lib/tools.ts): antes de escribir, lee el contenido previo (si existe), calcula diff línea-a-línea simple, y emite el CustomEvent con `lines: [{type:'added'|'removed', line}]`. Líneas nuevas al final del archivo → added (verde). Líneas modificadas en su sitio → removed (rojo). El IdeLayout recibe el evento, actualiza el DiffViewer, y si el archivo no está abierto en un tab lo abre automáticamente con las marks.
+- Verificado: `tsc --noEmit` EXIT 0 ✓ · `vite build` exitoso en 5.16s ✓.
+
+Stage Summary:
+- Archivos modificados:
+  - `src/components/sidebar/Sidebar.tsx`: ConversationRow con `relative` + posicionamiento correcto del menú "Mover a"
+  - `src/components/chat/MessageList.tsx`: import rehypeRaw + `rehypePlugins={[rehypeRaw]}` + componentes HTML custom
+  - `src/components/composer/Composer.tsx`: `composer-outer` class, `flex-nowrap` en bottom row, `composer-model-picker` class con `shrink-0`
+  - `src/styles/tokens.css`: reglas `html.ide-mode .composer-model-picker { display: none }` + compactación de paddings
+  - `src/components/ide/CodeEditor.tsx`: line marks ahora solo verde (added) / rojo (removed+modified)
+  - `src/lib/tools.ts`: `fileWrite` ahora lee contenido previo, calcula diff simple, emite `weaver:agent-file-change` con LineMark[]
+- El flujo completo IDE funciona: agente llama file_write → se emite evento → IdeLayout recibe → abre el archivo en un tab con line marks verde/rojo + lo registra en el DiffViewer.
+- El paperclip 📐 como botón independiente ya estaba eliminado (sólo queda como icono dentro del popup del +, lo cual es correcto).
