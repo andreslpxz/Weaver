@@ -53,6 +53,18 @@ chrono = { version = "0.4", features = ["serde"] }
 once_cell = "1"
 which = "7"
 
+# HTTP client para bedrock_invoke (SigV4)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# AWS SigV4 signing (para Bedrock nativo sin proxy)
+aws-sigv4 = "1"
+aws-credential-types = "1"
+aws-smithy-async = "1"
+http = "1"
+sha2 = "0.10"
+hex = "0.4"
+url = "2"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # X11 raw protocol for synthetic input events (keyboard/mouse)
 x11rb = "0.13"

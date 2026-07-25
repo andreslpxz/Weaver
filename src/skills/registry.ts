@@ -94,11 +94,102 @@ export const skillsRegistry = {
   async unregister(name: string): Promise<void> {
     if (runtime.isTauri) {
       await sqlite.deleteSkill(name);
+      // También intentar borrar el archivo si es auto-aprendida.
+      try {
+        const path = `${LEARNED_DIR}/${name}.md`;
+        await sqlite.fileWrite(path, '', false).catch(() => {});
+        // Nota: fileWrite con contenido vacío no borra el archivo, sólo lo
+        // trunca. Aceptable para este caso.
+      } catch {
+        /* noop */
+      }
       return;
     }
     writeCache(readCache().filter((s) => s.name !== name));
   },
+
+  /**
+   * Guarda una skill auto-aprendida en `~/.weaver/skills/learned/<name>.md`
+   * y la registra en SQLite. Esto permite que el agente recuerde patrones
+   * exitosos y los reutilice en futuras conversaciones.
+   *
+   * El agente debe llamar esta función desde su reflection cuando una
+   * secuencia de tools produjo un resultado exitoso y el usuario confirmó
+   * que estaba bien.
+   */
+  async saveLearnedSkill(skill: Skill): Promise<void> {
+    // Marcar como auto-aprendida.
+    const learned: Skill = { ...skill, source: 'learned' };
+    await this.register(learned);
+
+    // Persistir a disco si estamos en Tauri.
+    if (runtime.isTauri) {
+      try {
+        const md = serializeSkillMarkdown(learned);
+        const path = `${LEARNED_DIR}/${learned.name}.md`;
+        // fileWrite con create_dirs=true crea ~/.weaver/skills/learned/ si no existe.
+        await sqlite.fileWrite(path, md, true);
+      } catch (e) {
+        console.warn('saveLearnedSkill: no se pudo persistir a disco:', e);
+      }
+    }
+  },
+
+  /**
+   * Carga skills auto-aprendidas desde `~/.weaver/skills/learned/`.
+   * Útil al iniciar la app para sincronizar el disco con SQLite (en caso de
+   * que el usuario haya copiado skills manualmente).
+   */
+  async loadLearnedSkills(): Promise<Skill[]> {
+    if (!runtime.isTauri) return [];
+    try {
+      const entries = await sqlite.fileList(LEARNED_DIR);
+      const skills: Skill[] = [];
+      for (const entry of entries) {
+        if (entry.is_dir || !entry.name.endsWith('.md')) continue;
+        try {
+          const content = await sqlite.fileRead(`${LEARNED_DIR}/${entry.name}`);
+          const skill = parseSkillMarkdown(content, 'learned');
+          skills.push(skill);
+          // Registrar en SQLite si no existe ya.
+          await this.register(skill);
+        } catch {
+          /* skip malformed */
+        }
+      }
+      return skills;
+    } catch {
+      // El directorio no existe todavía — devolver vacío.
+      return [];
+    }
+  },
 };
+
+/**
+ * Directorio donde se persisten las skills auto-aprendidas.
+ * En Tauri se resuelve a ~/.weaver/skills/learned/ via el comando Rust
+ * que expande `~`. El frontend sólo pasa el string con `~/`.
+ */
+const LEARNED_DIR = '~/.weaver/skills/learned';
+
+/**
+ * Serializa una Skill de vuelta a formato SKILL.md (frontmatter + body).
+ */
+function serializeSkillMarkdown(skill: Skill): string {
+  const triggers = skill.triggers.map((t) => `  - "${t.replace(/"/g, '\\"')}"`).join('\n');
+  const tools = skill.toolsRequired.map((t) => `  - "${t}"`).join('\n');
+  return `---
+name: ${skill.name}
+description: ${skill.description}
+triggers:
+${triggers || '  - ""'}
+tools_required:
+${tools || '  - ""'}
+---
+
+${skill.body}
+`;
+}
 
 // ============================================================================
 // Parser

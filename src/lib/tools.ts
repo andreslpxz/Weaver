@@ -12,6 +12,7 @@
 
 import { runtime, keyring, sqlite } from './tauri';
 import { invoke } from '@tauri-apps/api/core';
+import { diffLines, diffWordsWithSpace } from 'diff';
 
 // Re-usa los wrappers de lib/tauri.ts
 const invokeShellExec = sqlite.shellExec;
@@ -527,7 +528,54 @@ async function shellExec(command: string, _cwd?: string, _timeout = 30000): Prom
     };
   }
   try {
+    // Detectar si el comando modifica archivos (para emitir line marks en IDE).
+    // Heurística: redirecciones `>` `>>`, comandos sed -i, echo >, cat >, tee,
+    // dd of=, etc. Capturamos las rutas objetivo para emitir el evento.
+    const modifiedPaths = detectShellFileModifications(command);
+    const beforeSnapshots = new Map<string, string | null>();
+    if (modifiedPaths.length > 0) {
+      for (const p of modifiedPaths) {
+        try {
+          const content = await invokeFileRead(p);
+          beforeSnapshots.set(p, content);
+        } catch {
+          beforeSnapshots.set(p, null); // no existe todavía
+        }
+      }
+    }
+
     const result = await invokeShellExec(command, _cwd, _timeout);
+
+    // Si detectamos modificaciones a archivos, emitir eventos con diff Myers.
+    if (modifiedPaths.length > 0) {
+      for (const p of modifiedPaths) {
+        try {
+          const after = await invokeFileRead(p);
+          const before = beforeSnapshots.get(p) ?? null;
+          emitFileChangeEvent(p, before, after);
+        } catch {
+          // El archivo pudo haber sido eliminado por el comando.
+          if (typeof window !== 'undefined') {
+            try {
+              window.dispatchEvent(
+                new CustomEvent('weaver:agent-file-change', {
+                  detail: {
+                    path: p,
+                    name: p.split(/[\\/]/).pop() ?? p,
+                    type: 'deleted' as const,
+                    ts: Date.now(),
+                    summary: 'Eliminado por shell_exec',
+                  },
+                }),
+              );
+            } catch {
+              /* noop */
+            }
+          }
+        }
+      }
+    }
+
     return {
       ok: result.code === 0,
       output: result.stdout + (result.stderr ? `\n[stderr]\n${result.stderr}` : ''),
@@ -535,6 +583,135 @@ async function shellExec(command: string, _cwd?: string, _timeout = 30000): Prom
     };
   } catch (e) {
     return { ok: false, output: '', error: String(e) };
+  }
+}
+
+/**
+ * Detecta rutas de archivos que un comando shell probablemente modificará.
+ * Heurística simple basada en patrones comunes:
+ *   - `cmd > file` o `cmd >> file`
+ *   - `sed -i ... file`
+ *   - `echo "..." > file`
+ *   - `cat > file <<EOF ... EOF`
+ *   - `tee file`
+ *   - `cp src dst` (toma dst)
+ *   - `mv src dst` (toma dst)
+ *   - `dd of=file`
+ *   - `mkdir -p path` (no emitimos evento, no es modificación de archivo)
+ *
+ * No es perfecto (no ejecuta el shell), pero cubre los casos más comunes.
+ */
+function detectShellFileModifications(command: string): string[] {
+  const paths = new Set<string>();
+
+  // Normalizar: quitar exports, var=valor al inicio
+  const cmd = command.trim();
+
+  // Redirecciones `>` y `>>` (no `2>&1` ni `1>&2`)
+  const redirectMatches = cmd.matchAll(/(?:>>|>)\s*([^\s|&;<>]+(?<!&))/g);
+  for (const m of redirectMatches) {
+    const target = m[1];
+    if (target && !target.startsWith('&') && !target.startsWith('/dev/')) {
+      paths.add(target.replace(/^["']|["']$/g, ''));
+    }
+  }
+
+  // sed -i ... file
+  const sedMatch = cmd.match(/\bsed\b\s+(?:-[a-zA-Z]+\s+)*-i\b[^\n]*?(?:--\s+)?(\S+)$/);
+  if (sedMatch && sedMatch[1]) {
+    paths.add(sedMatch[1].replace(/^["']|["']$/g, ''));
+  }
+  // sed -i patron más general: sed -i'' o sed -i 'expr' file
+  const sedGeneral = cmd.match(/\bsed\b\s+-i\S*\s+'[^']+'\s+(\S+)/);
+  if (sedGeneral && sedGeneral[1]) {
+    paths.add(sedGeneral[1].replace(/^["']|["']$/g, ''));
+  }
+
+  // tee file
+  const teeMatches = cmd.matchAll(/\btee\b\s+(?:-a\s+)?([^\s|&;<>]+)/g);
+  for (const m of teeMatches) {
+    if (m[1] && !m[1].startsWith('-')) {
+      paths.add(m[1].replace(/^["']|["']$/g, ''));
+    }
+  }
+
+  // dd of=file
+  const ddMatch = cmd.match(/\bdd\b[^\n]*?\bof=(\S+)/);
+  if (ddMatch && ddMatch[1]) {
+    paths.add(ddMatch[1].replace(/^["']|["']$/g, ''));
+  }
+
+  // cp src dst  (último argumento)
+  const cpMatch = cmd.match(/\bcp\b\s+(?:-[a-zA-Z]+\s+)*(\S+)\s+(\S+)\s*$/);
+  if (cpMatch && cpMatch[2]) {
+    paths.add(cpMatch[2].replace(/^["']|["']$/g, ''));
+  }
+
+  // mv src dst
+  const mvMatch = cmd.match(/\bmv\b\s+(?:-[a-zA-Z]+\s+)*(\S+)\s+(\S+)\s*$/);
+  if (mvMatch && mvMatch[2]) {
+    paths.add(mvMatch[2].replace(/^["']|["']$/g, ''));
+  }
+
+  return Array.from(paths).filter((p) => p && !p.startsWith('-'));
+}
+
+/**
+ * Calcula diff Myers línea-a-línea entre dos contenidos y emite el evento
+ * `weaver:agent-file-change` con las LineMark[] para el IdeLayout.
+ * Verde (added) para líneas nuevas, rojo (removed) para eliminadas o modificadas.
+ */
+function emitFileChangeEvent(path: string, before: string | null, after: string): void {
+  const fileName = path.split(/[\\/]/).pop() ?? path;
+  const fileExists = before !== null;
+  const changeType: 'created' | 'modified' = fileExists ? 'modified' : 'created';
+
+  // diffLines de la lib `diff` implementa Myers real.
+  const parts = diffLines(before ?? '', after);
+  const lines: { type: 'added' | 'removed'; line: number }[] = [];
+
+  let currentLine = 1; // 1-indexed en el archivo NUEVO
+  for (const part of parts) {
+    const partLineCount = part.value.split('\n').length - 1;
+    // diffLines puede devolver un trailing \n que cuenta como línea extra
+    if (part.added) {
+      // Líneas agregadas → verde
+      for (let i = 0; i < partLineCount; i++) {
+        lines.push({ type: 'added', line: currentLine + i });
+      }
+      currentLine += partLineCount;
+    } else if (part.removed) {
+      // Líneas eliminadas/reemplazadas → rojo (en la posición donde estaban).
+      // Como no existen en el archivo nuevo, marcamos la línea SIGUIENTE del
+      // archivo nuevo (que ocupa su lugar) como "removed" para que el usuario
+      // vea dónde ocurrió la eliminación. Si el archivo se acorta al final,
+      // marcamos la última línea disponible.
+      for (let i = 0; i < partLineCount; i++) {
+        lines.push({ type: 'removed', line: currentLine });
+      }
+      // No avanzamos currentLine porque las líneas removed no existen en new.
+    } else {
+      currentLine += partLineCount;
+    }
+  }
+
+  if (typeof window !== 'undefined') {
+    try {
+      window.dispatchEvent(
+        new CustomEvent('weaver:agent-file-change', {
+          detail: {
+            path,
+            name: fileName,
+            type: changeType,
+            ts: Date.now(),
+            summary: `${lines.length} línea(s) marcada(s) por el agente`,
+            lines,
+          },
+        }),
+      );
+    } catch {
+      /* noop */
+    }
   }
 }
 
@@ -555,68 +732,18 @@ async function fileWrite(path: string, content: string, createDirs: boolean): Pr
     return { ok: false, output: '', error: 'file_write solo disponible en modo Tauri.' };
   }
   try {
-    // Leer contenido previo (si existe) para calcular un diff línea-a-línea
-    // simple. Esto alimenta las "line marks" del CodeEditor en modo IDE.
+    // Leer contenido previo (si existe) para calcular diff Myers real.
     let previousContent: string | null = null;
-    let fileExists = false;
     try {
       previousContent = await invokeFileRead(path);
-      fileExists = true;
     } catch {
       // El archivo no existe todavía — será "created".
     }
 
     await invokeFileWrite(path, content, createDirs);
 
-    // Emitir evento para que el IdeLayout marque las líneas cambiadas en el
-    // editor Monaco y registre el cambio en el DiffViewer.
-    // Diff simple: comparamos líneas old vs new. Las líneas que están en new
-    // pero no en old (por índice) → added. Las que están en old pero ya no
-    // están en new → removed. Las que cambiaron de contenido → removed
-    // (consideramos "reemplazadas" → rojo, como pidió el usuario).
-    const oldLines = (previousContent ?? '').split('\n');
-    const newLines = content.split('\n');
-    const lines: { type: 'added' | 'removed'; line: number }[] = [];
-
-    // Detectar líneas añadidas o modificadas (recorremos las líneas nuevas)
-    for (let i = 0; i < newLines.length; i++) {
-      const oldLine = i < oldLines.length ? oldLines[i] : undefined;
-      if (oldLine === undefined) {
-        // Línea completamente nueva (archivo creció)
-        lines.push({ type: 'added', line: i + 1 });
-      } else if (oldLine !== newLines[i]) {
-        // Línea modificada → marcamos como "removed" (rojo) para indicar
-        // que el agente reemplazó contenido aquí. El usuario explícitamente
-        // pidió "rojo para lo que quita o reemplaza".
-        lines.push({ type: 'removed', line: i + 1 });
-      }
-    }
-    // Si el archivo se acortó, las líneas que ya no existen → removed
-    // (no podemos marcar líneas que ya no están, pero registramos el cambio
-    // en el DiffViewer con tipo "modified" si el archivo existía).
-
-    const changeType: 'created' | 'modified' = fileExists ? 'modified' : 'created';
-    const fileName = path.split(/[\\/]/).pop() ?? path;
-
-    // Best-effort: si window existe (no SSR), emitimos el CustomEvent.
-    if (typeof window !== 'undefined') {
-      try {
-        window.dispatchEvent(
-          new CustomEvent('weaver:agent-file-change', {
-            detail: {
-              path,
-              name: fileName,
-              type: changeType,
-              ts: Date.now(),
-              summary: `${lines.length} línea(s) marcada(s) por el agente`,
-              lines,
-            },
-          }),
-        );
-      } catch {
-        // No romper fileWrite si el evento falla.
-      }
-    }
+    // Emitir evento con diff Myers real (verde agregadas / rojo eliminadas o reemplazadas).
+    emitFileChangeEvent(path, previousContent, content);
 
     return { ok: true, output: `Escrito: ${path} (${content.length} bytes)` };
   } catch (e) {

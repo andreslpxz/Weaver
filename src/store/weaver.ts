@@ -118,6 +118,8 @@ interface WeaverState {
   loadMessages: (conversationId: string) => Promise<void>;
   newConversation: () => string;
   selectConversation: (id: string) => void;
+  /** Persiste todos los mensajes de una conversación a SQLite. */
+  persistConversation: (conversationId: string) => Promise<void>;
   deleteConversation: (id: string) => void;
   renameConversation: (id: string, title: string) => Promise<void>;
   appendMessage: (msg: Message) => void;
@@ -598,11 +600,49 @@ export const useWeaver = create<WeaverState>((set, get) => ({
   },
 
   selectConversation: (id) => {
+    // Antes de switchear, persistir la conversación actual a SQLite.
+    // Esto cubre el caso de mensajes asistentes en streaming que se
+    // actualizaron en memoria pero no se guardaron.
+    const prevId = useWeaver.getState().activeConversationId;
+    if (prevId && prevId !== id) {
+      void useWeaver.getState().persistConversation(prevId);
+    }
+
     set({ activeConversationId: id, view: 'chat' });
     // Lazy load mensajes desde SQLite si la conversación está vacía.
     const conv = useWeaver.getState().conversations.find((c) => c.id === id);
     if (conv && conv.messages.length === 0) {
       useWeaver.getState().loadMessages(id);
+    }
+  },
+
+  /**
+   * Persiste todos los mensajes de una conversación a SQLite.
+   * Útil al switchear conversaciones o al cerrar la app — asegura que el
+   * estado en memoria (incluyendo updates de streaming) quede guardado.
+   * Usa saveMessage upsert (idempotente si el mensaje ya existe).
+   */
+  persistConversation: async (conversationId) => {
+    if (!runtime.isTauri) return;
+    const conv = useWeaver.getState().conversations.find((c) => c.id === conversationId);
+    if (!conv) return;
+    try {
+      for (const msg of conv.messages) {
+        const msgRow = {
+          id: msg.id ?? crypto.randomUUID(),
+          conversation_id: conversationId,
+          role: msg.role,
+          content: msg.content ?? '',
+          ts: msg.ts ?? Date.now(),
+          attachments_json: msg.attachments ? JSON.stringify(msg.attachments) : null,
+          reasoning: msg.reasoning ?? null,
+        };
+        await sqlite.saveMessage(msgRow);
+      }
+      // Actualizar timestamp de la conversación.
+      await sqlite.renameConversation(conversationId, conv.title);
+    } catch (e) {
+      console.warn('persistConversation failed:', e);
     }
   },
 

@@ -16,6 +16,7 @@ pub mod backend;
 pub mod commands;
 #[cfg(not(target_os = "linux"))]
 pub mod commands_crossplatform;
+pub mod bedrock;
 pub mod db;
 pub mod keyring;
 pub mod mcp;
@@ -166,6 +167,8 @@ pub fn run() {
                 mcp::mcp_list_tools,
                 mcp::mcp_call_tool,
                 mcp::mcp_generate_id,
+                // Bedrock (SigV4 nativo)
+                bedrock::bedrock_invoke,
             ]);
     }
 
@@ -256,6 +259,8 @@ pub fn run() {
             db::me_integrations_list,
             db::me_integrations_save,
             db::me_integrations_delete,
+            // Bedrock (SigV4 nativo)
+            bedrock::bedrock_invoke,
         ]);
     }
 

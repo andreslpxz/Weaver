@@ -7,13 +7,14 @@
  *   - ¿Hay una skill reutilizable para extraer?
  *
  * Si la tarea fue exitosa y la reflexión sugiere una skill, se materializa
- * como un archivo SKILL.md en ~/.weaver/skills/learned/<name>.md (TODO vía
- * Tauri command fs_write_skill).
+ * como un archivo SKILL.md en ~/.weaver/skills/learned/<name>.md vía
+ * skillsRegistry.saveLearnedSkill().
  */
 
 import type { LLMProvider, Message } from '@/providers/types';
 import type { Episode } from './types';
 import { streamUntilDone } from '@/lib/chain';
+import { skillsRegistry } from '@/skills/registry';
 
 const SYSTEM_PROMPT = `Eres el módulo de Reflexión de Weaver. Tras cada episodio, extraes lecciones reutilizables.
 
@@ -36,6 +37,8 @@ export interface ReflectionResult {
     triggers: string[];
     body: string;
   };
+  /** True si la skill fue persistida a disco. */
+  skillSaved?: boolean;
 }
 
 export async function reflect(
@@ -66,10 +69,31 @@ ${episode.plan.subtasks
   if (!json) return { lessons: ['No se pudo reflexionar'] };
   try {
     const parsed = JSON.parse(json) as Partial<ReflectionResult>;
-    return {
+    const result: ReflectionResult = {
       lessons: parsed.lessons ?? [],
       skill: parsed.skill?.name ? parsed.skill : undefined,
     };
+
+    // Si el agente identificó una skill reutilizable Y el episodio fue
+    // exitoso, persistirla a disco vía skillsRegistry.saveLearnedSkill().
+    if (result.skill && result.skill.name && (episode.outcome === 'success' || episode.outcome === 'partial')) {
+      try {
+        await skillsRegistry.saveLearnedSkill({
+          name: result.skill.name,
+          description: result.skill.description,
+          triggers: result.skill.triggers,
+          toolsRequired: [], // La reflexión no especifica tools; se infiere del body
+          body: result.skill.body,
+          source: 'learned',
+        });
+        result.skillSaved = true;
+      } catch (e) {
+        console.warn('reflect: no se pudo guardar la skill aprendida:', e);
+        result.skillSaved = false;
+      }
+    }
+
+    return result;
   } catch {
     return { lessons: ['Reflexión inválida'] };
   }

@@ -44,5 +44,36 @@ export default defineConfig({
         : 'safari13',
     minify: !process.env.TAURI_ENV_DEBUG ? 'esbuild' : false,
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    // Code-splitting: separa vendor chunks para reducir el bundle principal.
+    // Monaco y react-syntax-highlighter son los más pesados.
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // React core
+          'react-vendor': ['react', 'react-dom'],
+          // Monaco editor (~5MB sin split)
+          'monaco': ['monaco-editor', '@monaco-editor/react'],
+          // Markdown + syntax highlighting
+          'markdown': [
+            'react-markdown',
+            'remark-gfm',
+            'rehype-raw',
+            'react-syntax-highlighter',
+          ],
+          // State + routing
+          'state': ['zustand', 'clsx', 'tailwind-merge'],
+          // Tauri SDK
+          'tauri': [
+            '@tauri-apps/api',
+            '@tauri-apps/plugin-dialog',
+            '@tauri-apps/plugin-shell',
+            '@tauri-apps/plugin-store',
+          ],
+          // Icons
+          'icons': ['lucide-react'],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 1000,
   },
 });

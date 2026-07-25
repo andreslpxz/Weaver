@@ -36,7 +36,7 @@ import {
   buildMessageWithAttachments,
   getFilesFromDrop,
 } from '@/lib/attachments';
-import { runtime } from '@/lib/tauri';
+import { runtime, atspi } from '@/lib/tauri';
 import type { Message, ImageContent } from '@/providers/types';
 import type { Attachment } from '@/lib/attachments';
 import { skillsRegistry } from '@/skills/registry';
@@ -1258,10 +1258,26 @@ export function Composer() {
         {appPickerOpen && (
           <AppPicker
             onClose={() => setAppPickerOpen(false)}
-            onPick={(app) => {
+            onPick={async (app) => {
               setAttachedApp(app);
               // Inyectar contexto de la app en el composer.
-              const ctx = `\n[App adjunta: ${app.name} (${app.kind})]`;
+              // Si estamos en Tauri, intentar capturar el árbol de accesibilidad
+              // de la ventana seleccionada para que el agente tenga contexto real.
+              let ctx = `\n[App adjunta: ${app.name} (${app.kind}, bus=${app.busName})]`;
+              if (runtime.isTauri) {
+                try {
+                  // queryTree devuelve un AccessibleNode con children anidados.
+                  // Limitamos la profundidad para no inflar el prompt.
+                  const tree = await atspi.queryTree(app.busName, app.path, 3);
+                  const summary = summarizeTree(tree, 3, 50);
+                  if (summary) {
+                    ctx += `\n[Árbol de accesibilidad (profundidad 3, máx 50 nodos)]:\n${summary}`;
+                  }
+                } catch (e) {
+                  console.warn('[AppPicker] no se pudo capturar árbol AT-SPI:', e);
+                  ctx += `\n[Nota: no se pudo capturar el árbol de accesibilidad — el agente puede usar la tool atspi_query_tree para explorarla en tiempo real]`;
+                }
+              }
               setValue((v) => v + ctx);
             }}
           />
@@ -1349,4 +1365,37 @@ function MentionIcon({ icon }: { icon: MentionItem['icon'] }) {
     default:
       return <FileText {...props} />;
   }
+}
+
+/**
+ * Resume un árbol de accesibilidad en texto plano para inyectarlo como
+ * contexto del agente cuando se adjunta una app.
+ * - Profundidad limitada para no inflar el prompt.
+ * - Máximo N nodos para evitar árboles gigantes (Chrome, VSCode).
+ */
+function summarizeTree(
+  node: { name?: string | null; role?: string; text?: string | null; children?: unknown[] },
+  depth: number,
+  maxNodes: number,
+): string {
+  const lines: string[] = [];
+  let count = 0;
+  function walk(n: typeof node, d: number) {
+    if (count >= maxNodes) return;
+    if (d > depth) return;
+    const indent = '  '.repeat(d);
+    const label = n.name || n.text || '';
+    const role = n.role || '?';
+    lines.push(`${indent}- [${role}]${label ? ` ${String(label).slice(0, 80)}` : ''}`);
+    count++;
+    if (Array.isArray(n.children)) {
+      for (const c of n.children) {
+        walk(c as typeof node, d + 1);
+        if (count >= maxNodes) return;
+      }
+    }
+  }
+  walk(node, 0);
+  if (count >= maxNodes) lines.push(`... (truncado a ${maxNodes} nodos)`);
+  return lines.join('\n');
 }
