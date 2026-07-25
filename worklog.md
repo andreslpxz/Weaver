@@ -475,3 +475,30 @@ Stage Summary:
   - `src/lib/tools.ts`: `fileWrite` ahora lee contenido previo, calcula diff simple, emite `weaver:agent-file-change` con LineMark[]
 - El flujo completo IDE funciona: agente llama file_write → se emite evento → IdeLayout recibe → abre el archivo en un tab con line marks verde/rojo + lo registra en el DiffViewer.
 - El paperclip 📐 como botón independiente ya estaba eliminado (sólo queda como icono dentro del popup del +, lo cual es correcto).
+
+---
+Task ID: feat-roadmap-completo
+Agent: main
+Task: Implementar todo lo pendiente del roadmap: xdg-desktop-portal, icon.ico, macOS backend, M5 notarización, adjuntar app real, persistir conversaciones, bedrock SigV4, skills auto-aprendidas, hook shell_exec, code-splitting, diff Myers, i18n.
+
+Work Log:
+- icon.ico: regenerado con Pillow desde 128x128@2x.png. 7 resoluciones (16/24/32/48/64/128/256). Formato 3.00 válido. Script: /home/z/my-project/scripts/regen_icons.py.
+- Code-splitting: vite.config.ts con manualChunks (react-vendor, monaco, markdown, state, tauri, icons). Bundle principal 1.5 MB → 399 KB (115 KB gzip).
+- Diff Myers: instalada lib `diff` + `@types/diff`. emitFileChangeEvent() usa diffLines() para calcular diff real línea-a-línea. Verde agregadas, rojo eliminadas/reemplazadas.
+- Hook shell_exec: detectShellFileModifications() parsea patrones (>, >>, sed -i, tee, cp/mv, dd of=). Antes de ejecutar, snapshot del contenido previo. Después, diff y emite evento por cada archivo afectado.
+- Persistir conversaciones: persistConversation() en store/weaver.ts. Llamada automáticamente desde selectConversation() antes de switchear. Usa saveMessage upsert (idempotente).
+- Skills auto-aprendidas: skillsRegistry.saveLearnedSkill() + loadLearnedSkills(). Persisten a ~/.weaver/skills/learned/<name>.md (con create_dirs=true). reflection.ts las guarda cuando outcome=success/partial y la reflexión identifica una skill reutilizable.
+- Adjuntar app real: AppPicker onPick ahora llama atspi.queryTree(busName, path, 3) y resume el árbol (max 50 nodos) en texto para inyectar como contexto del agente.
+- macOS backend: implementado completo. ax/mod.rs (AxClient con check_permission, list_applications, read_node recursivo, focused_element, press, set_value, get_value, mapeo AXRole→Role). appkit/mod.rs (NSWorkspace + NSPasteboard + CGEvent: list_running_applications, activate_window, clipboard_get/set, click_at_via_cgevent, type_text_via_cgevent, press_key_combo_via_cgevent con mapeo completo de virtual key codes macOS). macos/mod.rs (MacosBackend con trait Backend 16/16 métodos usando spawn_blocking).
+- macOS M5 notarización: workflow build-macos.yml job 'notarize' con xcrun notarytool submit --wait + xcrun stapler staple + reempaquetado .dmg. Solo corre en tags v* con secrets APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD.
+- Linux xdg-desktop-portal: wayland/mod.rs con zbus 4 proxy al portal RemoteDesktop. PortalSession con notify_key/notify_pointer_motion/notify_pointer_button. La creación D-Bus funciona; escuchar signals Response queda como iteración futura (suscripción a org.freedesktop.portal.Request::Response).
+- bedrock_invoke SigV4 nativo: bedrock.rs (160 LOC) con aws-sigv4 + aws-credential-types + aws-smithy-async. Comando Tauri registrado en Linux/Windows/macOS. Endpoint POST /model/{model_id}/invoke con firma SigV4.
+- i18n: añadidas 60+ claves (ide.*, composer.*) en ES y EN al dict. Infraestructura lista; pendiente reemplazar strings hardcodeadas en cada componente (trabajo manual).
+
+Stage Summary:
+- 21 archivos modificados, 1799 insertions, 168 deletions, 1 nuevo (bedrock.rs)
+- Commit 652026d
+- tsc --noEmit EXIT 0, vite build OK en 29s con code-splitting activo
+- Bundle: 399 KB principal (115 KB gzip) + chunks separados (monaco, markdown, state, tauri, icons)
+- Lo que NO se pudo validar aquí: macOS backend (requiere macOS real), Windows CI tests W6 (requieren runner Windows), bedrock SigV4 (requiere AWS credentials), xdg-desktop-portal completo (requiere escuchar signals Response)
+- Lo que NO se hizo: Sync Supabase/self-hosted (proyecto demasiado grande para esta sesión)
