@@ -502,3 +502,32 @@ Stage Summary:
 - Bundle: 399 KB principal (115 KB gzip) + chunks separados (monaco, markdown, state, tauri, icons)
 - Lo que NO se pudo validar aquí: macOS backend (requiere macOS real), Windows CI tests W6 (requieren runner Windows), bedrock SigV4 (requiere AWS credentials), xdg-desktop-portal completo (requiere escuchar signals Response)
 - Lo que NO se hizo: Sync Supabase/self-hosted (proyecto demasiado grande para esta sesión)
+
+---
+Task ID: feat-supabase-sync
+Agent: main
+Task: Implementar sincronización con Supabase desde la vista de Ajustes: pegar token, listar proyectos del usuario, al elegir uno crear automáticamente el proyecto local, y permitir crear un proyecto nuevo en Supabase desde Weaver. Añadir docs.
+
+Work Log:
+- Creado `src/lib/supabaseSync.ts` (~190 LOC): cliente ligero de la Supabase Management API (https://api.supabase.com/v1).
+  - Tipos: `SupabaseOrganization`, `SupabaseProject`, `CreateSupabaseProjectOpts`.
+  - Persistencia del PAT: en Tauri usa el keyring existente con provider_id `supabase_pat`; en navegador cae a `localStorage:weaver:supabase_pat`.
+  - Endpoints: `GET /organizations`, `GET /projects`, `POST /projects`. Helper `verifyToken()` para validar token nuevo sin guardarlo.
+  - Mapeo local↔Supabase: `linkLocalToSupabase()` / `getSupabaseProjectMap()` persiste `{ localId: supabaseId }` en `localStorage:weaver:supabase_project_map`.
+- Añadida tarjeta `SupabaseSyncCard` en `ConfiguracionView` (`src/views/Views.tsx`):
+  - Input password para el PAT + botón Conectar.
+  - Al conectar: valida, guarda en keyring/localStorage, lista organizaciones y proyectos.
+  - Lista proyectos remotos con nombre, región, estado (ACTIVE/PAUSED con colores), host BD, y botón Importar (o Importado si ya existe un local con el mismo nombre).
+  - Importar: si existe local con mismo nombre → sólo vincula; si no → crea proyecto local y vincula.
+  - Formulario "Crear nuevo proyecto Supabase": nombre, organización, región (8 opciones), contraseña BD. Crea en Supabase + crea local vinculado.
+  - Botón Refrescar + botón X para desconectar (borra token, NO toca proyectos locales).
+  - Nota de seguridad contextual (keyring en Tauri, localStorage en navegador).
+- Creado `docs/supabase-sync.md`: 9 secciones cubriendo obtención del token, almacenamiento, uso, creación de proyectos, endpoints, seguridad, limitaciones y próximos pasos.
+- Verificado: `tsc --noEmit` EXIT 0 ✓
+
+Stage Summary:
+- Archivos nuevos: `src/lib/supabaseSync.ts`, `docs/supabase-sync.md`
+- Archivos modificados: `src/views/Views.tsx` (imports + state hook + SupabaseSyncCard component al final del archivo)
+- Endpoints usados: `GET/POST https://api.supabase.com/v1/projects`, `GET /v1/organizations`. Cabecera `Authorization: Bearer sbp_...`.
+- Token NUNCA se envía a otro dominio que no sea `api.supabase.com`.
+- Limitaciones: sincronización bidireccional de datos (episodios/facts) queda para iteración futura — por ahora la vinculación es solo a nivel de metadatos.

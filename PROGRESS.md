@@ -622,3 +622,29 @@
 - [ ] Diff Myers real (lib `diff`) en lugar del diff por índice actual en `fileWrite`
 - [ ] i18n: algunas strings siguen hardcodeadas en español
 
+
+## Sesión 13 — Sincronización Supabase (commit 13)
+
+**Objetivo:** Conectar Supabase desde Ajustes, listar proyectos del usuario, e importar/crear proyectos automáticamente.
+
+### Tareas
+
+- [x] Cliente ligero de la Supabase Management API (`src/lib/supabaseSync.ts`).
+- [x] Tarjeta "Sincronización Supabase" en ConfiguracionView con:
+  - Input + validación de Personal Access Token (`sbp_...`).
+  - Listado de organizaciones + proyectos remotos.
+  - Importar proyecto Supabase → crea proyecto local con mismo nombre + vincula ID.
+  - Crear nuevo proyecto Supabase desde Weaver (POST `/v1/projects`).
+  - Botones Refrescar / Desconectar.
+- [x] Persistencia del token:
+  - Tauri → keyring del OS (`provider_id = supabase_pat`).
+  - Navegador → `localStorage` (con aviso de inseguridad).
+- [x] Mapeo `localId ↔ supabaseId` persistido en `localStorage:weaver:supabase_project_map`.
+- [x] Docs completos en `docs/supabase-sync.md` (9 secciones: token, almacenamiento, uso, creación, endpoints, seguridad, limitaciones, próximos pasos).
+- [x] `tsc --noEmit` EXIT 0 ✓.
+
+### Notas
+
+- El token **sólo** se envía a `api.supabase.com` sobre HTTPS.
+- La contraseña de la BD se usa una sola vez al crear el proyecto y luego se descarta (nunca se persiste).
+- Sincronización bidireccional de datos (episodios, facts) queda para iteración futura — por ahora la vinculación es solo a nivel de metadatos.

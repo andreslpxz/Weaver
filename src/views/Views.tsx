@@ -22,6 +22,9 @@ import {
   Clock,
   MessageSquare,
   Code2,
+  Cloud,
+  RefreshCw,
+  Database,
 } from 'lucide-react';
 import { mcpClient, listPresets, type McpServer, type ToolApproval } from '@/mcp/client';
 import { type McpPreset } from '@/mcp/presets';
@@ -46,6 +49,18 @@ import {
   setTavilyApiKey,
   deleteTavilyApiKey,
 } from '@/lib/tools';
+import {
+  getSupabaseToken,
+  setSupabaseToken,
+  clearSupabaseToken,
+  listSupabaseProjects,
+  listOrganizations,
+  createSupabaseProject,
+  verifyToken,
+  linkLocalToSupabase,
+  type SupabaseProject,
+  type SupabaseOrganization,
+} from '@/lib/supabaseSync';
 
 // ============================================================================
 // ComplementosView — MCP servers + Skills importadas (skills.sh)
@@ -1609,7 +1624,7 @@ function ScheduleForm({
 export function ConfiguracionView() {
   const tt = useT();
   const [lang, setLang] = useLang();
-  const { themeId, setTheme, appMode, setAppMode } = useWeaver();
+  const { themeId, setTheme, appMode, setAppMode, projects, createProject, loadProjects } = useWeaver();
   const [tavilyKey, setTavilyKey] = useState('');
   const [tavilyStatus, setTavilyStatus] = useState<string | null>(null);
   const [tavilyHas, setTavilyHas] = useState(false);
@@ -1810,6 +1825,17 @@ export function ConfiguracionView() {
             </div>
           )}
         </SettingCard>
+
+        {/* Sincronización Supabase */}
+        <SupabaseSyncCard
+          localProjects={projects}
+          onCreateLocal={async (name, supabaseId) => {
+            const proj = await createProject(name);
+            if (proj && supabaseId) linkLocalToSupabase(proj.id, supabaseId);
+            await loadProjects();
+            return proj;
+          }}
+        />
 
         {/* Tavily API key */}
         <SettingCard
@@ -2017,4 +2043,330 @@ function SettingCard({ title, desc, children }: { title: string; desc: string; c
 
 function has(bin: string): boolean {
   return true;
+}
+
+// ============================================================================
+// SupabaseSyncCard — token + listado + importar + crear nuevo
+// ============================================================================
+
+interface SupabaseSyncCardProps {
+  localProjects: { id: string; name: string }[];
+  onCreateLocal: (name: string, supabaseId?: string) => Promise<{ id: string; name: string } | null>;
+}
+
+function SupabaseSyncCard({ localProjects, onCreateLocal }: SupabaseSyncCardProps) {
+  const [token, setToken] = useState('');
+  const [hasToken, setHasToken] = useState(false);
+  const [orgs, setOrgs] = useState<SupabaseOrganization[]>([]);
+  const [remoteProjects, setRemoteProjects] = useState<SupabaseProject[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Estado para "Crear nuevo proyecto Supabase"
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newOrg, setNewOrg] = useState('');
+  const [newRegion, setNewRegion] = useState('us-east-1');
+  const [newDbPass, setNewDbPass] = useState('');
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    void getSupabaseToken().then((t) => {
+      if (t) {
+        setHasToken(true);
+        setToken(t);
+        void refresh(t);
+      }
+    });
+  }, []);
+
+  async function refresh(tokenOverride?: string) {
+    setLoading(true);
+    setError(null);
+    try {
+      const [o, p] = await Promise.all([
+        listOrganizations(tokenOverride),
+        listSupabaseProjects(tokenOverride),
+      ]);
+      setOrgs(o);
+      setRemoteProjects(p);
+      if (o.length > 0 && !newOrg) setNewOrg(o[0].id);
+      setStatus(`Conectado · ${p.length} proyecto(s) en ${o.length} organización(es)`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setOrgs([]);
+      setRemoteProjects([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function connect() {
+    if (!token || token.length < 20) {
+      setError('Pega un Personal Access Token válido (suele empezar con sbp_...).');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    const v = await verifyToken(token.trim());
+    if (!v.ok) {
+      setError(v.error || 'Token inválido');
+      setHasToken(false);
+      setLoading(false);
+      return;
+    }
+    await setSupabaseToken(token.trim());
+    setHasToken(true);
+    setOrgs(v.organizations);
+    setRemoteProjects(v.projects);
+    if (v.organizations.length > 0) setNewOrg(v.organizations[0].id);
+    setStatus(`Conectado · ${v.projects.length} proyecto(s) en ${v.organizations.length} organización(es)`);
+    setLoading(false);
+  }
+
+  async function disconnect() {
+    await clearSupabaseToken();
+    setToken('');
+    setHasToken(false);
+    setOrgs([]);
+    setRemoteProjects([]);
+    setStatus('Desconectado.');
+  }
+
+  async function importProject(p: SupabaseProject) {
+    setError(null);
+    const existing = localProjects.find(
+      (lp) => lp.name.toLowerCase() === p.name.toLowerCase(),
+    );
+    if (existing) {
+      linkLocalToSupabase(existing.id, p.id);
+      setStatus(`"${p.name}" ya existía localmente · vinculado a Supabase.`);
+      return;
+    }
+    const created = await onCreateLocal(p.name, p.id);
+    if (created) {
+      setStatus(`✓ Proyecto local creado: "${created.name}" (vinculado a ${p.id})`);
+    } else {
+      setError('No se pudo crear el proyecto local.');
+    }
+  }
+
+  async function createNew() {
+    setError(null);
+    if (!newName.trim() || !newOrg || !newDbPass) {
+      setError('Completa nombre, organización y contraseña.');
+      return;
+    }
+    setCreating(true);
+    try {
+      const sb = await createSupabaseProject({
+        name: newName.trim(),
+        organizationId: newOrg,
+        dbPassword: newDbPass,
+        region: newRegion,
+        plan: 'free',
+      });
+      setStatus(`✓ Proyecto Supabase creado: ${sb.name} (${sb.id}) — estado: ${sb.status}`);
+      const local = await onCreateLocal(sb.name, sb.id);
+      if (local) {
+        setStatus(`✓ Creado en Supabase + proyecto local "${local.name}".`);
+      }
+      setNewName('');
+      setNewDbPass('');
+      setShowCreate(false);
+      void refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  return (
+    <SettingCard
+      title="Sincronización Supabase"
+      desc="Conecta tu cuenta de Supabase con un Personal Access Token para listar tus proyectos y crearlos automáticamente como proyectos locales de Weaver."
+    >
+      {/* Token input */}
+      <div className="flex gap-2">
+        <input
+          type="password"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          placeholder="sbp_... (Personal Access Token)"
+          className="codex-input flex-1 px-3 py-2 text-sm font-mono"
+          autoComplete="off"
+          spellCheck={false}
+        />
+        {!hasToken ? (
+          <Button variant="primary" onClick={connect} disabled={loading || !token}>
+            {loading ? <Loader2 size={12} className="animate-spin" /> : <Cloud size={12} />}
+            Conectar
+          </Button>
+        ) : (
+          <>
+            <Button onClick={() => refresh()} disabled={loading}>
+              {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+              Refrescar
+            </Button>
+            <Button variant="danger" onClick={disconnect}>
+              <X size={12} />
+            </Button>
+          </>
+        )}
+      </div>
+
+      {/* Enlaces y nota de seguridad */}
+      <div className="flex items-center justify-between mt-2">
+        <a
+          href="https://supabase.com/dashboard/account/tokens"
+          target="_blank"
+          rel="noreferrer"
+          className="text-xs text-accent hover:underline inline-flex items-center gap-1"
+        >
+          Obtener token <ExternalLink size={10} />
+        </a>
+        {hasToken && <Badge color="success">Conectado</Badge>}
+      </div>
+
+      <div className="mt-2 p-2 rounded bg-app-bg border border-border text-[11px] text-text-muted">
+        {runtime.isTauri ? (
+          <>🔒 En modo Tauri el token se guarda en el <strong>keyring del OS</strong> (libsecret / Windows Credential Manager / macOS Keychain).</>
+        ) : (
+          <>⚠ En modo navegador el token se guarda en <code>localStorage</code> — sólo para desarrollo. Ejecuta <code>npm run tauri:dev</code> para almacenamiento seguro.</>
+        )}
+      </div>
+
+      {/* Estado / errores */}
+      {status && !error && (
+        <div className="mt-2 text-xs text-accent">{status}</div>
+      )}
+      {error && (
+        <div className="mt-2 text-xs text-danger bg-danger/10 border border-danger/30 rounded p-2">
+          {error}
+        </div>
+      )}
+
+      {/* Proyectos remotos */}
+      {hasToken && remoteProjects.length > 0 && (
+        <div className="mt-4 pt-3 border-t border-border">
+          <div className="text-xs font-medium text-text-secondary mb-2 flex items-center gap-1.5">
+            <Database size={11} />
+            Proyectos en Supabase ({remoteProjects.length})
+          </div>
+          <div className="space-y-1 max-h-72 overflow-y-auto">
+            {remoteProjects.map((p) => {
+              const linked = localProjects.some(
+                (lp) => lp.name.toLowerCase() === p.name.toLowerCase(),
+              );
+              return (
+                <div
+                  key={p.id}
+                  className="flex items-center gap-2 p-2 rounded bg-app-bg border border-border hover:border-border-accent transition-colors"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate">{p.name}</div>
+                    <div className="text-[10px] text-text-muted flex items-center gap-2">
+                      <span>{p.region}</span>
+                      <span className="opacity-50">·</span>
+                      <span className={
+                        p.status === 'ACTIVE' ? 'text-success' :
+                        p.status === 'PAUSED' ? 'text-warning' : 'text-text-muted'
+                      }>{p.status}</span>
+                      {p.database_host && (
+                        <>
+                          <span className="opacity-50">·</span>
+                          <code className="opacity-70">{p.database_host}</code>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <Button
+                    variant={linked ? 'ghost' : 'primary'}
+                    onClick={() => importProject(p)}
+                    disabled={linked}
+                    className="shrink-0"
+                  >
+                    {linked ? (
+                      <><Check size={11} /> Importado</>
+                    ) : (
+                      <><Plus size={11} /> Importar</>
+                    )}
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Crear nuevo proyecto Supabase */}
+      {hasToken && (
+        <div className="mt-4 pt-3 border-t border-border">
+          {!showCreate ? (
+            <Button onClick={() => setShowCreate(true)}>
+              <Plus size={12} /> Crear nuevo proyecto Supabase
+            </Button>
+          ) : (
+            <div className="space-y-2">
+              <div className="text-xs font-medium text-text-secondary">Nuevo proyecto Supabase</div>
+              <input
+                type="text"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="Nombre del proyecto"
+                className="codex-input w-full px-3 py-2 text-sm"
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <select
+                  value={newOrg}
+                  onChange={(e) => setNewOrg(e.target.value)}
+                  className="codex-input px-3 py-2 text-sm"
+                >
+                  {orgs.map((o) => (
+                    <option key={o.id} value={o.id}>{o.name}</option>
+                  ))}
+                </select>
+                <select
+                  value={newRegion}
+                  onChange={(e) => setNewRegion(e.target.value)}
+                  className="codex-input px-3 py-2 text-sm"
+                >
+                  <option value="us-east-1">us-east-1</option>
+                  <option value="us-west-1">us-west-1</option>
+                  <option value="eu-west-1">eu-west-1</option>
+                  <option value="eu-central-1">eu-central-1</option>
+                  <option value="ap-southeast-1">ap-southeast-1</option>
+                  <option value="ap-northeast-1">ap-northeast-1</option>
+                  <option value="ap-south-1">ap-south-1</option>
+                  <option value="sa-east-1">sa-east-1</option>
+                </select>
+              </div>
+              <input
+                type="password"
+                value={newDbPass}
+                onChange={(e) => setNewDbPass(e.target.value)}
+                placeholder="Contraseña BD (mín. 6 caracteres)"
+                className="codex-input w-full px-3 py-2 text-sm font-mono"
+                autoComplete="off"
+              />
+              <div className="flex gap-2">
+                <Button variant="primary" onClick={createNew} disabled={creating}>
+                  {creating ? <Loader2 size={12} className="animate-spin" /> : <Database size={12} />}
+                  Crear en Supabase + local
+                </Button>
+                <Button onClick={() => setShowCreate(false)} disabled={creating}>
+                  Cancelar
+                </Button>
+              </div>
+              <div className="text-[10px] text-text-muted">
+                El plan free tarda ~2 min en aprovisionarse. Weaver creará también un proyecto local con el mismo nombre y lo vinculará.
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </SettingCard>
+  );
 }
