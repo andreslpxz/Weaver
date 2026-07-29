@@ -18,6 +18,7 @@ import { useWeaver } from '@/store/weaver';
 import { initTheme } from '@/lib/themes';
 import { startScheduler } from '@/lib/scheduler';
 import { initSubagents } from '@/agent/subagent';
+import { LiveOverlay } from '@/components/voice/LiveOverlay';
 
 export default function App() {
   const { view, loadConversations, themeId, loadMeAll, appMode, setAppMode } = useWeaver();
@@ -48,49 +49,61 @@ export default function App() {
   // El modo IDE tiene su propio layout completo (file explorer, editor,
   // agent panel). Las views no-chat (MeView, ComplementosView, etc.)
   // se siguen renderizando como overlays dentro del IDE.
+  // El LiveOverlay se monta siempre al final para que se superponga en
+  // cualquier modo (Normal o IDE) y la tecla Esc / atajos funcionen desde
+  // cualquier vista.
   if (appMode === 'ide' && view === 'chat') {
-    return <IdeLayout onExitToNormal={() => setAppMode('normal')} />;
+    return (
+      <>
+        <IdeLayout onExitToNormal={() => setAppMode('normal')} />
+        <LiveOverlay />
+      </>
+    );
   }
 
-  // En Modo IDE, si el usuario navega a una view (MCP, Me, etc.), la
-  // mostramos dentro del layout del IDE para no perder el contexto.
   if (appMode === 'ide') {
     return (
-      <IdeLayoutShell onExitToNormal={() => setAppMode('normal')}>
-        {view === 'me' && <MeView />}
-        {view === 'complementos' && <ComplementosView />}
-        {view === 'habilidades' && <HabilidadesView />}
-        {view === 'automatizaciones' && <AutomatizacionesView />}
-        {view === 'configuracion' && <ConfiguracionView />}
-        {view === 'subagentes' && <SubagentsView />}
-        {view === 'memoria' && <MemoryPanel />}
-        {view === 'metricas' && <MetricsView />}
-      </IdeLayoutShell>
+      <>
+        <IdeLayoutShell onExitToNormal={() => setAppMode('normal')}>
+          {view === 'me' && <MeView />}
+          {view === 'complementos' && <ComplementosView />}
+          {view === 'habilidades' && <HabilidadesView />}
+          {view === 'automatizaciones' && <AutomatizacionesView />}
+          {view === 'configuracion' && <ConfiguracionView />}
+          {view === 'subagentes' && <SubagentsView />}
+          {view === 'memoria' && <MemoryPanel />}
+          {view === 'metricas' && <MetricsView />}
+        </IdeLayoutShell>
+        <LiveOverlay />
+      </>
     );
   }
 
   // === Modo Normal ===
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-app-bg text-text-primary">
-      <Sidebar />
-      <main className="flex-1 flex flex-col min-w-0">
-        {view === 'chat' && (
-          <>
-            <TopBar />
-            <MessageList />
-            <Composer />
-          </>
-        )}
-        {view === 'me' && <MeView />}
-        {view === 'complementos' && <ComplementosView />}
-        {view === 'habilidades' && <HabilidadesView />}
-        {view === 'automatizaciones' && <AutomatizacionesView />}
-        {view === 'configuracion' && <ConfiguracionView />}
-        {view === 'subagentes' && <SubagentsView />}
-        {view === 'memoria' && <MemoryPanel />}
-        {view === 'metricas' && <MetricsView />}
-      </main>
-    </div>
+    <>
+      <div className="flex h-screen w-screen overflow-hidden bg-app-bg text-text-primary">
+        <Sidebar />
+        <main className="flex-1 flex flex-col min-w-0">
+          {view === 'chat' && (
+            <>
+              <TopBar />
+              <MessageList />
+              <Composer />
+            </>
+          )}
+          {view === 'me' && <MeView />}
+          {view === 'complementos' && <ComplementosView />}
+          {view === 'habilidades' && <HabilidadesView />}
+          {view === 'automatizaciones' && <AutomatizacionesView />}
+          {view === 'configuracion' && <ConfiguracionView />}
+          {view === 'subagentes' && <SubagentsView />}
+          {view === 'memoria' && <MemoryPanel />}
+          {view === 'metricas' && <MetricsView />}
+        </main>
+      </div>
+      <LiveOverlay />
+    </>
   );
 }
 

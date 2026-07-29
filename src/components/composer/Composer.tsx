@@ -43,6 +43,7 @@ import { skillsRegistry } from '@/skills/registry';
 import type { Skill } from '@/skills/registry';
 import { mcpClient, type McpServer } from '@/mcp/client';
 import { getPreset } from '@/mcp/presets';
+import { useVoiceStore } from '@/store/voice';
 
 const newMsgId = () =>
   typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `m-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -1250,7 +1251,12 @@ export function Composer() {
 
             {/* El botón + ya cubre adjuntar (paperclip redundante eliminado) */}
 
-            <IconButton title="Voz" className="w-7 h-7 shrink-0">
+            {/* Botón Voz — abre Weaver Live (modo voz bidireccional) */}
+            <IconButton
+              title="Modo Live (voz)"
+              onClick={() => useVoiceStore.getState().setOpen(true)}
+              className="w-7 h-7 shrink-0 hover:text-accent transition-colors"
+            >
               <Mic size={14} />
             </IconButton>
 
