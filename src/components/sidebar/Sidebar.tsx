@@ -19,6 +19,9 @@ import {
   Users,
   UserCircle,
   Lock,
+  Bot,
+  Brain,
+  BarChart3,
 } from 'lucide-react';
 import { useWeaver, type ViewId, type Project, type ProjectMember } from '@/store/weaver';
 import { cn } from '@/components/common/Button';
@@ -48,6 +51,9 @@ const SECTIONS: { title: string; items: SidebarItem[] }[] = [
       { id: 'me', label: 'sidebar.me', icon: <CalendarDays size={14} /> },
       { id: 'complementos', label: 'sidebar.complementos', icon: <Puzzle size={14} /> },
       { id: 'automatizaciones', label: 'sidebar.schedules', icon: <Clock size={14} /> },
+      { id: 'subagentes', label: 'Subagentes', icon: <Bot size={14} /> },
+      { id: 'memoria', label: 'Memoria', icon: <Brain size={14} /> },
+      { id: 'metricas', label: 'Métricas', icon: <BarChart3 size={14} /> },
     ],
   },
 ];
@@ -258,6 +264,15 @@ export function Sidebar() {
         </button>
         <button onClick={() => setView('automatizaciones')} className="codex-icon-btn" title={t('sidebar.schedules')}>
           <Clock size={16} />
+        </button>
+        <button onClick={() => setView('subagentes')} className="codex-icon-btn" title="Subagentes">
+          <Bot size={16} />
+        </button>
+        <button onClick={() => setView('memoria')} className="codex-icon-btn" title="Memoria">
+          <Brain size={16} />
+        </button>
+        <button onClick={() => setView('metricas')} className="codex-icon-btn" title="Métricas">
+          <BarChart3 size={16} />
         </button>
         <button onClick={() => setView('configuracion')} className="codex-icon-btn mt-auto" title={t('sidebar.configuracion')}>
           <Cog size={16} />

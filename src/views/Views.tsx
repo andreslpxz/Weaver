@@ -25,6 +25,7 @@ import {
   Cloud,
   RefreshCw,
   Database,
+  Eye,
 } from 'lucide-react';
 import { mcpClient, listPresets, type McpServer, type ToolApproval } from '@/mcp/client';
 import { type McpPreset } from '@/mcp/presets';
@@ -61,6 +62,11 @@ import {
   type SupabaseProject,
   type SupabaseOrganization,
 } from '@/lib/supabaseSync';
+import {
+  getVisionPrefs,
+  setVisionPrefs,
+  type VisionPrefs,
+} from '@/agent/vision';
 
 // ============================================================================
 // ComplementosView — MCP servers + Skills importadas (skills.sh)
@@ -1837,6 +1843,9 @@ export function ConfiguracionView() {
           }}
         />
 
+        {/* Visión del agente (jerarquía AT-SPI → OCR → VLM) */}
+        <VisionSettingsCard />
+
         {/* Tavily API key */}
         <SettingCard
           title="Búsqueda web (Tavily)"
@@ -2367,6 +2376,128 @@ function SupabaseSyncCard({ localProjects, onCreateLocal }: SupabaseSyncCardProp
           )}
         </div>
       )}
+    </SettingCard>
+  );
+}
+
+// ============================================================================
+// VisionSettingsCard — configuración de visión del agente
+// ============================================================================
+
+function VisionSettingsCard() {
+  const [prefs, setPrefs] = useState<VisionPrefs>(getVisionPrefs());
+
+  function update(p: Partial<VisionPrefs>) {
+    const next = { ...prefs, ...p };
+    setPrefs(next);
+    setVisionPrefs(p);
+  }
+
+  return (
+    <SettingCard
+      title="Visión del agente"
+      desc="Jerarquía AT-SPI → OCR local → VLM. Las imágenes SOLO se envían a un modelo con tu consentimiento explícito."
+    >
+      <div className="space-y-3 text-xs">
+        {/* Explicación jerarquía */}
+        <div className="p-2.5 rounded-codex bg-app-bg border border-border text-text-secondary">
+          <div className="font-medium text-text-primary mb-1.5">Orden de decisión</div>
+          <ol className="space-y-1 list-decimal list-inside">
+            <li><strong className="text-text-primary">AT-SPI/UIA/AX</strong> — siempre primero (rápido, determinista, gratis).</li>
+            <li><strong className="text-text-primary">OCR local</strong> (Tesseract) — si el árbol de accesibilidad no basta. Sin salir de la máquina.</li>
+            <li><strong className="text-text-primary">VLM</strong> (Gemini/GPT-4o/Claude) — sólo si la tarea requiere entender contenido visual no textual (diseño, layout, 3D, gráficos).</li>
+          </ol>
+        </div>
+
+        {/* Consentimiento VLM */}
+        <div>
+          <div className="font-medium text-text-primary mb-1.5">Consentimiento VLM</div>
+          <div className="grid grid-cols-3 gap-2">
+            {([
+              { v: 'ask', label: 'Preguntar', desc: 'Caso a caso' },
+              { v: 'granted', label: 'Permitir', desc: 'Sin preguntar' },
+              { v: 'denied', label: 'Nunca', desc: 'Bloquear VLM' },
+            ] as const).map((opt) => (
+              <button
+                key={opt.v}
+                onClick={() => update({ vlmConsent: opt.v })}
+                className={`text-left px-2 py-1.5 rounded-codex border transition-colors ${
+                  prefs.vlmConsent === opt.v
+                    ? 'border-accent bg-accent/10 text-text-primary'
+                    : 'border-border hover:border-border-accent text-text-secondary'
+                }`}
+              >
+                <div className="text-xs font-medium">{opt.label}</div>
+                <div className="text-[10px] text-text-muted">{opt.desc}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Proveedor preferido */}
+        <div>
+          <div className="font-medium text-text-primary mb-1.5">Proveedor VLM preferido</div>
+          <select
+            value={prefs.preferredProvider ?? ''}
+            onChange={(e) => update({ preferredProvider: e.target.value || null })}
+            className="codex-input w-full px-3 py-2 text-sm"
+          >
+            <option value="google">Google Gemini (gemini-1.5-pro)</option>
+            <option value="openai">OpenAI (gpt-4o)</option>
+            <option value="openrouter">OpenRouter (gpt-4o)</option>
+            <option value="anthropic">Anthropic (claude-3-5-sonnet)</option>
+          </select>
+          <div className="text-[10px] text-text-muted mt-1">
+            Requiere API key del proveedor configurada (icono del modelo en el composer).
+          </div>
+        </div>
+
+        {/* OCR local */}
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="font-medium text-text-primary">OCR local (Tesseract)</div>
+            <div className="text-[10px] text-text-muted">
+              Extrae texto de capturas sin enviar imágenes fuera. Requiere <code>tesseract</code> instalado.
+            </div>
+          </div>
+          <button
+            onClick={() => update({ ocrEnabled: !prefs.ocrEnabled })}
+            className={`relative w-10 h-5 rounded-full transition-colors ${
+              prefs.ocrEnabled ? 'bg-accent' : 'bg-border'
+            }`}
+          >
+            <span
+              className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
+                prefs.ocrEnabled ? 'translate-x-5' : ''
+              }`}
+            />
+          </button>
+        </div>
+
+        {/* Idiomas OCR */}
+        {prefs.ocrEnabled && (
+          <div>
+            <div className="font-medium text-text-primary mb-1">Idiomas OCR</div>
+            <input
+              type="text"
+              value={prefs.ocrLangs}
+              onChange={(e) => update({ ocrLangs: e.target.value })}
+              placeholder="spa+eng"
+              className="codex-input w-full px-3 py-2 text-sm font-mono"
+            />
+            <div className="text-[10px] text-text-muted mt-1">
+              Lista separada por + de códigos Tesseract. Verifica con <code>tesseract --list-langs</code>.
+            </div>
+          </div>
+        )}
+
+        {/* Nota de privacidad */}
+        <div className="p-2 rounded bg-warning/10 border border-warning/30 text-[11px] text-text-secondary">
+          <Eye size={11} className="inline mr-1 text-warning" />
+          Las imágenes NUNCA se envían a un proveedor sin tu consentimiento explícito (configurable arriba).
+          El OCR local corre 100% en tu máquina.
+        </div>
+      </div>
     </SettingCard>
   );
 }

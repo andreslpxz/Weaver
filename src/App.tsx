@@ -11,9 +11,13 @@ import {
 } from '@/views/Views';
 import { MeView } from '@/views/MeView';
 import { IdeLayout } from '@/components/ide/IdeLayout';
+import { SubagentsView } from '@/components/agent/SubagentsView';
+import { MemoryPanel } from '@/components/agent/MemoryPanel';
+import { MetricsView } from '@/components/agent/MetricsView';
 import { useWeaver } from '@/store/weaver';
 import { initTheme } from '@/lib/themes';
 import { startScheduler } from '@/lib/scheduler';
+import { initSubagents } from '@/agent/subagent';
 
 export default function App() {
   const { view, loadConversations, themeId, loadMeAll, appMode, setAppMode } = useWeaver();
@@ -37,6 +41,7 @@ export default function App() {
   // Arrancar el motor de Schedules (tareas programadas).
   useEffect(() => {
     startScheduler();
+    initSubagents();
   }, []);
 
   // === Modo IDE ===
@@ -57,6 +62,9 @@ export default function App() {
         {view === 'habilidades' && <HabilidadesView />}
         {view === 'automatizaciones' && <AutomatizacionesView />}
         {view === 'configuracion' && <ConfiguracionView />}
+        {view === 'subagentes' && <SubagentsView />}
+        {view === 'memoria' && <MemoryPanel />}
+        {view === 'metricas' && <MetricsView />}
       </IdeLayoutShell>
     );
   }
@@ -78,6 +86,9 @@ export default function App() {
         {view === 'habilidades' && <HabilidadesView />}
         {view === 'automatizaciones' && <AutomatizacionesView />}
         {view === 'configuracion' && <ConfiguracionView />}
+        {view === 'subagentes' && <SubagentsView />}
+        {view === 'memoria' && <MemoryPanel />}
+        {view === 'metricas' && <MetricsView />}
       </main>
     </div>
   );
@@ -119,6 +130,9 @@ function IdeLayoutShell({ children, onExitToNormal }: { children: React.ReactNod
           {([
             { id: 'complementos', label: 'MCP / Skills', icon: '🧩' },
             { id: 'automatizaciones', label: 'Schedules', icon: '⏰' },
+            { id: 'subagentes', label: 'Subagentes', icon: '🤖' },
+            { id: 'memoria', label: 'Memoria', icon: '🧠' },
+            { id: 'metricas', label: 'Métricas', icon: '📊' },
             { id: 'me', label: 'Me', icon: '📅' },
             { id: 'configuracion', label: 'Configuración', icon: '⚙️' },
             { id: 'chat', label: 'Editor + Agente', icon: '💻' },

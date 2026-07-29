@@ -531,3 +531,35 @@ Stage Summary:
 - Endpoints usados: `GET/POST https://api.supabase.com/v1/projects`, `GET /v1/organizations`. Cabecera `Authorization: Bearer sbp_...`.
 - Token NUNCA se envía a otro dominio que no sea `api.supabase.com`.
 - Limitaciones: sincronización bidireccional de datos (episodios/facts) queda para iteración futura — por ahora la vinculación es solo a nivel de metadatos.
+
+---
+Task ID: feat-subagents-vision-memory-metrics
+Agent: main
+Task: Implementar (1) subagentes especializables con tools restringidas, presupuesto y contrato JSON entrada/salida; (2) orquestador con árbol de ejecución trazable y retry/escalación; (3) visión jerárquica AT-SPI → OCR → VLM con opt-in explícito; (4) panel de Memoria para ver/editar/borrar facts y episodios; (5) panel de Métricas con tokens/costo/éxito por proveedor.
+
+Work Log:
+- src/agent/subagent.ts (~310 LOC): contrato SubagentInvocation/Result + SubagentDef + subagentRegistry (localStorage) + 3 defaults (Web Researcher, File Reader, Email Summarizer) + runSubagent() con budget control (pasos/tokens/tiempo) y tools filtradas por allowedTools. Recolecta evidence automáticamente (http_response, file_path, log).
+- src/agent/orchestrator.ts (~190 LOC): orchestrate() selecciona candidatos por keyword match, reparte presupuesto (60% por intento, máx 3), reintenta si allowRetry, escala si allowEscalation. Construye ExecutionNode[] (árbol trazable con subagentId, invocation, result, evidence, usage, children). formatExecutionTree() para mostrar en chat/logs.
+- src/agent/vision.ts (~330 LOC): jerarquía see() → AT-SPI (readAccessibilityTree + treeHasEnoughInfo + extractTextFromTree) → OCR local (capture con grim/scrot, tesseract spa+eng) → VLM (Gemini inline_data / OpenAI image_url / Anthropic image source). Consentimiento configurable (ask/granted/denied). VisionPrefs en localStorage. Helper local shellExec() vía dispatchAdvancedTool.
+- src/lib/metrics.ts (~270 LOC): UsageRecord + PRICING (40+ modelos OpenAI/Anthropic/Google/Cohere/xAI/Mistral/DeepSeek/Meta). estimateCostUsd() por model exacto o prefijo. metrics.recordUsage/list/summary/dailyBuckets/successRateBySource/totals. Persistencia localStorage (cap 1000) + SQLite best-effort (crea tabla weaver_usage vía sqlite.shellExec).
+- src/components/agent/SubagentsView.tsx (~300 LOC): catálogo CRUD. Lista con tarjetas (nombre, descripción, tools count, presupuesto, badges). Editor con system prompt, verification prompt, tools whitelist (checkboxes con indicador destructivo ⚠), presupuesto (pasos/tokens/tiempo), provider/model opcional, skill opcional.
+- src/components/agent/MemoryPanel.tsx (~280 LOC): tabs Facts/Episodios. Facts: tabla editable inline, nuevo/editar/borrar/borrar-todo. Episodes: lista expandible con subtareas (status ✓✗⊘•), lecciones, trace (últimas 8 entradas).
+- src/components/agent/MetricsView.tsx (~260 LOC): KPIs (llamadas/costo/tokens/%éxito), tabla por proveedor (con badges de color), chart diario (barras horizontales), % éxito por fuente (barras de progreso verde/amarillo/rojo). Filtros 7d/30d/90d/Todo. Botón borrar todo.
+- src/views/Views.tsx: VisionSettingsCard en ConfiguracionView. Explicación jerarquía, consentimiento VLM (3 opciones), provider preferido, toggle OCR local, idiomas OCR, nota de privacidad.
+- src/components/composer/Composer.tsx: hook metrics.recordUsage tras cada streamChat (providerId, model, tokens, success). No rompe el chat si metrics falla (try/catch).
+- src/store/weaver.ts: ViewId extendido con 'subagentes' | 'memoria' | 'metricas'.
+- src/components/sidebar/Sidebar.tsx: SECTIONS extended + collapsed mode con 3 nuevos iconos (Bot, Brain, BarChart3).
+- src/App.tsx: rutas para subagentes/memoria/metricas en modo Normal + IDE Shell. ActivityBar IDE con 3 nuevos items. initSubagents() al arrancar.
+- Docs: docs/subagents.md (8 secciones), docs/vision.md (7 secciones), docs/memory-control.md (5 secciones), docs/metrics.md (7 secciones).
+
+Stage Summary:
+- 11 archivos nuevos: 5 lib/agent (subagent, orchestrator, vision, metrics + 3 components/agent), 4 docs.
+- 5 archivos modificados: Views, Sidebar, App, Composer, store/weaver.
+- tsc --noEmit EXIT 0 ✓
+- vite build EXIT 0 en 31s ✓
+- Bundle principal: 445 KB (127 KB gzip) + chunks separados.
+- Jerarquía de visión respeta privacidad: VLM SOLO con consentimiento explícito (default 'ask').
+- Contrato subagente: SubagentInvocation {objective, context, budget} → SubagentResult {status, result, evidence, trace, usage}.
+- Orquestador: árbol de ejecución trazable (ExecutionNode[]), retry hasta 3, escalación a plan alternativo.
+- Memoria: control real del usuario sobre facts y episodios.
+- Métricas: base para WeaverBench + auditoría de costos.

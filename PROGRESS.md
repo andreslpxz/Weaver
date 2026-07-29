@@ -648,3 +648,29 @@
 - El token **sólo** se envía a `api.supabase.com` sobre HTTPS.
 - La contraseña de la BD se usa una sola vez al crear el proyecto y luego se descarta (nunca se persiste).
 - Sincronización bidireccional de datos (episodios, facts) queda para iteración futura — por ahora la vinculación es solo a nivel de metadatos.
+
+## Sesión 14 — Subagentes + Visión + Memoria + Métricas (commit 14)
+
+**Objetivo:** Implementar 5 features: subagentes especializables, orquestador con árbol trazable, visión jerárquica AT-SPI→OCR→VLM con opt-in, panel de Memoria, panel de Métricas.
+
+### Tareas
+
+- [x] Subagentes: contrato JSON input/output, tools restringidas por nombre, presupuesto (pasos/tokens/tiempo), verificationPrompt, catálogo CRUD.
+- [x] Orquestador: selección por keyword, reparto de presupuesto, retry, escalación, árbol de ejecución (ExecutionNode[]).
+- [x] Visión: jerarquía AT-SPI → OCR (Tesseract) → VLM (Gemini/GPT-4o/Claude). VLM opt-in explícito (ask/granted/denied). OCR local 100% en máquina.
+- [x] Memoria: panel ver/editar/borrar facts y episodios. Pestañas Facts/Episodios. Borrar todo.
+- [x] Métricas: tokens/costo/éxito por proveedor. KPIs + tabla + chart diario + % éxito por fuente. Filtros 7d/30d/90d/Todo. 40+ modelos con precios.
+- [x] Hook metrics.recordUsage en Composer tras cada streamChat.
+- [x] VisionSettingsCard en ConfiguracionView.
+- [x] 3 nuevas vistas en sidebar y ActivityBar IDE.
+- [x] 4 docs: subagents.md, vision.md, memory-control.md, metrics.md.
+- [x] tsc --noEmit EXIT 0 ✓
+- [x] vite build EXIT 0 en 31s ✓
+
+### Notas
+
+- Las tools se filtran en runtime: si un subagente no tiene `shell_exec` en `allowedTools`, la llamada se rechaza.
+- VLM NO envía imágenes sin consentimiento explícito. Default es 'ask'.
+- Precios son estimaciones (julio 2025). No reflejan descuentos por volumen/caching.
+- Métricas se persisten en localStorage (cap 1000) + SQLite best-effort en Tauri.
+- La función `see()` de vision.ts es API interna todavía — falta cablearla como tool del LLM.

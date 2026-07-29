@@ -673,6 +673,22 @@ export function Composer() {
         onDelta: (delta) => updateLastAssistantMessage(delta),
       });
 
+      // Registrar uso en métricas globales (tokens + costo estimado + éxito/fracaso).
+      try {
+        const { metrics } = await import('@/lib/metrics');
+        metrics.recordUsage({
+          providerId: llm.info.id,
+          model: modelId,
+          inputTokens: result.usage.inputTokens,
+          outputTokens: result.usage.outputTokens,
+          source: 'chat',
+          success: result.toolCalls.length === 0 || result.text.trim().length > 0,
+          taskKind: 'chat',
+        });
+      } catch {
+        /* ignore metrics errors — no romper el chat */
+      }
+
       // ----------------------------------------------------------------------
       // Detectar tool calls emitidos como TEXTO por modelos que no usan
       // function calling nativo. Ejemplos:

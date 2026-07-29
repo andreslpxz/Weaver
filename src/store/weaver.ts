@@ -19,7 +19,7 @@ import type { ThemeId } from '@/lib/themes';
 import { getActiveTheme, applyTheme } from '@/lib/themes';
 import { sqlite, runtime, type ProjectRow, type ProjectMemberRow, type MeEvent, type MeCalendar, type MeTask, type MeNote, type MeHealth, type MeShoppingItem, type MeIntegration } from '@/lib/tauri';
 
-export type ViewId = 'chat' | 'complementos' | 'habilidades' | 'automatizaciones' | 'configuracion' | 'me';
+export type ViewId = 'chat' | 'complementos' | 'habilidades' | 'automatizaciones' | 'configuracion' | 'me' | 'subagentes' | 'memoria' | 'metricas';
 
 export interface Conversation {
   id: string;
