@@ -19,9 +19,10 @@ import { initTheme } from '@/lib/themes';
 import { startScheduler } from '@/lib/scheduler';
 import { initSubagents } from '@/agent/subagent';
 import { LiveOverlay } from '@/components/voice/LiveOverlay';
+import { useVoiceStore } from '@/store/voice';
 
 export default function App() {
-  const { view, loadConversations, themeId, loadMeAll, appMode, setAppMode } = useWeaver();
+  const { view, loadConversations, themeId, loadMeAll, appMode, setAppMode, activeConversationId } = useWeaver();
 
   // Inicializar tema al montar.
   useEffect(() => {
@@ -44,6 +45,12 @@ export default function App() {
     startScheduler();
     initSubagents();
   }, []);
+
+  // Cuando cambia la conversación activa, limpiar los turnos del Modo Live
+  // (la conversación de voz es por chat, no global).
+  useEffect(() => {
+    useVoiceStore.getState().clearTurns();
+  }, [activeConversationId]);
 
   // === Modo IDE ===
   // El modo IDE tiene su propio layout completo (file explorer, editor,

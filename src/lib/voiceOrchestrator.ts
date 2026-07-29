@@ -29,6 +29,30 @@ import { apiKeyStore } from '@/providers/store';
 import { speak, stopSpeaking, splitIntoSentences } from '@/lib/voice';
 import { runtime } from '@/lib/tauri';
 
+// --- Helpers de sincronización con el chat activo ---------------------------
+
+/**
+ * Sincroniza un turno del Live con la conversación activa del chat.
+ * Solo se llama cuando el texto del turno es final (no interim).
+ * Si no hay conversación activa, no hace nada (el turno sigue vivo solo
+ * en el voice store y se ve en el overlay).
+ */
+function syncToActiveChat(role: 'user' | 'assistant', text: string, opts?: { id?: string; ts?: number }) {
+  const weaver = useWeaver.getState();
+  if (!weaver.activeConversationId) return;
+  if (!text || !text.trim()) return;
+  try {
+    weaver.appendMessage({
+      id: opts?.id,
+      role,
+      content: text,
+      ts: opts?.ts ?? Date.now(),
+    });
+  } catch (e) {
+    console.warn('[Live] syncToActiveChat failed:', e);
+  }
+}
+
 // --- Detección de intención -------------------------------------------------
 
 const BACKGROUND_PATTERNS = [
@@ -112,10 +136,10 @@ export async function runVoiceCommand(
 ): Promise<void> {
   const intent = classifyIntent(userText);
   const voiceStore = useVoiceStore.getState();
-  const weaver = useWeaver.getState();
 
-  // Registrar el turno del usuario en la store de voz
+  // Registrar el turno del usuario en la store de voz y en el chat activo
   voiceStore.pushTurn({ role: 'user', text: userText });
+  syncToActiveChat('user', userText);
 
   switch (intent.kind) {
     case 'stop':
@@ -126,9 +150,11 @@ export async function runVoiceCommand(
     case 'cancel_background': {
       const running = voiceStore.backgroundTasks.filter((t) => t.status === 'running' || t.status === 'pending');
       if (running.length === 0) {
-        const id = voiceStore.pushTurn({ role: 'assistant', text: 'No hay tareas en segundo plano activas.' });
-        opts.onAssistantTurnDone?.('No hay tareas en segundo plano activas.');
-        speak('No hay tareas en segundo plano activas.');
+        const msg = 'No hay tareas en segundo plano activas.';
+        voiceStore.pushTurn({ role: 'assistant', text: msg });
+        opts.onAssistantTurnDone?.(msg);
+        syncToActiveChat('assistant', msg);
+        speak(msg);
       } else {
         for (const t of running) {
           voiceStore.setBackgroundTaskStatus(t.id, 'cancelled');
@@ -136,6 +162,7 @@ export async function runVoiceCommand(
         const msg = `Canceladas ${running.length} tarea(s) en segundo plano.`;
         voiceStore.pushTurn({ role: 'assistant', text: msg });
         opts.onAssistantTurnDone?.(msg);
+        syncToActiveChat('assistant', msg);
         speak(msg);
       }
       voiceStore.setState('listening');
@@ -176,6 +203,7 @@ async function runChatTurn(userText: string, opts: VoiceRunOpts): Promise<void> 
     const msg = `No tengo API key para ${effProviderId}. Configúrala en Ajustes.`;
     voiceStore.pushTurn({ role: 'assistant', text: msg });
     opts.onAssistantTurnDone?.(msg);
+    syncToActiveChat('assistant', msg);
     speak(msg);
     voiceStore.setState('listening');
     return;
@@ -187,6 +215,7 @@ async function runChatTurn(userText: string, opts: VoiceRunOpts): Promise<void> 
   } catch (e) {
     const msg = `No pude crear el provider: ${e instanceof Error ? e.message : String(e)}`;
     voiceStore.pushTurn({ role: 'assistant', text: msg });
+    syncToActiveChat('assistant', msg);
     speak(msg);
     voiceStore.setState('listening');
     return;
@@ -194,11 +223,18 @@ async function runChatTurn(userText: string, opts: VoiceRunOpts): Promise<void> 
 
   voiceStore.setState('thinking');
 
-  // Construir historial de la conversación de voz (últimos 8 turnos)
-  const recentTurns = voiceStore.turns.slice(-8);
+  // Construir historial de la conversación de voz (últimos 8 turnos).
+  // IMPORTANTE: filtrar turnos vacíos (interim que nunca se completaron,
+  // notificaciones de background que aún no tienen texto) — OpenRouter y
+  // otros providers devuelven 400 si un mensaje assistant tiene content "".
+  const recentTurns = voiceStore.turns
+    .slice(-12)
+    .filter((t) => t.text && t.text.trim().length > 0);
+
   const msgs: Message[] = [
     { role: 'system', content: LIVE_SYSTEM_PROMPT },
     ...recentTurns.map((t): Message => ({
+      // system (notificaciones de background) → assistant, ya con texto
       role: t.role === 'user' ? 'user' : 'assistant',
       content: t.text,
     })),
@@ -251,7 +287,11 @@ async function runChatTurn(userText: string, opts: VoiceRunOpts): Promise<void> 
     }
 
     voiceStore.updateTurn(turnId, { text: result.text || fullText, interim: false });
-    opts.onAssistantTurnDone?.(result.text || fullText);
+    const finalText = result.text || fullText;
+    opts.onAssistantTurnDone?.(finalText);
+
+    // Sincronizar con el chat activo (mensaje final, no interim)
+    syncToActiveChat('assistant', finalText);
 
     // Métricas
     try {
@@ -273,12 +313,24 @@ async function runChatTurn(userText: string, opts: VoiceRunOpts): Promise<void> 
   } catch (e) {
     if ((e as Error).name === 'AbortError') {
       stopSpeaking();
-      voiceStore.updateTurn(turnId, { text: fullText + ' [interrumpido]', interim: false });
+      // Si el turno interim nunca recibió texto, eliminarlo en vez de dejar
+      // un "[interrumpido]" vacío que rompería el history del próximo turno.
+      if (fullText.trim()) {
+        voiceStore.updateTurn(turnId, { text: fullText + ' [interrumpido]', interim: false });
+      } else {
+        // Eliminar el turno interim vacío
+        useVoiceStore.setState((s) => ({ turns: s.turns.filter((t) => t.id !== turnId) }));
+      }
       voiceStore.setState('listening');
       return;
     }
     const msg = `Error: ${e instanceof Error ? e.message : String(e)}`;
-    voiceStore.updateTurn(turnId, { text: msg, interim: false });
+    if (fullText.trim()) {
+      voiceStore.updateTurn(turnId, { text: fullText + '\n\n' + msg, interim: false });
+    } else {
+      // Sin texto parcial: reemplazar el turno interim vacío por el mensaje de error
+      voiceStore.updateTurn(turnId, { text: msg, interim: false });
+    }
     voiceStore.setError(msg);
     speak('Ocurrió un error. Revisa la consola.');
   }
@@ -317,17 +369,20 @@ async function runBackgroundTask(
   if (!apiKey) {
     const msg = `No tengo API key para ${effProviderId} para delegar la tarea.`;
     voiceStore.pushTurn({ role: 'assistant', text: msg });
+    syncToActiveChat('assistant', msg);
     speak(msg);
     return;
   }
 
   const taskId = voiceStore.addBackgroundTask(label);
+  const delegateMsg = `Delegando en segundo plano: ${label}. Te aviso cuando termine.`;
   voiceStore.pushTurn({
     role: 'assistant',
-    text: `Delegando en segundo plano: ${label}. Te aviso cuando termine.`,
+    text: delegateMsg,
     taskId,
   });
-  speak(`Delegando en segundo plano: ${label}. Te aviso cuando termine.`);
+  syncToActiveChat('assistant', delegateMsg);
+  speak(delegateMsg);
   opts.onBackgroundQueued?.(taskId, label);
 
   voiceStore.setBackgroundTaskStatus(taskId, 'running');
@@ -356,12 +411,16 @@ async function runBackgroundTask(
       ? `Tarea completada: ${shortSummary}`
       : `La tarea falló: ${shortSummary}`;
     voiceStore.pushTurn({ role: 'system', text: notifyMsg, taskId });
+    // Las notificaciones de background también van al chat (como assistant, para que se vean)
+    syncToActiveChat('assistant', notifyMsg);
     speak(notifyMsg);
     opts.onBackgroundDone?.(taskId, shortSummary, ok);
   } catch (e) {
     const errMsg = e instanceof Error ? e.message : String(e);
     voiceStore.setBackgroundTaskStatus(taskId, 'failed', undefined, errMsg);
-    voiceStore.pushTurn({ role: 'system', text: `Error en background: ${errMsg}`, taskId });
+    const errorMsg = `Error en background: ${errMsg}`;
+    voiceStore.pushTurn({ role: 'system', text: errorMsg, taskId });
+    syncToActiveChat('assistant', errorMsg);
     speak(`Error en la tarea delegada: ${errMsg}`);
     opts.onBackgroundDone?.(taskId, errMsg, false);
   }

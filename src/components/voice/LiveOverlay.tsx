@@ -239,9 +239,14 @@ export function LiveOverlay() {
       <div className="flex-1 flex min-h-0">
         {/* Columna izquierda: orb + transcripción */}
         <div className="flex-1 flex flex-col items-center justify-start p-6 min-w-0 overflow-y-auto">
-          {/* Orb */}
-          <div className="shrink-0 mb-8 mt-4">
-            <VoiceOrb size={200} />
+          {/* Orb — canvas 320x320 con la animación sofisticada */}
+          <div className="shrink-0 mb-2 mt-2">
+            <VoiceOrb size={320} />
+          </div>
+
+          {/* Label de estado debajo del orb */}
+          <div className="shrink-0 mb-6 mt-2 text-center">
+            <StateLabel />
           </div>
 
           {/* Error banner */}
@@ -410,6 +415,34 @@ function BackgroundTaskCard({ task }: {
           {task.error}
         </div>
       )}
+    </div>
+  );
+}
+
+// --- StateLabel -------------------------------------------------------------
+
+function StateLabel() {
+  const state = useVoiceStore((s) => s.state);
+  const labels: Record<typeof state, { text: string; color: string }> = {
+    idle:      { text: 'EN REPOSO',     color: '#7d6bff' },
+    listening: { text: 'ESCUCHANDO',    color: '#00e0c0' },
+    thinking:  { text: 'PROCESANDO',    color: '#c26bff' },
+    speaking:  { text: 'RESPONDIENDO',  color: '#3d9bff' },
+    error:     { text: 'ERROR',         color: '#ff4d5e' },
+  };
+  const l = labels[state];
+  return (
+    <div className="flex items-center gap-2.5">
+      <span
+        className="w-2 h-2 rounded-full"
+        style={{ background: l.color, boxShadow: `0 0 12px ${l.color}` }}
+      />
+      <span
+        className="text-xs font-medium tracking-[0.25em] uppercase"
+        style={{ color: 'rgba(232, 234, 246, 0.85)' }}
+      >
+        {l.text}
+      </span>
     </div>
   );
 }
