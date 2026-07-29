@@ -235,12 +235,17 @@ export function VoiceOrb({ size = 320 }: { size?: number }) {
     function drawGlow(px: number, py: number, env: number) {
       let inten = 0.55 + cur.energy * 0.75 + env * 0.5 * cur.wave;
       if (cur.glitch > 0.02 && Math.random() < 0.08 * cur.glitch) inten *= 0.4;
-      const gr = R * 2.8;
+      // Glow radius reducido para que fade a transparente ocurra DENTRO del
+      // canvas. Antes era R*2.8 (=268px con R=96), pero el canvas es 320px
+      // (half-width 160px), así el glow se cortaba en el borde y se veía un
+      // cuadrado. Ahora R*1.55 (=149px) deja ~11px de margen transparente.
+      const gr = R * 1.55;
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       const g = ctx.createRadialGradient(CX + px, CY + py, R * 0.2, CX + px, CY + py, gr);
-      g.addColorStop(0, rgba(cur.glow, 0.32 * inten));
-      g.addColorStop(0.45, rgba(cur.glow, 0.12 * inten));
+      // Intensidades ligeramente mayores para compensar el radio menor.
+      g.addColorStop(0, rgba(cur.glow, 0.40 * inten));
+      g.addColorStop(0.45, rgba(cur.glow, 0.16 * inten));
       g.addColorStop(1, rgba(cur.glow, 0));
       ctx.fillStyle = g;
       ctx.fillRect(CX + px - gr, CY + py - gr, gr * 2, gr * 2);
@@ -433,7 +438,7 @@ export function VoiceOrb({ size = 320 }: { size?: number }) {
       ref={canvasRef}
       onClick={cycleState}
       className="cursor-pointer"
-      style={{ display: 'block' }}
+      style={{ display: 'block', background: 'transparent' }}
       title="Click para cambiar estado (debug)"
     />
   );

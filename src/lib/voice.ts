@@ -75,16 +75,26 @@ export interface AsrHandlers {
  * Crea un reconocedor continuo. Re-inicia automáticamente en `onend` si el
  * usuario no lo detuvo explícitamente (los navegadores cortan cada ~30s).
  *
- * BUFFERING DE FINALS: en modo `continuous=true`, el navegador emite un
- * resultado `final` por cada micro-pausa del habla. Si disparáramos
- * `onFinal` por cada uno, una sola frase dicha con pausas naturales
- * ("Qué... qué puedes... qué puedes hacer") se convertiría en 3 turnos
- * separados del usuario, cada uno con su propia llamada al LLM.
+ * BUFFERING + MERGE DE FINALS:
+ *   En modo `continuous=true`, el navegador emite resultados `final` por cada
+ *   micro-pausa del habla. Además, en muchos navegadores (Chrome/Edge) los
+ *   `final` posteriores incluyen el texto ACUMULADO de toda la sesión, no
+ *   solo el nuevo chunk. Esto produce síntomas como:
  *
- * Solución: acumulamos los `final` en `finalBuffer` y los flusheamos como
- * un único `onFinal` tras `FLUSH_DELAY` ms de silencio. Mientras tanto,
- * `onInterim` recibe el buffer + el interim actual para que la UI muestre
- * el texto completo que se va diciendo.
+ *     Usuario dice: "Hola qué puedes hacer"
+ *     Finals recibidos: "Hola", "Hola Qué", "Hola Qué puedes", "Hola Qué puedes hacer"
+ *
+ *   Si flushearamos por cada final, tendríamos 4 turnos del usuario. Si
+ *   acumulamos sin más, tendríamos "Hola Hola Qué Hola Qué puedes ...".
+ *
+ *   Solución:
+ *     1. Acumulamos finals en `finalBuffer` con `mergeText()` que detecta
+ *        si el nuevo final extiende, duplica o es disjunto del buffer.
+ *     2. Trackeamos `lastFlushedText` y lo strippeamos del prefijo de
+ *        nuevos finals (para no re-incluir texto ya flusheado).
+ *     3. Flusheamos tras `FLUSH_DELAY` ms de silencio (2.5s, suficiente
+ *        para pausas naturales dentro de una frase sin cortar).
+ *     4. Reset `lastFlushedText` en auto-restart (nueva sesión del navegador).
  */
 export class ContinuousASR {
   private rec: SpeechRecognitionLike | null = null;
@@ -94,12 +104,14 @@ export class ContinuousASR {
 
   /** Buffer de finales acumulados pendientes de flush. */
   private finalBuffer = '';
-  /** Timer que dispara el flush tras FLUSH_DELAY ms sin nuevos finals. */
+  /** Último texto flusheado (para strippear prefijos acumulados). */
+  private lastFlushedText = '';
+  /** Timer que dispara el flush tras FLUSH_DELAY ms sin nuevos resultados. */
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   /** ms de silencio tras un final para considerar el turno completo. */
-  private readonly FLUSH_DELAY = 900;
+  private readonly FLUSH_DELAY = 2500;
   /** ms máximos de buffer antes de forzar flush (turno muy largo). */
-  private readonly FLUSH_MAX = 6000;
+  private readonly FLUSH_MAX = 10000;
   private flushMaxTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(lang = 'es-ES') {
@@ -115,6 +127,26 @@ export class ContinuousASR {
     this.handlers = h;
   }
 
+  /**
+   * Fusiona `newText` en `buffer` detectando overlap:
+   *   - Si newText extiende buffer (accumulated transcript) → replace
+   *   - Si buffer extiende newText (subset) → keep buffer
+   *   - Si overlap por sufijo → keep el más largo
+   *   - Si disjuntos → append con espacio
+   */
+  private mergeText(buffer: string, newText: string): string {
+    if (!buffer) return newText;
+    const lb = buffer.toLowerCase().trim();
+    const ln = newText.toLowerCase().trim();
+    if (!ln) return buffer;
+
+    if (ln.startsWith(lb)) return newText;          // newText extiende buffer
+    if (lb.startsWith(ln)) return buffer;            // buffer extiende newText
+    if (ln.endsWith(lb)) return newText;             // overlap por sufijo
+    if (lb.endsWith(ln)) return buffer;              // overlap por prefijo
+    return buffer + ' ' + newText;                    // disjuntos
+  }
+
   /** Dispara el onFinal con el buffer acumulado y lo limpia. */
   private flushFinals() {
     if (this.flushTimer) {
@@ -127,7 +159,10 @@ export class ContinuousASR {
     }
     const text = this.finalBuffer.trim();
     this.finalBuffer = '';
-    if (text) this.handlers.onFinal?.(text);
+    if (text) {
+      this.lastFlushedText = text;
+      this.handlers.onFinal?.(text);
+    }
   }
 
   start() {
@@ -151,21 +186,29 @@ export class ContinuousASR {
       this.rec.onresult = (e) => {
         let interim = '';
         let hadNewFinal = false;
+
         for (let i = e.resultIndex; i < e.results.length; i++) {
           const r = e.results[i];
           const txt = r[0].transcript;
           if (r.isFinal) {
-            const trimmed = txt.trim();
-            if (trimmed) {
-              // Evitar duplicar si el final es idéntico al último chunk del buffer
-              // (algunos navegadores re-emiten el mismo final al re-iniciar).
-              if (this.finalBuffer) {
-                if (!this.finalBuffer.endsWith(trimmed)) {
-                  this.finalBuffer += ' ' + trimmed;
-                }
-              } else {
-                this.finalBuffer = trimmed;
+            let trimmed = txt.trim();
+            if (!trimmed) continue;
+
+            // Strippear el texto ya flusheado si el navegador envía
+            // transcript acumulado (p.ej. "Hola Qué puedes" cuando ya
+            // flusheamos "Hola" en un flush anterior).
+            if (this.lastFlushedText) {
+              const lfl = this.lastFlushedText.toLowerCase();
+              const ltr = trimmed.toLowerCase();
+              if (ltr.startsWith(lfl)) {
+                trimmed = trimmed.slice(this.lastFlushedText.length).trim();
+              } else if (lfl.startsWith(ltr)) {
+                // El nuevo final es un subset del ya flusheado → ignorar
+                trimmed = '';
               }
+            }
+            if (trimmed) {
+              this.finalBuffer = this.mergeText(this.finalBuffer, trimmed);
               hadNewFinal = true;
             }
           } else {
@@ -180,15 +223,14 @@ export class ContinuousASR {
             : interim;
           this.handlers.onInterim?.(fullInterim);
         } else if (hadNewFinal) {
-          // Si llegó un final pero no hay interim, mostrar el buffer como interim.
           this.handlers.onInterim?.(this.finalBuffer);
         }
 
-        // Resetear el debounce de flush tras cada final nuevo.
-        if (hadNewFinal) {
+        // Resetear el debounce de flush tras cada resultado (final o interim
+        // con buffer pendiente — el usuario sigue hablando).
+        if (hadNewFinal || (interim && this.finalBuffer)) {
           if (this.flushTimer) clearTimeout(this.flushTimer);
           this.flushTimer = setTimeout(() => this.flushFinals(), this.FLUSH_DELAY);
-          // Iniciar el max timer si no estaba corriendo (turno muy largo).
           if (!this.flushMaxTimer) {
             this.flushMaxTimer = setTimeout(() => this.flushFinals(), this.FLUSH_MAX);
           }
@@ -204,9 +246,10 @@ export class ContinuousASR {
 
       this.rec.onend = () => {
         if (this.wantActive) {
-          // re-iniciar en el siguiente tick (evita "recognition already started").
-          // NO flushear aquí: el buffer persiste a través del auto-restart para
-          // no partir el turno del usuario si el navegador corta a los ~30s.
+          // Auto-restart: el navegador cortó (~30s o silence timeout).
+          // Reset lastFlushedText porque la nueva sesión empieza desde cero
+          // (no debe incluir texto de la sesión anterior).
+          this.lastFlushedText = '';
           setTimeout(() => {
             try { this.rec?.start(); } catch { /* ignore */ }
           }, 80);
@@ -232,6 +275,7 @@ export class ContinuousASR {
   abort() {
     this.wantActive = false;
     this.finalBuffer = '';
+    this.lastFlushedText = '';
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
