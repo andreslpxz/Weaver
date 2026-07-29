@@ -74,12 +74,33 @@ export interface AsrHandlers {
 /**
  * Crea un reconocedor continuo. Re-inicia automáticamente en `onend` si el
  * usuario no lo detuvo explícitamente (los navegadores cortan cada ~30s).
+ *
+ * BUFFERING DE FINALS: en modo `continuous=true`, el navegador emite un
+ * resultado `final` por cada micro-pausa del habla. Si disparáramos
+ * `onFinal` por cada uno, una sola frase dicha con pausas naturales
+ * ("Qué... qué puedes... qué puedes hacer") se convertiría en 3 turnos
+ * separados del usuario, cada uno con su propia llamada al LLM.
+ *
+ * Solución: acumulamos los `final` en `finalBuffer` y los flusheamos como
+ * un único `onFinal` tras `FLUSH_DELAY` ms de silencio. Mientras tanto,
+ * `onInterim` recibe el buffer + el interim actual para que la UI muestre
+ * el texto completo que se va diciendo.
  */
 export class ContinuousASR {
   private rec: SpeechRecognitionLike | null = null;
   private wantActive = false;
   private handlers: AsrHandlers = {};
   private lang: string;
+
+  /** Buffer de finales acumulados pendientes de flush. */
+  private finalBuffer = '';
+  /** Timer que dispara el flush tras FLUSH_DELAY ms sin nuevos finals. */
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  /** ms de silencio tras un final para considerar el turno completo. */
+  private readonly FLUSH_DELAY = 900;
+  /** ms máximos de buffer antes de forzar flush (turno muy largo). */
+  private readonly FLUSH_MAX = 6000;
+  private flushMaxTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(lang = 'es-ES') {
     this.lang = lang;
@@ -92,6 +113,21 @@ export class ContinuousASR {
 
   setHandlers(h: AsrHandlers) {
     this.handlers = h;
+  }
+
+  /** Dispara el onFinal con el buffer acumulado y lo limpia. */
+  private flushFinals() {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    if (this.flushMaxTimer) {
+      clearTimeout(this.flushMaxTimer);
+      this.flushMaxTimer = null;
+    }
+    const text = this.finalBuffer.trim();
+    this.finalBuffer = '';
+    if (text) this.handlers.onFinal?.(text);
   }
 
   start() {
@@ -114,13 +150,49 @@ export class ContinuousASR {
 
       this.rec.onresult = (e) => {
         let interim = '';
+        let hadNewFinal = false;
         for (let i = e.resultIndex; i < e.results.length; i++) {
           const r = e.results[i];
           const txt = r[0].transcript;
-          if (r.isFinal) this.handlers.onFinal?.(txt.trim());
-          else interim += txt;
+          if (r.isFinal) {
+            const trimmed = txt.trim();
+            if (trimmed) {
+              // Evitar duplicar si el final es idéntico al último chunk del buffer
+              // (algunos navegadores re-emiten el mismo final al re-iniciar).
+              if (this.finalBuffer) {
+                if (!this.finalBuffer.endsWith(trimmed)) {
+                  this.finalBuffer += ' ' + trimmed;
+                }
+              } else {
+                this.finalBuffer = trimmed;
+              }
+              hadNewFinal = true;
+            }
+          } else {
+            interim += txt;
+          }
         }
-        if (interim) this.handlers.onInterim?.(interim);
+
+        // Mostrar el buffer + interim actual para que la UI refleje todo lo dicho.
+        if (interim) {
+          const fullInterim = this.finalBuffer
+            ? this.finalBuffer + ' ' + interim
+            : interim;
+          this.handlers.onInterim?.(fullInterim);
+        } else if (hadNewFinal) {
+          // Si llegó un final pero no hay interim, mostrar el buffer como interim.
+          this.handlers.onInterim?.(this.finalBuffer);
+        }
+
+        // Resetear el debounce de flush tras cada final nuevo.
+        if (hadNewFinal) {
+          if (this.flushTimer) clearTimeout(this.flushTimer);
+          this.flushTimer = setTimeout(() => this.flushFinals(), this.FLUSH_DELAY);
+          // Iniciar el max timer si no estaba corriendo (turno muy largo).
+          if (!this.flushMaxTimer) {
+            this.flushMaxTimer = setTimeout(() => this.flushFinals(), this.FLUSH_MAX);
+          }
+        }
       };
 
       this.rec.onerror = (e) => {
@@ -132,11 +204,15 @@ export class ContinuousASR {
 
       this.rec.onend = () => {
         if (this.wantActive) {
-          // re-iniciar en下一个 tick (evita "recognition already started")
+          // re-iniciar en el siguiente tick (evita "recognition already started").
+          // NO flushear aquí: el buffer persiste a través del auto-restart para
+          // no partir el turno del usuario si el navegador corta a los ~30s.
           setTimeout(() => {
             try { this.rec?.start(); } catch { /* ignore */ }
           }, 80);
         } else {
+          // Detención explícita: flushear antes de notificar onEnd.
+          this.flushFinals();
           this.handlers.onEnd?.();
         }
       };
@@ -145,15 +221,25 @@ export class ContinuousASR {
     try { this.rec.start(); } catch { /* ya activo */ }
   }
 
-  /** Detiene el reconocimiento. No se re-inicia. */
+  /** Detiene el reconocimiento. Flushea el buffer pendiente. No se re-inicia. */
   stop() {
     this.wantActive = false;
+    this.flushFinals();
     try { this.rec?.stop(); } catch { /* ignore */ }
   }
 
-  /** Aborta sin disparar onend normal. */
+  /** Aborta sin flushear. Descarta el buffer pendiente. */
   abort() {
     this.wantActive = false;
+    this.finalBuffer = '';
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    if (this.flushMaxTimer) {
+      clearTimeout(this.flushMaxTimer);
+      this.flushMaxTimer = null;
+    }
     try { this.rec?.abort(); } catch { /* ignore */ }
   }
 }

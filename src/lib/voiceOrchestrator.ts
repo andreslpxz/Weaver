@@ -223,32 +223,50 @@ async function runChatTurn(userText: string, opts: VoiceRunOpts): Promise<void> 
 
   voiceStore.setState('thinking');
 
-  // Construir historial de la conversación de voz (últimos 8 turnos).
-  // IMPORTANTE: filtrar turnos vacíos (interim que nunca se completaron,
-  // notificaciones de background que aún no tienen texto) — OpenRouter y
-  // otros providers devuelven 400 si un mensaje assistant tiene content "".
+  // Construir historial de la conversación de voz (últimos 12 turnos).
+  //
+  // NOTA: `runVoiceCommand` ya hizo `pushTurn({ role: 'user', text: userText })`
+  // antes de llamar a `runChatTurn`, por lo que `voiceStore.turns` ya INCLUYE
+  // el turno del usuario actual. No debemos añadirlo otra vez al final del
+  // array `msgs` o el LLM vería el mensaje duplicado.
+  //
+  // Además, filtramos turnos vacíos (interim que nunca se completaron,
+  // notificaciones de background sin texto) — OpenRouter y otros providers
+  // devuelven 400 si un mensaje assistant tiene content "".
   const recentTurns = voiceStore.turns
     .slice(-12)
     .filter((t) => t.text && t.text.trim().length > 0);
 
-  const msgs: Message[] = [
-    { role: 'system', content: LIVE_SYSTEM_PROMPT },
-    ...recentTurns.map((t): Message => ({
-      // system (notificaciones de background) → assistant, ya con texto
-      role: t.role === 'user' ? 'user' : 'assistant',
-      content: t.text,
-    })),
-    { role: 'user', content: userText },
-  ];
+  // Mapear a Message, fusionando turnos consecutivos del mismo rol.
+  // Esto es una red de seguridad: si por cualquier motivo hay dos user
+  // turnos seguidos (p.ej. un interim que se coló), se fusionan en uno
+  // para no violar la regla de alternancia user/assistant de OpenRouter.
+  const historyMsgs: Message[] = [];
+  for (const t of recentTurns) {
+    const role: 'user' | 'assistant' = t.role === 'user' ? 'user' : 'assistant';
+    const last = historyMsgs[historyMsgs.length - 1];
+    if (last && last.role === role) {
+      last.content += '\n' + t.text;
+    } else {
+      historyMsgs.push({ role, content: t.text });
+    }
+  }
 
-  // Suffix de modos activos
+  // System prompt con modos activos inline (NO como mensaje system separado
+  // después del user — OpenRouter rechaza system messages intercalados).
+  let systemPrompt = LIVE_SYSTEM_PROMPT;
   const modeTags: string[] = [];
   if (planMode) modeTags.push('[MODO PLAN]');
   if (pursueObjective) modeTags.push('[PERSEGUIR OBJETIVO]');
   if (cognitiveMode) modeTags.push('[MODO COGNITIVO]');
   if (modeTags.length) {
-    msgs.push({ role: 'system', content: `Modos activos: ${modeTags.join(', ')}` });
+    systemPrompt += `\n\nModos activos: ${modeTags.join(', ')}`;
   }
+
+  const msgs: Message[] = [
+    { role: 'system', content: systemPrompt },
+    ...historyMsgs,
+  ];
 
   // Stream + speak en paralelo por frases
   let fullText = '';
