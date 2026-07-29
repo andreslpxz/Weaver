@@ -14,6 +14,17 @@ import { create } from 'zustand';
 
 export type VoiceState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'error';
 
+/**
+ * Modo de audio:
+ *   - 'headphones': ASR siempre activo. El usuario puede interrumpir al
+ *     agente hablando (el TTS se cancela). Ideal con auriculares.
+ *   - 'speakers':   ASR se pausa mientras el agente habla (thinking +
+ *     speaking) para evitar feedback loop (eco). El usuario no puede
+ *     interrumpir con voz; debe usar el botón Interrumpir. Ideal con
+ *     altavoces sin auriculares.
+ */
+export type AudioMode = 'headphones' | 'speakers';
+
 export interface VoiceTurn {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -43,6 +54,7 @@ export interface VoiceStore {
   turns: VoiceTurn[];
   interimText: string;
   backgroundTasks: VoiceBackgroundTask[];
+  audioMode: AudioMode;
 
   // Acciones
   setOpen: (v: boolean) => void;
@@ -52,6 +64,7 @@ export interface VoiceStore {
   updateTurn: (id: string, patch: Partial<VoiceTurn>) => void;
   setInterimText: (t: string) => void;
   clearTurns: () => void;
+  setAudioMode: (m: AudioMode) => void;
 
   addBackgroundTask: (label: string) => string;
   setBackgroundTaskStatus: (id: string, status: VoiceBackgroundTask['status'], result?: string, error?: string) => void;
@@ -70,6 +83,10 @@ export const useVoiceStore = create<VoiceStore>((set) => ({
   turns: [],
   interimText: '',
   backgroundTasks: [],
+  // Default: 'speakers' (safe — pausa ASR durante TTS para evitar eco).
+  // Si el usuario usa auriculares, puede cambiar a 'headphones' para
+  // permitir interrupción por voz.
+  audioMode: 'speakers',
 
   setOpen: (v) => set((s) => (v === s.open ? s : { open: v, error: v ? s.error : null })),
   setState: (st) => set({ state: st }),
@@ -83,6 +100,7 @@ export const useVoiceStore = create<VoiceStore>((set) => ({
     set((s) => ({ turns: s.turns.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
   setInterimText: (t) => set({ interimText: t }),
   clearTurns: () => set({ turns: [], interimText: '' }),
+  setAudioMode: (m) => set({ audioMode: m }),
 
   addBackgroundTask: (label) => {
     const id = newId();

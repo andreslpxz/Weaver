@@ -271,6 +271,19 @@ export class ContinuousASR {
     try { this.rec?.stop(); } catch { /* ignore */ }
   }
 
+  /**
+   * Pausa el reconocimiento SIN flushear ni limpiar el buffer.
+   * Usado para cancelación de eco en modo altavoces: cuando el agente
+   * empieza a hablar (TTS), pausamos el ASR para que no capte la voz
+   * del agente por el micrófono. Al reanudar con `start()`, el buffer
+   * se conserva (aunque normalmente estará vacío porque el usuario no
+   * debería estar hablando durante el eco).
+   */
+  pause() {
+    this.wantActive = false;
+    try { this.rec?.abort(); } catch { /* ignore */ }
+  }
+
   /** Aborta sin flushear. Descarta el buffer pendiente. */
   abort() {
     this.wantActive = false;
@@ -291,6 +304,37 @@ export class ContinuousASR {
 // --- TTS -------------------------------------------------------------------
 
 let cachedSpanishVoice: SpeechSynthesisVoice | null = null;
+
+// --- Echo cancellation priming ---------------------------------------------
+
+/**
+ * Pide permiso de micrófono con echo cancellation + noise suppression
+ * activados ANTES de iniciar el SpeechRecognition. Aunque Web Speech API
+ * usa su propio pipeline de audio, en muchos navegadores (Chrome/Edge)
+ * los constraints del getUserMedia se aplican globalmente a la sesión
+ * de audio del tab, mejorando la cancelación de eco.
+ *
+ * El stream se libera inmediatamente — solo queremos "activar" los
+ * constraints del browser. Es un best-effort: si falla, no es crítico.
+ */
+export async function primeMicAEC(): Promise<void> {
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1,
+      } as MediaTrackConstraints,
+    });
+    // Liberar inmediatamente — los constraints quedan "sticky" para la
+    // sesión de audio del tab en muchos navegadores.
+    stream.getTracks().forEach((t) => t.stop());
+  } catch {
+    // Ignorar — no es crítico. El SpeechRecognition puede funcionar sin esto.
+  }
+}
 
 function pickSpanishVoice(): SpeechSynthesisVoice | null {
   if (!isTTSSupported()) return null;

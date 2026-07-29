@@ -18,7 +18,7 @@
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { X, Mic, MicOff, Square, Send, Radio, Loader2, CheckCircle2, XCircle, Clock } from 'lucide-react';
+import { X, Mic, MicOff, Square, Send, Radio, Loader2, CheckCircle2, XCircle, Clock, Headphones, Speaker } from 'lucide-react';
 import { useVoiceStore } from '@/store/voice';
 import { useWeaver } from '@/store/weaver';
 import { VoiceOrb } from './VoiceOrb';
@@ -27,6 +27,7 @@ import {
   isASRSupported,
   isTTSSupported,
   primeVoices,
+  primeMicAEC,
   speak,
   stopSpeaking,
 } from '@/lib/voice';
@@ -44,6 +45,8 @@ export function LiveOverlay() {
   const setInterimText = useVoiceStore((s) => s.setInterimText);
   const pushTurn = useVoiceStore((s) => s.pushTurn);
   const backgroundTasks = useVoiceStore((s) => s.backgroundTasks);
+  const audioMode = useVoiceStore((s) => s.audioMode);
+  const setAudioMode = useVoiceStore((s) => s.setAudioMode);
 
   const [muted, setMuted] = useState(false);
   const [textInput, setTextInput] = useState('');
@@ -54,6 +57,15 @@ export function LiveOverlay() {
   const abortRef = useRef<AbortController | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const lastSpokeRef = useRef<number>(0);
+  // Track del estado de pausa del ASR para eco. En modo 'speakers',
+  // pausamos el ASR mientras el TTS está activo para evitar feedback.
+  const asrPausedRef = useRef<boolean>(false);
+  const audioModeRef = useRef<'headphones' | 'speakers'>(audioMode);
+  const mutedRef = useRef<boolean>(false);
+
+  // Mantener refs sincronizadas para uso en el poller
+  useEffect(() => { audioModeRef.current = audioMode; }, [audioMode]);
+  useEffect(() => { mutedRef.current = muted; }, [muted]);
 
   // --- Ciclo de vida del overlay ------------------------------------------
 
@@ -62,6 +74,10 @@ export function LiveOverlay() {
 
     // Prime TTS voices
     primeVoices();
+
+    // Prime micrófono con echo cancellation + noise suppression.
+    // Best-effort: mejora la cancelación de eco del navegador.
+    primeMicAEC();
 
     // Si TTS no está soportado, advertir pero continuar
     if (!ttsSupported) {
@@ -78,8 +94,12 @@ export function LiveOverlay() {
         },
         onInterim: (text) => {
           setInterimText(text);
-          // Si el usuario empieza a hablar durante el speaking, interrumpir TTS
-          if (useVoiceStore.getState().state === 'speaking' && Date.now() - lastSpokeRef.current > 400) {
+          // Solo en modo auriculares: si el usuario empieza a hablar
+          // durante el speaking, interrumpir el TTS (el usuario oye su
+          // propia voz por los auriculares, no hay eco del agente).
+          // En modo altavoces el ASR está pausado durante el speaking,
+          // así que este callback no se dispara.
+          if (audioModeRef.current === 'headphones' && useVoiceStore.getState().state === 'speaking' && Date.now() - lastSpokeRef.current > 400) {
             stopSpeaking();
             setState('listening');
           }
@@ -121,6 +141,56 @@ export function LiveOverlay() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  // --- Cancelación de eco (modo altavoces) ----------------------------------
+  //
+  // En modo 'speakers', pausamos el ASR mientras el TTS está hablando
+  // o el state es 'thinking'/'speaking'. Esto evita que la voz del
+  // agente (que sale por el altavoz) entre al micrófono y se reconozca
+  // como input del usuario, creando un bucle de feedback.
+  //
+  // Usamos un poller de 200ms porque speechSynthesis no expone eventos
+  // globales de inicio/fin de sesión (solo por-utterance, y el streaming
+  // encadena utterances frase a frase con micro-gaps entre ellos).
+
+  useEffect(() => {
+    if (!open) return;
+    const interval = setInterval(() => {
+      const asr = asrRef.current;
+      if (!asr) return;
+      const mode = audioModeRef.current;
+      const muted = mutedRef.current;
+      const voiceState = useVoiceStore.getState().state;
+      const ttsActive = typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis.speaking;
+
+      if (mode === 'speakers') {
+        // Pausar ASR si: TTS activo, o state es thinking/speaking/idle, o muted
+        const shouldPause = ttsActive || voiceState === 'thinking' || voiceState === 'speaking' || voiceState === 'idle' || muted;
+        if (shouldPause && !asrPausedRef.current) {
+          asr.pause();
+          asrPausedRef.current = true;
+        } else if (!shouldPause && asrPausedRef.current && voiceState === 'listening') {
+          // Reanudar solo si volvimos a listening y no hay TTS
+          asr.start();
+          asrPausedRef.current = false;
+        }
+      } else {
+        // Modo auriculares: ASR siempre activo (salvo muted/idle explícito)
+        if (muted || voiceState === 'idle') {
+          if (!asrPausedRef.current) {
+            asr.pause();
+            asrPausedRef.current = true;
+          }
+        } else {
+          if (asrPausedRef.current) {
+            asr.start();
+            asrPausedRef.current = false;
+          }
+        }
+      }
+    }, 200);
+    return () => clearInterval(interval);
+  }, [open]);
+
   // --- Auto-scroll al final de la transcripción ----------------------------
 
   useEffect(() => {
@@ -133,11 +203,11 @@ export function LiveOverlay() {
     const next = !muted;
     setMuted(next);
     if (next) {
-      asrRef.current?.stop();
+      asrRef.current?.pause();
       stopSpeaking();
       setState('idle');
     } else {
-      asrRef.current?.start();
+      asrPausedRef.current = false; // el poller lo reanudará
       setState('listening');
     }
   }, [muted, setState]);
@@ -147,9 +217,9 @@ export function LiveOverlay() {
   const handleInterrupt = useCallback(() => {
     stopSpeaking();
     abortRef.current?.abort();
+    asrPausedRef.current = false; // el poller lo reanudará
     setState('listening');
-    if (!muted && asrSupported) asrRef.current?.start();
-  }, [muted, asrSupported, setState]);
+  }, [setState]);
 
   // --- Cerrar ---------------------------------------------------------------
 
@@ -159,6 +229,19 @@ export function LiveOverlay() {
     abortRef.current?.abort();
     setOpen(false);
   }, [setOpen]);
+
+  // --- Toggle audio mode (auriculares/altavoces) ---------------------------
+
+  const toggleAudioMode = useCallback(() => {
+    const next = audioMode === 'headphones' ? 'speakers' : 'headphones';
+    setAudioMode(next);
+    // El poller se encargará de pausar/reanudar el ASR según el nuevo modo.
+    // Si cambiamos a auriculares, asegurar que el ASR arranque si está pausado.
+    if (next === 'headphones' && !muted) {
+      asrPausedRef.current = false;
+      asrRef.current?.start();
+    }
+  }, [audioMode, setAudioMode, muted]);
 
   // --- Enviar texto (fallback) ---------------------------------------------
 
@@ -210,6 +293,15 @@ export function LiveOverlay() {
           )}
         </div>
         <div className="flex items-center gap-1">
+          <button
+            onClick={toggleAudioMode}
+            title={audioMode === 'headphones'
+              ? 'Modo: Auriculares (click para cambiar a Altavoces). ASR siempre activo, puedes interrumpir con voz.'
+              : 'Modo: Altavoces (click para cambiar a Auriculares). ASR se pausa mientras el agente habla para evitar eco.'}
+            className={`codex-icon-btn ${audioMode === 'headphones' ? 'text-accent' : 'text-warning'}`}
+          >
+            {audioMode === 'headphones' ? <Headphones size={14} /> : <Speaker size={14} />}
+          </button>
           <button
             onClick={toggleMute}
             title={muted ? 'Activar micrófono (Ctrl+M)' : 'Silenciar micrófono (Ctrl+M)'}
@@ -308,8 +400,12 @@ export function LiveOverlay() {
             </div>
           )}
 
-          {/* Pista de atajos */}
-          <div className="mt-4 text-[10px] text-text-muted flex gap-4">
+          {/* Pista de atajos + modo audio */}
+          <div className="mt-4 text-[10px] text-text-muted flex gap-4 flex-wrap justify-center">
+            <span className="flex items-center gap-1">
+              {audioMode === 'headphones' ? <Headphones size={10} /> : <Speaker size={10} />}
+              {audioMode === 'headphones' ? 'Auriculares' : 'Altavoces (anti-eco)'}
+            </span>
             <span><kbd className="px-1 py-0.5 bg-app-elevated rounded border border-border">Esc</kbd> Cerrar</span>
             <span><kbd className="px-1 py-0.5 bg-app-elevated rounded border border-border">Ctrl+Space</kbd> Interrumpir</span>
             <span><kbd className="px-1 py-0.5 bg-app-elevated rounded border border-border">Ctrl+M</kbd> Mute</span>
