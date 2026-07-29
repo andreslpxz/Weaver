@@ -27,7 +27,6 @@ import {
   isASRSupported,
   isTTSSupported,
   primeVoices,
-  primeMicAEC,
   speak,
   stopSpeaking,
 } from '@/lib/voice';
@@ -75,10 +74,6 @@ export function LiveOverlay() {
     // Prime TTS voices
     primeVoices();
 
-    // Prime micrófono con echo cancellation + noise suppression.
-    // Best-effort: mejora la cancelación de eco del navegador.
-    primeMicAEC();
-
     // Si TTS no está soportado, advertir pero continuar
     if (!ttsSupported) {
       setError('Tu navegador/webview no soporta síntesis de voz. Las respuestas se mostrarán como texto.');
@@ -99,7 +94,11 @@ export function LiveOverlay() {
           // propia voz por los auriculares, no hay eco del agente).
           // En modo altavoces el ASR está pausado durante el speaking,
           // así que este callback no se dispara.
-          if (audioModeRef.current === 'headphones' && useVoiceStore.getState().state === 'speaking' && Date.now() - lastSpokeRef.current > 400) {
+          // lastSpokeRef evita que el interim residual justo después de
+          // que el TTS empieza corte la primera frase.
+          if (audioModeRef.current === 'headphones'
+              && useVoiceStore.getState().state === 'speaking'
+              && Date.now() - lastSpokeRef.current > 800) {
             stopSpeaking();
             setState('listening');
           }
@@ -107,6 +106,12 @@ export function LiveOverlay() {
         onFinal: async (text) => {
           if (!text.trim()) return;
           setInterimText('');
+          // Pausar ASR inmediatamente para evitar que capture el TTS
+          // (la suscripción al store lo hace, pero por si acaso)
+          if (audioModeRef.current === 'speakers') {
+            asrRef.current?.pause();
+            asrPausedRef.current = true;
+          }
           // Cancelar cualquier ejecución en curso y arrancar nueva
           abortRef.current?.abort();
           const ctrl = new AbortController();
@@ -148,10 +153,60 @@ export function LiveOverlay() {
   // agente (que sale por el altavoz) entre al micrófono y se reconozca
   // como input del usuario, creando un bucle de feedback.
   //
-  // Usamos un poller de 200ms porque speechSynthesis no expone eventos
-  // globales de inicio/fin de sesión (solo por-utterance, y el streaming
-  // encadena utterances frase a frase con micro-gaps entre ellos).
+  // Doble mecanismo:
+  //   1. Suscripción al store: pausa SINCRÓNICA cuando state cambia a
+  //      thinking/speaking. Esto evita la race condition donde el TTS
+  //      empieza a hablar antes de que el poller lo detecte.
+  //   2. Poller 200ms: maneja el caso donde speechSynthesis.speaking es
+  //      true pero el state aún es 'listening' (notificaciones de
+  //      background tasks que llaman speak() directamente).
 
+  // Suscripción sincrónica a cambios de state
+  useEffect(() => {
+    if (!open) return;
+    const unsub = useVoiceStore.subscribe((s) => {
+      const asr = asrRef.current;
+      if (!asr) return;
+      const mode = audioModeRef.current;
+      const muted = mutedRef.current;
+
+      // Track cuando el agente empieza a hablar (para cooldown de
+      // interrupción en modo auriculares)
+      if (s.state === 'speaking') {
+        lastSpokeRef.current = Date.now();
+      }
+
+      if (mode === 'speakers') {
+        // Pausar inmediatamente si el state es thinking/speaking/idle o muted
+        if (s.state === 'thinking' || s.state === 'speaking' || s.state === 'idle' || muted) {
+          if (!asrPausedRef.current) {
+            asr.pause();
+            asrPausedRef.current = true;
+          }
+        }
+        // Reanudar inmediatamente si volvimos a listening
+        if (s.state === 'listening' && !muted && asrPausedRef.current) {
+          // Solo reanudar si el TTS no está activo (el poller maneja esto)
+          const ttsActive = typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis.speaking;
+          if (!ttsActive) {
+            asr.start();
+            asrPausedRef.current = false;
+          }
+        }
+      } else {
+        // Modo auriculares: pausar solo en idle/muted
+        if (s.state === 'idle' || muted) {
+          if (!asrPausedRef.current) {
+            asr.pause();
+            asrPausedRef.current = true;
+          }
+        }
+      }
+    });
+    return unsub;
+  }, [open]);
+
+  // Poller: maneja TTS activo sin cambio de state (background notifications)
   useEffect(() => {
     if (!open) return;
     const interval = setInterval(() => {
@@ -163,31 +218,19 @@ export function LiveOverlay() {
       const ttsActive = typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis.speaking;
 
       if (mode === 'speakers') {
-        // Pausar ASR si: TTS activo, o state es thinking/speaking/idle, o muted
-        const shouldPause = ttsActive || voiceState === 'thinking' || voiceState === 'speaking' || voiceState === 'idle' || muted;
-        if (shouldPause && !asrPausedRef.current) {
+        // Si TTS está activo pero el state es 'listening' (background task
+        // notification), pausar el ASR
+        if (ttsActive && !asrPausedRef.current) {
           asr.pause();
           asrPausedRef.current = true;
-        } else if (!shouldPause && asrPausedRef.current && voiceState === 'listening') {
-          // Reanudar solo si volvimos a listening y no hay TTS
+        }
+        // Si TTS terminó y el state es 'listening', reanudar
+        if (!ttsActive && voiceState === 'listening' && !muted && asrPausedRef.current) {
           asr.start();
           asrPausedRef.current = false;
         }
-      } else {
-        // Modo auriculares: ASR siempre activo (salvo muted/idle explícito)
-        if (muted || voiceState === 'idle') {
-          if (!asrPausedRef.current) {
-            asr.pause();
-            asrPausedRef.current = true;
-          }
-        } else {
-          if (asrPausedRef.current) {
-            asr.start();
-            asrPausedRef.current = false;
-          }
-        }
       }
-    }, 200);
+    }, 150);
     return () => clearInterval(interval);
   }, [open]);
 

@@ -105,10 +105,19 @@ REGLAS CRÍTICAS:
 - Responde en español, de forma natural y conversacional.
 - Respuestas CORTAS: 1-3 frases salvo que el usuario pida detalle.
 - NO uses markdown, NO listas con guiones, NO encabezados. Solo texto plano hablado.
-- NO mencionas que eres una IA ni "como modelo de lenguaje".
+- NO menciones que eres una IA ni "como modelo de lenguaje".
 - Si el usuario te interrumpe, para y responde a lo nuevo.
-- Si la pregunta requiere análisis profundo, archivos, o web, di brevemente "Voy a delegar eso en segundo plano" y deja que el sistema lo pase al orquestador.
 - Tono: cercano, eficiente, sin relleno. Como un colega técnico por audífono.
+
+IMPORTANTE SOBRE HERRAMIENTAS:
+- En este modo NO tienes acceso a herramientas (web search, archivos, etc).
+- Si el usuario pide buscar en internet, analizar archivos, o cualquier tarea
+  que requiera herramientas, NO intentes usarlas. Responde con texto plano
+  diciendo brevemente qué harías o pide más contexto.
+- NUNCA devuelvas una respuesta vacía. Siempre di algo, aunque sea
+  "Déjame pensar..." o "No tengo herramientas en modo voz, pero puedo...".
+- Si la pregunta es sobre conocimiento general, responde directamente con
+  lo que sepas, sin buscar en web.
 
 Contexto del entorno:
 - App: Weaver (asistente desktop con agentes, MCP, skills)
@@ -304,12 +313,21 @@ async function runChatTurn(userText: string, opts: VoiceRunOpts): Promise<void> 
       speak(sentenceBuffer.trim());
     }
 
-    voiceStore.updateTurn(turnId, { text: result.text || fullText, interim: false });
     const finalText = result.text || fullText;
-    opts.onAssistantTurnDone?.(finalText);
-
-    // Sincronizar con el chat activo (mensaje final, no interim)
-    syncToActiveChat('assistant', finalText);
+    
+    // Fallback: si la respuesta está vacía, el modelo probablemente quiso
+    // usar tools pero no puede en modo voz. Mostrar un mensaje útil.
+    if (!finalText.trim()) {
+      const fallback = 'No pude procesar eso en modo voz. Si necesitas buscar información o usar herramientas, abre el chat completo y pídelo allí.';
+      voiceStore.updateTurn(turnId, { text: fallback, interim: false });
+      opts.onAssistantTurnDone?.(fallback);
+      syncToActiveChat('assistant', fallback);
+      speak(fallback);
+    } else {
+      voiceStore.updateTurn(turnId, { text: finalText, interim: false });
+      opts.onAssistantTurnDone?.(finalText);
+      syncToActiveChat('assistant', finalText);
+    }
 
     // Métricas
     try {
