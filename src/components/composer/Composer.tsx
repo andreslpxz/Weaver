@@ -1045,8 +1045,10 @@ export function Composer() {
 
           {/* Bottom row: + popup | model picker | mic | send
               Sin el paperclip redundante (el + ya abre el menú de adjuntar).
-              En modo IDE el model picker se oculta (ya está en la StatusBar). */}
-          <div className="flex items-center gap-1.5 px-1 relative flex-nowrap overflow-hidden">
+              En modo IDE el model picker se oculta (ya está en la StatusBar).
+              NO usar overflow-hidden aquí: el popup del + se despliega hacia arriba
+              (bottom-9) y quedaría recortado. El model picker ya tiene truncate + shrink-0. */}
+          <div className="flex items-center gap-1.5 px-1 relative flex-nowrap overflow-visible">
             {/* Botón + (abajo, al lado del model picker) — popup tipo Codex/Claude */}
             <div className="relative shrink-0">
               <button
