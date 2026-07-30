@@ -304,6 +304,13 @@ export class ContinuousASR {
 // --- TTS -------------------------------------------------------------------
 
 let cachedSpanishVoice: SpeechSynthesisVoice | null = null;
+// Track si hemos hecho el warmup del motor TTS. Chrome/WebKit tiene un bug
+// donde la PRIMERA llamada a speechSynthesis.speak() en una sesión NO se
+// reproduce (el utterance se queda en estado "pending" indefinidamente o
+// se descarta). El warmup consiste en un cancel() silencioso + un utterance
+// vacío que "despierta" el motor. Después de eso, las llamadas reales sí
+// funcionan.
+let ttsWarmedUp = false;
 
 // --- Echo cancellation priming ---------------------------------------------
 
@@ -355,6 +362,7 @@ export function primeVoices(): Promise<void> {
     const existing = window.speechSynthesis.getVoices();
     if (existing.length) {
       cachedSpanishVoice = pickSpanishVoice();
+      warmUpTTS();
       return resolve();
     }
     let resolved = false;
@@ -362,12 +370,46 @@ export function primeVoices(): Promise<void> {
       if (resolved) return;
       resolved = true;
       cachedSpanishVoice = pickSpanishVoice();
+      warmUpTTS();
       resolve();
     };
     window.speechSynthesis.onvoiceschanged = handler;
     // Fallback: forzar después de 800ms
     setTimeout(handler, 800);
   });
+}
+
+/**
+ * Warmup del motor TTS. Workaround para el bug de Chrome/WebKit donde la
+ * primera llamada a `speechSynthesis.speak()` en una sesión NO se reproduce.
+ *
+ * Síntoma: el agente responde en texto pero no se oye nada. El utterance
+ * aparece como "pending" en `speechSynthesis.pending` pero nunca transiciona
+ * a "speaking".
+ *
+ * Fix: hacer un `cancel()` + un utterance con texto vacío (length 0) que
+ * "despierta" el motor. Este patrón es el recomendado por múltiples reportes
+ * de Chromium (issue #679427) y funciona en WebKitGTK (Tauri Linux).
+ *
+ * Idempotente: si ya se hizo el warmup, no se repite.
+ */
+function warmUpTTS() {
+  if (ttsWarmedUp || !isTTSSupported()) return;
+  try {
+    window.speechSynthesis.cancel();
+    // Utterance "vacío" — algunos motores ignoran length=0, así que usamos
+    // un espacio. No se oye pero despierta el motor.
+    const u = new SpeechSynthesisUtterance(' ');
+    u.volume = 0;
+    u.onend = () => { ttsWarmedUp = true; };
+    u.onerror = () => { ttsWarmedUp = true; };
+    window.speechSynthesis.speak(u);
+    // Si onend/onerror no disparan (algunos motores), marcar como warmed
+    // tras un timeout corto para no bloquear.
+    setTimeout(() => { ttsWarmedUp = true; }, 200);
+  } catch {
+    ttsWarmedUp = true;
+  }
 }
 
 export interface SpeakOpts {
@@ -390,6 +432,12 @@ export function speak(text: string, opts: SpeakOpts = {}) {
     opts.onEnd?.();
     return;
   }
+
+  // Warmup lazily — si primeVoices no se llamó o no terminó, asegurarnos
+  // de que el motor esté despierto ANTES de la primera speak() real.
+  // Sin esto, en Chrome/WebKit la primera utterance se descarta silenciosamente.
+  if (!ttsWarmedUp) warmUpTTS();
+
   // Cancelar cola actual si está llena
   if (window.speechSynthesis.speaking && window.speechSynthesis.pending) {
     // ya hay cosas en cola, dejamos que termine la actual y reemplazamos cola
@@ -407,6 +455,10 @@ export function speak(text: string, opts: SpeakOpts = {}) {
   if (opts.onEnd) u.onend = opts.onEnd;
   if (opts.onStart) u.onstart = opts.onStart;
   if (opts.onBoundary) u.onboundary = (e) => opts.onBoundary?.(e.charIndex);
+
+  // Forzar el resume por si el motor quedó pausado por bug de Chrome
+  // (speechSynthesis a veces queda en estado "paused" sin razón).
+  try { window.speechSynthesis.resume(); } catch { /* ignore */ }
 
   window.speechSynthesis.speak(u);
 }

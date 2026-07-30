@@ -85,7 +85,14 @@ export function LiveOverlay() {
       asrRef.current = asr;
       asr.setHandlers({
         onStart: () => {
-          setState('listening');
+          // Solo transicionar a 'listening' si estamos en 'idle' (start
+          // inicial). En auto-restart (~cada 30s el navegador corta el
+          // recognition y lo reiniciamos), NO debemos clobber un estado
+          // activo de 'thinking' o 'speaking' — si lo hiciéramos, el
+          // poller anti-eco reanudaría el ASR prematuramente y captaría
+          // el TTS del agente, creando un feedback loop.
+          const cur = useVoiceStore.getState().state;
+          if (cur === 'idle') setState('listening');
         },
         onInterim: (text) => {
           setInterimText(text);

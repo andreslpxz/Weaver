@@ -3,13 +3,17 @@
  *
  * Responsabilidades:
  *   1. Detectar si un comando de voz es conversación (responder directo con
- *      LLM rápido) o delegación a subagentes (tarea pesada en background).
+ *      LLM rápido) o delegación a background (tarea con tools que corre en
+ *      paralelo a la conversación).
  *   2. Para conversación: usar `streamChat` con el provider/modelo activo,
  *      inyectando el system prompt mínimo de Live (respuestas cortas y
  *      naturales, ideales para TTS).
- *   3. Para delegación: llamar `orchestrate(...)` en background y emitir
- *      eventos de progreso. El usuario puede seguir hablando mientras tanto.
- *   4. Cuando una background task termina, encolar TTS con un resumen corto.
+ *   3. Para delegación: arrancar la tarea en BACKGROUND (no se espera). El
+ *      usuario puede seguir hablando mientras tanto. La tarea usa las MISMAS
+ *      tools que el chat (web_search, shell_exec, file_*, save_file, etc.)
+ *      vía `buildAdvancedToolsList` + `streamChat` loop, igual que Composer.
+ *   4. Cuando la tarea termina, el AGENTE MISMO genera una notificación
+ *      natural en voz (LLM-produced, no hardcoded) resumiendo lo que hizo.
  *
  * Señales de "background":
  *   - Palabras clave: "en segundo plano", "en background", "mientras tanto",
@@ -19,9 +23,8 @@
  *   - Si NO hay esas palabras, es conversación directa.
  */
 
-import type { LLMProvider, Message } from '@/providers/types';
+import type { LLMProvider, Message, Tool } from '@/providers/types';
 import { streamChat } from '@/lib/chain';
-import { orchestrate } from '@/agent/orchestrator';
 import { useVoiceStore } from '@/store/voice';
 import { useWeaver } from '@/store/weaver';
 import { createProvider } from '@/providers';
@@ -66,6 +69,12 @@ const BACKGROUND_PATTERNS = [
   /\bejecuta\s+(?:el\s+)?flujo\b/i,
   /\bprograma\s+(?:una\s+)?tarea\b/i,
   /\ben\s+cola\b/i,
+  // Patrones adicionales: "busca en internet", "busca en la web", "investiga X"
+  // sin requerir "avísame" — el usuario sobreentiende que es background.
+  /\bbusca\b.*\b(?:internet|web|online)\b/i,
+  /\binvestiga\b/i,
+  /\baver[ií]gua\b/i,
+  /\bconsulta\b.*\b(?:internet|web|online|api)\b/i,
 ];
 
 export interface VoiceIntent {
@@ -138,6 +147,10 @@ export interface VoiceRunOpts {
 /**
  * Procesa un comando de voz (texto final del ASR).
  * Decide si es chat o background y lo ejecuta.
+ *
+ * IMPORTANTE: Para background, la tarea se arranca PERO NO SE ESPERA.
+ * El usuario puede seguir hablando inmediatamente. La notificación de
+ * finalización se dispara cuando la tarea termina (asíncrono).
  */
 export async function runVoiceCommand(
   userText: string,
@@ -184,8 +197,14 @@ export async function runVoiceCommand(
       return;
 
     case 'background':
-      await runBackgroundTask(intent.text, intent.taskLabel ?? intent.text, opts);
-      // Tras delegar, volver a listening inmediatamente
+      // NO await — la tarea corre en background. runBackgroundTask se
+      // encarga de encolar el mensaje "Delegando..." y devolver el control.
+      // El usuario puede seguir hablando inmediatamente.
+      void runBackgroundTask(intent.text, intent.taskLabel ?? intent.text, opts);
+      // Volver a listening inmediatamente (la confirmación "Delegando..."
+      // la hace runBackgroundTask por dentro, pero sin bloquear el return).
+      // Damos un microtask para que el mensaje "Delegando..." se hable
+      // antes de ceder el turno, pero sin esperar a que termine la tarea.
       voiceStore.setState('listening');
       return;
 
@@ -280,7 +299,6 @@ async function runChatTurn(userText: string, opts: VoiceRunOpts): Promise<void> 
   // Stream + speak en paralelo por frases
   let fullText = '';
   let sentenceBuffer = '';
-  let spokenUpTo = 0;
   const turnId = voiceStore.pushTurn({ role: 'assistant', text: '', interim: true });
 
   try {
@@ -298,7 +316,6 @@ async function runChatTurn(userText: string, opts: VoiceRunOpts): Promise<void> 
           // La última puede ser parcial, hablar todas menos la última
           for (let i = 0; i < sentences.length - 1; i++) {
             speak(sentences[i]);
-            spokenUpTo += sentences[i].length + 1;
           }
           sentenceBuffer = sentences[sentences.length - 1];
         }
@@ -314,7 +331,7 @@ async function runChatTurn(userText: string, opts: VoiceRunOpts): Promise<void> 
     }
 
     const finalText = result.text || fullText;
-    
+
     // Fallback: si la respuesta está vacía, el modelo probablemente quiso
     // usar tools pero no puede en modo voz. Mostrar un mensaje útil.
     if (!finalText.trim()) {
@@ -386,7 +403,21 @@ function waitForSpeechEnd(): Promise<void> {
   });
 }
 
-// --- Delegación a subagentes (background) ----------------------------------
+// --- Delegación a background (con tools, igual que Composer) ----------------
+//
+// Esta función es NO-BLOQUEANTE desde el punto de vista del llamador
+// (runVoiceCommand). Hace dos cosas:
+//
+//   FASE 1 (síncrona rápida, ~50ms): encola la tarea en el store, emite el
+//   mensaje "Delegando en segundo plano...", lo habla por TTS y retorna.
+//   El usuario recupera el turno inmediatamente y puede seguir hablando.
+//
+//   FASE 2 (asíncrona, fire-and-forget): arranca la tarea real con tools
+//   (web_search, shell_exec, file_*, etc.) en un IIFE no awaited. Cuando
+//   termina, genera una NOTIFICACIÓN NATURAL vía LLM (no hardcoded) y la
+//   habla por voz. Si el usuario está en medio de otra conversación, la
+//   notificación se encola en la cola de speechSynthesis y se reproduce
+//   cuando el TTS actual termine.
 
 async function runBackgroundTask(
   objective: string,
@@ -410,6 +441,7 @@ async function runBackgroundTask(
     return;
   }
 
+  // --- FASE 1: encolar + confirmar (rápido) --------------------------------
   const taskId = voiceStore.addBackgroundTask(label);
   const delegateMsg = `Delegando en segundo plano: ${label}. Te aviso cuando termine.`;
   voiceStore.pushTurn({
@@ -422,42 +454,362 @@ async function runBackgroundTask(
   opts.onBackgroundQueued?.(taskId, label);
 
   voiceStore.setBackgroundTaskStatus(taskId, 'running');
-  opts.onBackgroundProgress?.(taskId, 'Iniciando orquestador de subagentes…');
+  opts.onBackgroundProgress?.(taskId, 'Iniciando tarea con herramientas…');
+
+  // --- FASE 2: ejecutar la tarea en background (fire-and-forget) ----------
+  // NO se hace await aquí — el llamador (runVoiceCommand) retorna inmediatamente
+  // después de la FASE 1, permitiendo al usuario seguir hablando.
+  void (async () => {
+    try {
+      const llm = await createProvider(effProviderId, { apiKeyOverride: apiKey });
+      const { buildAdvancedToolsList, dispatchAdvancedTool } = await import('@/lib/tools');
+      const { parseTextToolCalls, maybeHasTextToolCall } = await import('@/lib/textToolParser');
+
+      const taskResult = await runTaskWithTools(llm, effModelId, objective, {
+        tools: buildAdvancedToolsList(),
+        dispatch: dispatchAdvancedTool,
+        parseTextToolCalls,
+        maybeHasTextToolCall,
+        onProgress: (msg) => {
+          opts.onBackgroundProgress?.(taskId, msg);
+        },
+      });
+
+      const ok = taskResult.ok;
+      voiceStore.setBackgroundTaskStatus(taskId, ok ? 'done' : 'failed', taskResult.summary);
+
+      // Generar notificación natural con LLM (no hardcoded)
+      const notification = await generateNaturalNotification(
+        llm,
+        effModelId,
+        objective,
+        taskResult.summary,
+        ok,
+      );
+
+      // Notificar al usuario — el AGENTE responde naturalmente.
+      // Si el usuario está en medio de una conversación, speechSynthesis
+      // encola la notificación y se reproduce cuando termine el TTS actual.
+      voiceStore.pushTurn({ role: 'assistant', text: notification, taskId });
+      syncToActiveChat('assistant', notification);
+
+      // Reproducir la notificación por voz. NO cambiamos el state a
+      // 'speaking' si el usuario está en 'thinking' o 'speaking' (en medio
+      // de un chat turn) — eso interrumpiría visualmente la conversación.
+      // El poller anti-eco del LiveOverlay detecta `speechSynthesis.speaking`
+      // directamente y pausa el ASR independientemente del state.
+      await playNotificationTTS(notification);
+
+      opts.onBackgroundDone?.(taskId, taskResult.summary, ok);
+    } catch (e) {
+      const errMsg = e instanceof Error ? e.message : String(e);
+      voiceStore.setBackgroundTaskStatus(taskId, 'failed', undefined, errMsg);
+      const errorMsg = `Error en background: ${errMsg}`;
+      voiceStore.pushTurn({ role: 'assistant', text: errorMsg, taskId });
+      syncToActiveChat('assistant', errorMsg);
+
+      await playNotificationTTS(`Hubo un error en la tarea: ${errMsg.slice(0, 120)}`);
+
+      opts.onBackgroundDone?.(taskId, errMsg, false);
+    }
+  })();
+}
+
+/**
+ * Reproduce una notificación TTS respetando el estado actual del usuario:
+ *   - Si state es 'listening' o 'idle': transicionar a 'speaking', hablar,
+ *     y volver a 'listening' al terminar.
+ *   - Si state es 'thinking' o 'speaking' (usuario en medio de un chat turn):
+ *     NO cambiar state — sólo encolar el TTS. Se reproducirá después del
+ *     TTS actual. El poller anti-eco pausará el ASR automáticamente.
+ *
+ * Esto permite que la notificación "Ya terminé" se sienta natural sin
+ * interrumpir una conversación en curso.
+ */
+async function playNotificationTTS(text: string): Promise<void> {
+  const cur = useVoiceStore.getState().state;
+  const shouldManageState = cur === 'listening' || cur === 'idle';
+
+  if (shouldManageState) {
+    useVoiceStore.getState().setState('speaking');
+  }
+  speak(text);
+  await waitForSpeechEnd();
+  if (shouldManageState) {
+    useVoiceStore.getState().setState('listening');
+  }
+}
+
+// --- runTaskWithTools: igual que Composer.runChatWithTools pero简化 ----------
+//
+// Ejecuta un loop de hasta N rondas: streamChat → si hay tool_calls, los
+// ejecuta y vuelve a llamar. Devuelve el texto final + un resumen corto.
+
+interface TaskWithToolsOpts {
+  tools: Tool[];
+  dispatch: (name: string, args: Record<string, unknown>) => Promise<{ ok: boolean; output: string; error?: string }>;
+  parseTextToolCalls: (text: string) => { found: boolean; toolCalls: import('@/providers/types').ToolCall[]; cleanedText: string };
+  maybeHasTextToolCall: (text: string) => boolean;
+  onProgress?: (msg: string) => void;
+}
+
+interface TaskResult {
+  ok: boolean;
+  summary: string;
+}
+
+async function runTaskWithTools(
+  llm: LLMProvider,
+  modelId: string,
+  objective: string,
+  opts: TaskWithToolsOpts,
+): Promise<TaskResult> {
+  const isWindows = typeof navigator !== 'undefined' && navigator.platform.toLowerCase().includes('win');
+  const osName = isWindows ? 'Windows' : runtime.isTauri ? 'Linux/macOS' : 'navegador';
+  const shellHint = isWindows
+    ? 'El shell es PowerShell/CMD en Windows. Usa "dir" (no "ls"), "type" (no "cat"), rutas con "C:\\\\".'
+    : 'El shell es bash en Linux. Usa "ls", "cat", rutas con "/home/".';
+
+  const messages: Message[] = [
+    {
+      role: 'system',
+      content:
+        `Eres Weaver, un agente de escritorio PROACTIVO ejecutándose en ${osName}. ` +
+        (runtime.isTauri
+          ? 'Tienes acceso al sistema de archivos real y puedes ejecutar comandos shell. '
+          : 'Estás en modo navegador (sin acceso al filesystem real). ') +
+        shellHint + '\n\n' +
+        'TIENES ACCESO A HERRAMIENTAS REALES para:\n' +
+        '- Ejecutar comandos shell (shell_exec)\n' +
+        '- Leer y escribir archivos (file_read, file_write, file_list)\n' +
+        '- Buscar en internet (web_search)\n' +
+        '- Descargar contenido de URLs (web_fetch)\n' +
+        '- Generar archivos descargables (save_file)\n\n' +
+        '═══ COMPORTAMIENTO PROACTIVO ═══\n' +
+        '1. NUNCA te rindas al primer error. Si algo falla, intenta una alternativa.\n' +
+        '2. Si no conoces algo, DESCÚBRELO primero con shell_exec.\n' +
+        '3. No pidas confirmación para cada paso. Solo actúa y reporta al final.\n' +
+        '4. Cuando termines, escribe una RESPUESTA FINAL clara al usuario con:\n' +
+        '   a) Resumen breve de lo que hiciste.\n' +
+        '   b) Resultados principales.\n' +
+        '   c) Una pregunta de seguimiento opcional.\n\n' +
+        'Esta tarea se ejecuta en SEGUNDO PLANO. El usuario puede estar hablando\n' +
+        'de otras cosas mientras tanto. Tu respuesta final será leída por voz\n' +
+        'cuando termines, así que hazla CONCISA y NATURAL (máx 3-4 frases).\n' +
+        'No uses markdown. Texto plano hablado.',
+    },
+    { role: 'user', content: objective },
+  ];
+
+  const MAX_TOOL_ROUNDS = 8;
+  let producedFinalText = '';
+  let producedOk = true;
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    let roundText = '';
+    const result = await streamChat(llm, modelId, messages, {
+      tools: opts.tools,
+      onDelta: (delta) => { roundText += delta; },
+    });
+
+    // Registrar uso
+    try {
+      const { metrics } = await import('@/lib/metrics');
+      metrics.recordUsage({
+        providerId: llm.info.id,
+        model: modelId,
+        inputTokens: result.usage.inputTokens,
+        outputTokens: result.usage.outputTokens,
+        source: 'voice-bg',
+        success: result.toolCalls.length === 0 || result.text.trim().length > 0,
+        taskKind: 'voice-background',
+      });
+    } catch { /* ignore */ }
+
+    // Detectar tool calls emitidos como texto (modelos que no usan function calling nativo)
+    let effectiveToolCalls = result.toolCalls;
+    let effectiveText = result.text;
+    if (effectiveToolCalls.length === 0 && opts.maybeHasTextToolCall(result.text)) {
+      const parsed = opts.parseTextToolCalls(result.text);
+      if (parsed.found) {
+        effectiveToolCalls = parsed.toolCalls;
+        effectiveText = parsed.cleanedText;
+      }
+    }
+
+    // Si no hay tool calls, el LLM ya respondió → terminamos
+    if (effectiveToolCalls.length === 0) {
+      if (effectiveText && effectiveText.trim().length > 0) {
+        producedFinalText = effectiveText;
+      }
+      break;
+    }
+
+    // Agregar el mensaje del asistente con tool_calls al historial
+    messages.push({
+      role: 'assistant',
+      content: effectiveText || null,
+      tool_calls: effectiveToolCalls,
+    });
+
+    // Ejecutar cada tool call y agregar resultados
+    for (const tc of effectiveToolCalls) {
+      let args: Record<string, unknown> = {};
+      try {
+        args = JSON.parse(tc.function.arguments || '{}');
+      } catch { /* ignore parse errors */ }
+
+      const toolLabel = formatToolLabel(tc.function.name, args);
+      opts.onProgress?.(`${tc.function.name}: ${toolLabel}`);
+
+      const toolResult = await opts.dispatch(tc.function.name, args);
+      const llmResult = toolResult.ok
+        ? toolResult.output.slice(0, 4000)
+        : `ERROR: ${toolResult.error ?? 'unknown'}`;
+
+      messages.push({
+        role: 'tool',
+        tool_call_id: tc.id,
+        content: llmResult,
+      });
+    }
+
+    // Pequeña pausa para que el UI se actualice
+    await new Promise((r) => setTimeout(r, 50));
+  }
+
+  // Si el LLM nunca produjo texto final (sólo llamó tools), forzar respuesta
+  if (!producedFinalText.trim()) {
+    messages.push({
+      role: 'user',
+      content:
+        'Ya usaste las herramientas necesarias. Ahora DEBES responderme en texto plano:\n' +
+        '1) Un resumen breve de lo que hiciste.\n' +
+        '2) Los resultados principales.\n' +
+        'No intentes usar más herramientas. Responde directamente.',
+    });
+    try {
+      const finalResult = await streamChat(llm, modelId, messages, {
+        onDelta: (delta) => { producedFinalText += delta; },
+      });
+      producedFinalText = finalResult.text || producedFinalText;
+
+      // Limpiar tool calls text-based residuales
+      if (opts.maybeHasTextToolCall(producedFinalText)) {
+        const parsed = opts.parseTextToolCalls(producedFinalText);
+        if (parsed.found) {
+          producedFinalText = parsed.cleanedText;
+        }
+      }
+    } catch (e) {
+      producedOk = false;
+      producedFinalText = `Error generando respuesta final: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // Si todo falló y no hay texto, fallback
+  if (!producedFinalText.trim()) {
+    producedFinalText = 'La tarea terminó pero no pude generar un resumen. Revisa el chat para más detalles.';
+    producedOk = false;
+  }
+
+  return {
+    ok: producedOk,
+    summary: producedFinalText.slice(0, 800),
+  };
+}
+
+function formatToolLabel(toolName: string, args: Record<string, unknown>): string {
+  switch (toolName) {
+    case 'web_search':
+      return `buscando: "${args.query ?? args.q ?? ''}"`;
+    case 'web_fetch':
+      return `descargando: ${args.url ?? ''}`;
+    case 'shell_exec':
+      return `ejecutando: ${(args.command ?? '').toString().slice(0, 60)}`;
+    case 'file_read':
+      return `leyendo: ${args.path ?? ''}`;
+    case 'file_write':
+      return `escribiendo: ${args.path ?? ''}`;
+    case 'file_list':
+      return `listando: ${args.path ?? ''}`;
+    case 'save_file':
+      return `generando: ${args.filename ?? 'archivo'}`;
+    default:
+      if (toolName.startsWith('mcp__')) {
+        const parts = toolName.split('__');
+        return `MCP · ${parts[parts.length - 1]}`;
+      }
+      return toolName;
+  }
+}
+
+// --- Notificación natural (LLM-generated) -----------------------------------
+//
+// En lugar de hardcodear "Tarea completada: X", pedimos al LLM que genere
+// una notificación natural, conversacional, breve (1-3 frases), adecuada
+// para voz. El agente "responde" al usuario como lo haría un colega que
+// acaba de terminar una tarea.
+
+async function generateNaturalNotification(
+  llm: LLMProvider,
+  modelId: string,
+  originalObjective: string,
+  taskSummary: string,
+  ok: boolean,
+): Promise<string> {
+  // Si el taskSummary ya es conversacional y breve, usarlo directamente.
+  // Esto evita gastar tokens innecesariamente cuando la propia respuesta
+  // del task loop ya es adecuada.
+  if (ok && taskSummary.length > 0 && taskSummary.length < 220) {
+    // Heurística simple: si starts con "Ya", "Listo", "He ", "Terminé",
+    // "Encontré", asumimos que ya es una notificación natural.
+    const conversationalStarters = /^(ya|listo|he |terminé|encontré|aquí|hice|busqué|investigué|resumí|creé|generé|guardé|escribí|actualicé|eliminé|abr[ií]|ejecut[eé])/i;
+    if (conversationalStarters.test(taskSummary.trim())) {
+      return taskSummary;
+    }
+  }
+
+  const statusHint = ok
+    ? 'La tarea se completó con éxito.'
+    : 'La tarea falló o no se pudo completar totalmente.';
+
+  const messages: Message[] = [
+    {
+      role: 'system',
+      content:
+        'Eres Weaver en modo voz. Acabas de terminar una tarea en segundo plano ' +
+        'mientras conversabas con el usuario. Ahora debes AVISARLE que terminaste, ' +
+        'de forma NATURAL y BREVE (1-3 frases máx), como un colega que levanta la ' +
+        'voz para decir "ya terminé lo que me pediste".\n\n' +
+        'REGLAS:\n' +
+        '- No uses markdown. Texto plano hablado.\n' +
+        '- Empieza DIRECTAMENTE con la notificación (no digas "Notificación:").\n' +
+        '- Si la tarea tuvo éxito, menciona brevemente QUÉ encontraste/hiciste.\n' +
+        '- Si falló, di qué pasó y qué podría intentar el usuario.\n' +
+        '- No superes las 3 frases. Sé conciso.\n' +
+        '- Tono cercano, no robótico.',
+    },
+    {
+      role: 'user',
+      content:
+        `Tarea original que pedí: "${originalObjective.slice(0, 300)}"\n\n` +
+        `${statusHint}\n\n` +
+        `Resumen de lo que hice/encontré:\n${taskSummary.slice(0, 600)}\n\n` +
+        `Avisaeme naturalmente que terminaste.`,
+    },
+  ];
 
   try {
-    const llm = await createProvider(effProviderId, { apiKeyOverride: apiKey });
-    const result = await orchestrate(
-      {
-        objective,
-        context: `Weaver Live — tarea delegada por voz. Plataforma: ${runtime.isTauri ? 'Tauri' : 'navegador'}.`,
-        totalBudget: { maxSteps: 8, maxTokens: 12000, maxTimeMs: 120_000 },
-        allowRetry: true,
-        allowEscalation: false,
-      },
-      { provider: llm, model: effModelId },
-    );
-
-    const ok = result.status === 'succeeded';
-    const summary = result.finalResult.slice(0, 600);
-    voiceStore.setBackgroundTaskStatus(taskId, ok ? 'done' : 'failed', summary);
-
-    // Notificar por voz cuando termine
-    const shortSummary = summary.length > 200 ? summary.slice(0, 197) + '…' : summary;
-    const notifyMsg = ok
-      ? `Tarea completada: ${shortSummary}`
-      : `La tarea falló: ${shortSummary}`;
-    voiceStore.pushTurn({ role: 'system', text: notifyMsg, taskId });
-    // Las notificaciones de background también van al chat (como assistant, para que se vean)
-    syncToActiveChat('assistant', notifyMsg);
-    speak(notifyMsg);
-    opts.onBackgroundDone?.(taskId, shortSummary, ok);
+    const result = await streamChat(llm, modelId, messages, {});
+    const text = result.text.trim();
+    if (text) return text;
   } catch (e) {
-    const errMsg = e instanceof Error ? e.message : String(e);
-    voiceStore.setBackgroundTaskStatus(taskId, 'failed', undefined, errMsg);
-    const errorMsg = `Error en background: ${errMsg}`;
-    voiceStore.pushTurn({ role: 'system', text: errorMsg, taskId });
-    syncToActiveChat('assistant', errorMsg);
-    speak(`Error en la tarea delegada: ${errMsg}`);
-    opts.onBackgroundDone?.(taskId, errMsg, false);
+    console.warn('[Live] generateNaturalNotification failed, falling back:', e);
   }
+
+  // Fallback final (sólo si el LLM falló) — still better than hardcoded
+  return ok
+    ? `Listo, ya terminé. ${taskSummary.slice(0, 150)}`
+    : `No pude completar la tarea. ${taskSummary.slice(0, 150)}`;
 }
