@@ -420,6 +420,17 @@ export function Composer() {
       if (name && !mcpMentionedNames.includes(name)) mcpMentionedNames.push(name);
     }
 
+    // Detectar menciones @skill:<name> en el texto para inyectar el cuerpo de
+    // la skill en el system prompt. A diferencia de MCP (que carga tools), las
+    // skills son GUÍAS de procedimiento que el LLM debe seguir.
+    const skillMentionRegex = /@skill:([\w\- ]+)/g;
+    const skillMentionedNames: string[] = [];
+    let skillMatch: RegExpExecArray | null;
+    while ((skillMatch = skillMentionRegex.exec(objectiveText)) !== null) {
+      const name = skillMatch[1].trim();
+      if (name && !skillMentionedNames.includes(name)) skillMentionedNames.push(name);
+    }
+
     setValue('');
     clearDraftAttachments();
     setIsRunning(true);
@@ -462,7 +473,7 @@ export function Composer() {
         // tiene capacidades de agente de escritorio, incluso si la pregunta
         // no es directamente agentiva. Así puede responder "sí, puedo
         // ejecutar comandos" en lugar de "no puedo".
-        await runChatWithTools(llm, objectiveText, images, ac.signal, mcpMentionedNames);
+        await runChatWithTools(llm, objectiveText, images, ac.signal, mcpMentionedNames, skillMentionedNames);
       }
     } catch (e) {
       appendMessage({
@@ -483,6 +494,7 @@ export function Composer() {
     images: ImageContent[],
     signal: AbortSignal,
     mcpMentionedNames: string[] = [],
+    skillMentionedNames: string[] = [],
   ) {
     const { buildAdvancedToolsList, dispatchAdvancedTool } = await import('@/lib/tools');
     const { streamChat } = await import('@/lib/chain');
@@ -609,6 +621,102 @@ export function Composer() {
       }
     }
 
+    // ═══ Cargar catálogo de subagentes para disclosure en el system prompt ═══
+    // Esto le dice al LLM qué subagentes tiene disponibles para delegar con
+    // delegate_to_subagent. Sin esto, el LLM no sabría que tiene subagentes.
+    let subagentsContext = '';
+    try {
+      const { subagentRegistry } = await import('@/agent/subagent');
+      const subs = subagentRegistry.list();
+      if (subs.length > 0) {
+        subagentsContext =
+          '\n\n═══ SUBAGENTES DISPONIBLES ═══\n' +
+          'Tienes un equipo de subagentes especializados. Usa delegate_to_subagent para delegar\n' +
+          'subtareas a un subagente. Cada subagente tiene sus propias tools (restringidas), su propio\n' +
+          'system prompt y su propio presupuesto. Devuelve el resultado estructurado con evidencia.\n\n' +
+          'Úsalos cuando:\n' +
+          '- La tarea tiene un componente aislable (ej: "investiga X en internet", "lee estos 5 archivos").\n' +
+          '- Quieres que un especialista haga una parte (Web Researcher, File Reader, etc.).\n' +
+          '- Necesitas aislamiento de errores (si el subagente falla, no te afecta a ti).\n\n' +
+          'Catálogo:\n' +
+          subs.map((s) =>
+            `- ${s.name}: ${s.description} (tools: ${s.allowedTools.join(', ') || 'ninguna'})`,
+          ).join('\n') +
+          '\n\nPara delegar: delegate_to_subagent(objective="...", subagent_name="<nombre exacto>", context="...")\n' +
+          'Si omites subagent_name, se selecciona automáticamente por keyword match.\n';
+      }
+    } catch (e) {
+      console.warn('[Subagents] No se pudo cargar el catálogo:', e);
+    }
+
+    // ═══ Cargar bodies de skills mencionadas con @skill:<name> ═══
+    // A diferencia de MCP (que carga tools dinámicamente), las skills son GUÍAS
+    // de procedimiento — texto que se inyecta en el system prompt para que el
+    // LLM sepa cómo proceder. Sin esto, @skill: era un texto literal ignorado.
+    let skillsContext = '';
+    if (skillMentionedNames.length > 0) {
+      try {
+        const allSkills = await skillsRegistry.loadAll();
+        const matched = allSkills.filter((s) =>
+          skillMentionedNames.some((n) => n.toLowerCase() === s.name.toLowerCase()),
+        );
+        if (matched.length > 0) {
+          skillsContext =
+            '\n\n═══ SKILLS ACTIVAS PARA ESTE MENSAJE ═══\n' +
+            'El usuario mencionó @skill: lo que activa las siguientes skills. Úsalas como GUÍA\n' +
+            'de cómo proceder (no son tools, son instrucciones de procedimiento):\n\n' +
+            matched
+              .map(
+                (s) =>
+                  `── SKILL: ${s.name} ──\n` +
+                  `Descripción: ${s.description}\n` +
+                  `Triggers: ${s.triggers.join(', ') || '(ninguno)'}\n` +
+                  `Tools requeridas: ${s.toolsRequired.join(', ') || '(ninguna)'}\n` +
+                  `Contenido:\n${s.body}`,
+              )
+              .join('\n\n');
+        } else {
+          skillsContext =
+            '\n\n═══ SKILL NO ENCONTRADA ═══\n' +
+            `Mencionaste @skill: pero no hay skills con esos nombres. ` +
+            `Skills disponibles: ${allSkills.map((s) => s.name).join(', ') || 'ninguna'}.`;
+        }
+      } catch (e) {
+        console.warn('[Skills] No se pudieron cargar skills mencionadas:', e);
+      }
+    }
+
+    // ═══ Inyectar HISTORIAL de la conversación previa ═══
+    // Esto es CRÍTICO: sin esto, cada turno del usuario se envía al LLM como si
+    // fuera el inicio de un chat nuevo — el agente no recordaría ni la pregunta
+    // anterior. Leemos conv.messages, dejamos fuera el último user message (que
+    // ya se añade explícitamente abajo) y el placeholder assistant vacío que se
+    // acaba de añadir en línea 491. Ventaneamos a los últimos 20 mensajes para
+    // no inflar el contexto.
+    const priorMsgs: Message[] = [];
+    try {
+      const wState = useWeaver.getState();
+      const conv = wState.conversations.find((c) => c.id === wState.activeConversationId);
+      if (conv) {
+        // conv.messages = [...prev, userMsgJustAdded, assistantPlaceholderEmpty]
+        const cutoff = conv.messages.length - 2;
+        const hist = cutoff > 0 ? conv.messages.slice(0, cutoff) : [];
+        const windowed = hist.slice(-20); // últimos 20 mensajes
+        for (const m of windowed) {
+          if (m.role !== 'user' && m.role !== 'assistant') continue;
+          if (m.content === null) continue;
+          if (m.role === 'assistant' && m.content.trim() === '') continue;
+          priorMsgs.push({
+            role: m.role,
+            content: m.content,
+            ...(m.images && m.images.length > 0 ? { images: m.images } : {}),
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('[Chat History] No se pudo cargar historial previo:', e);
+    }
+
     const messages: Message[] = [
       {
         role: 'system',
@@ -624,7 +732,10 @@ export function Composer() {
           '- Buscar en internet (web_search)\n' +
           '- Descargar contenido de URLs (web_fetch)\n' +
           '- Generar archivos descargables (save_file)\n' +
+          '- Renderizar HTML o PDF dentro del chat en una mini-ventana (render_html, render_pdf)\n' +
           '- Crear notas/tareas/eventos en el espacio personal del usuario (me_create_*)\n' +
+          '- Recordar hechos clave sobre el usuario/proyecto con memory_save_fact / memory_list_facts / memory_delete_fact\n' +
+          '- Delegar subtareas a subagentes especializados (delegate_to_subagent)\n' +
           '- Construir un Grafo Cognitivo del proyecto (cognitive_graphify, cognitive_query)\n' +
           '- Usar tools de servidores MCP externos cuando el usuario las mencione con @mcp:\n\n' +
           '═══ MCP (Model Context Protocol) ═══\n' +
@@ -635,7 +746,9 @@ export function Composer() {
           'Si el usuario NO menciona @mcp:, las tools MCP NO están disponibles — no intentes usarlas.\n' +
           'Si el usuario menciona @mcp: pero no hay tools cargadas, informa del problema y continúa.\n' +
           mcpServersInfo +
-          mcpUnavailableHint + '\n\n' +
+          mcpUnavailableHint +
+          subagentsContext +
+          skillsContext + '\n\n' +
           '═══ COMPORTAMIENTO PROACTIVO Y AUTÓNOMO ═══\n' +
           'Eres un agente AUTÓNOMO. Esto significa:\n' +
           '1. NUNCA te rindas al primer error. Si algo falla, intenta una alternativa.\n' +
@@ -655,7 +768,15 @@ export function Composer() {
           '- web_search ya devuelve un resumen. Úsalo directamente.\n' +
           '- Si web_fetch falla, no insistas. Usa web_search.\n' +
           '- Para crear archivos que el usuario descargue, usa save_file (no file_write).\n' +
-          '- Máximo 1 intento de web_fetch por URL.\n\n' +
+          '- Máximo 1 intento de web_fetch por URL.\n' +
+          '- RENDERIZAR EN EL CHAT: Si el usuario te pide renderizar, mostrar, previsualizar o ver\n' +
+          '  HTML (dashboards, portafolios, prototipos, tablas interactivas, animaciones) DENTRO del\n' +
+          '  chat, usa render_html — NO uses file_write ni save_file. file_write y save_file sólo\n' +
+          '  guardan en disco; render_html es lo ÚNICO que abre la mini-ventana con iframe en el chat.\n' +
+          '  Triggers: "renderiza", "muéstrame el HTML", "previsualiza", "abre en el chat", "visualiza".\n' +
+          '  Si el usuario dice "crea un HTML y renderízalo", USA render_html (no file_write).\n' +
+          '- DELEGAR: Para tareas complejas con sub-componentes aislables, considera delegate_to_subagent\n' +
+          '  antes de hacerlo todo tú mismo. Los subagentes son especialistas con su propio presupuesto.\n\n' +
           '═══ REGLA CRÍTICA SOBRE "MI" / "ME" ═══\n' +
           '"MI" (también llamada "ME" en las tools) es la sección PERSONAL DEL USUARIO ' +
           'dentro de Weaver: SUS notas, SUS tareas, SU calendario, SU lista de la compra, ' +
@@ -721,6 +842,7 @@ export function Composer() {
           'Cuando el usuario te pida algo, ÚSALAS LAS HERRAMIENTAS. No digas que no puedes.\n' +
           'Si tu respuesta se acerca al límite de tokens, termina con <<CONTINUE>>. Al terminar del todo, emite <<END>>.',
       },
+      ...priorMsgs,
       { role: 'user', content: userText, images: images.length > 0 ? images : undefined },
     ];
 
@@ -902,6 +1024,10 @@ export function Composer() {
         return `renderizando HTML: "${args.title ?? 'sin título'}"`;
       case 'render_pdf':
         return `renderizando PDF: "${args.title ?? 'sin título'}"`;
+      case 'delegate_to_subagent':
+        return args.subagent_name
+          ? `delegando a subagente: ${args.subagent_name}`
+          : `delegando a subagente (auto-selección)`;
       default:
         // Tools MCP con prefijo mcp__<serverId>__<toolName>
         if (toolName.startsWith('mcp__')) {

@@ -291,6 +291,29 @@ export const ADVANCED_TOOLS: ToolDef[] = [
       limit: { type: 'number', description: 'Máximo de resultados (default 50)' },
     },
   },
+  // ===================== Subagentes (delegación) =====================
+  // Permite al LLM delegar subtareas a subagentes especializados. Cada
+  // subagente tiene sus propias tools, su propio system prompt y su propio
+  // presupuesto. El orquestador selecciona el subagente por keyword match
+  // si no se especifica subagent_name.
+  {
+    name: 'delegate_to_subagent',
+    description:
+      'Delega una subtarea a un subagente especializado del catálogo. El subagente tiene su propio ' +
+      'set de tools restringido, su propio system prompt y su propio presupuesto. Devuelve el resultado ' +
+      'estructurado del subagente con evidencia.\n' +
+      'Úsalo cuando:\n' +
+      '- La tarea tiene un componente aislable (ej: "investiga X en internet y resume", "lee estos 5 archivos y extrae Y").\n' +
+      '- Quieres que un especialista haga una parte (Web Researcher, File Reader, Email Summarizer, etc.).\n' +
+      '- Necesitas aislamiento de errores (si el subagente falla, no te afecta).\n' +
+      'Si no especificas subagent_name, se selecciona automáticamente por keyword match en el objetivo.',
+    category: 'automation',
+    parameters: {
+      objective: { type: 'string', description: 'Objetivo claro y autosuficiente del subagente (ej: "investiga los 3 mejores frameworks de Rust para web en 2025 y devuelve URLs")' },
+      subagent_name: { type: 'string', description: 'Nombre exacto del subagente del catálogo (opcional — si omitido, se selecciona automáticamente por keyword match)' },
+      context: { type: 'string', description: 'Contexto adicional para el subagente (opcional)' },
+    },
+  },
 ];
 
 /** Lista de tools para exponer al LLM (formato OpenAI function calling). */
@@ -300,6 +323,7 @@ export function buildAdvancedToolsList() {
     'description', 'location', 'calendar_id', 'all_day', 'priority', 'due_ts', 'list_id',
     'from_ts', 'to_ts', 'notes', 'qty', 'category', 'title',
     'search', 'by_kind', 'neighbors', 'from', 'to', 'stats', 'limit', 'root_path',
+    'subagent_name', 'context',
   ]);
   return ADVANCED_TOOLS.map((t) => ({
     type: 'function' as const,
@@ -375,6 +399,8 @@ export async function dispatchAdvancedTool(
         return await cognitiveGraphify(args);
       case 'cognitive_query':
         return await cognitiveQuery(args);
+      case 'delegate_to_subagent':
+        return await delegateToSubagent(args);
       default:
         // Tools MCP con prefijo mcp__<serverId>__<toolName>.
         if (name.startsWith('mcp__')) {
@@ -1225,6 +1251,89 @@ async function cognitiveQuery(args: Record<string, unknown>): Promise<ToolExecRe
       }
     }
     return { ok: true, output: lines.join('\n') };
+  } catch (e) {
+    return { ok: false, output: '', error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+// ============================================================================
+// delegate_to_subagent — delega a un subagente del catálogo vía orchestrator
+// ============================================================================
+
+async function delegateToSubagent(args: Record<string, unknown>): Promise<ToolExecResult> {
+  const objective = String(args.objective ?? '').trim();
+  if (!objective) {
+    return { ok: false, output: '', error: 'Falta el parámetro "objective".' };
+  }
+  const subagentName = args.subagent_name ? String(args.subagent_name).trim() : '';
+  const contextStr = args.context ? String(args.context) : '';
+
+  try {
+    const { useWeaver } = await import('@/store/weaver');
+    const { createProvider } = await import('@/providers');
+    const { orchestrate, formatExecutionTree } = await import('@/agent/orchestrator');
+    const { subagentRegistry } = await import('@/agent/subagent');
+
+    const state = useWeaver.getState();
+    const providerId = state.providerId;
+    const modelId = state.modelId;
+    if (!providerId || !modelId) {
+      return {
+        ok: false,
+        output: '',
+        error: 'No hay provider/modelo configurado. Configúralo en Ajustes.',
+      };
+    }
+
+    const llm = await createProvider(providerId);
+
+    // Si el usuario especificó un subagente por nombre, validar que existe.
+    if (subagentName) {
+      const all = subagentRegistry.list();
+      const found = all.find((s) => s.name.toLowerCase() === subagentName.toLowerCase());
+      if (!found) {
+        return {
+          ok: false,
+          output: '',
+          error:
+            `Subagente "${subagentName}" no encontrado. ` +
+            `Disponibles: ${all.map((s) => s.name).join(', ') || '(ninguno)'}`,
+        };
+      }
+    }
+
+    const result = await orchestrate(
+      {
+        objective,
+        context: contextStr,
+        totalBudget: { maxSteps: 8, maxTokens: 20_000, maxTimeMs: 120_000 },
+        allowRetry: true,
+        allowEscalation: false,
+      },
+      { provider: llm, model: modelId },
+    );
+
+    const treeText = formatExecutionTree(result.tree);
+    const evidenceText = result.evidence.length
+      ? result.evidence
+          .slice(0, 5)
+          .map((e) => `  · [${e.subagentName}] ${e.label}: ${e.content.slice(0, 200)}`)
+          .join('\n')
+      : '(sin evidencia)';
+
+    const output =
+      `Estado: ${result.status}\n` +
+      `Subagente(s) usado(s): ${result.tree.map((n) => n.subagentName).join(', ') || '(ninguno)'}\n` +
+      `Costo total: ${result.totalCost.inputTokens + result.totalCost.outputTokens} tokens · ${result.totalCost.steps} pasos · ${result.totalCost.elapsedMs}ms\n\n` +
+      `═══ RESULTADO ═══\n${result.finalResult}\n\n` +
+      `═══ EVIDENCIA ═══\n${evidenceText}\n\n` +
+      `═══ ÁRBOL DE EJECUCIÓN ═══\n${treeText}`;
+
+    return {
+      ok: result.status === 'succeeded',
+      output,
+      error: result.status === 'succeeded' ? undefined : `El subagente terminó con estado: ${result.status}`,
+    };
   } catch (e) {
     return { ok: false, output: '', error: e instanceof Error ? e.message : String(e) };
   }
