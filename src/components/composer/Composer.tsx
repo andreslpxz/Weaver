@@ -20,6 +20,7 @@ import {
   Network,
   X,
   Settings as SettingsIcon,
+  BookMarked,
 } from 'lucide-react';
 import { useWeaver } from '@/store/weaver';
 import { getProvider, PROVIDERS } from '@/providers/registry';
@@ -88,9 +89,11 @@ export function Composer() {
     planMode,
     pursueObjective,
     cognitiveMode,
+    chatMemoryMode,
     setPlanMode,
     setPursueObjective,
     setCognitiveMode,
+    setChatMemoryMode,
     projects,
     setView,
     view,
@@ -487,6 +490,25 @@ export function Composer() {
 
     appendMessage({ role: 'assistant', content: '', id: newMsgId(), ts: Date.now() });
 
+    // --- Cargar memoria semántica del agente para inyectar en el contexto ---
+    // Esto permite que el agente "recuerde" al usuario y proyectos pasados.
+    // Si la memoria está vacía, no se añade nada (se indica en el system prompt).
+    let memoryContext = '';
+    try {
+      const { memory } = await import('@/agent/memory');
+      const facts = await memory.listFacts();
+      if (facts.length > 0) {
+        // Limitar a los 30 hechos más recientes para no inflar el prompt.
+        const recent = facts.slice(-30);
+        memoryContext = recent
+          .map((f) => `- ${f.key}: ${f.value}`)
+          .join('\n');
+      }
+    } catch (e) {
+      console.warn('[Chat] No se pudo cargar memoria para contexto:', e);
+    }
+    const chatMemoryMode = useWeaver.getState().chatMemoryMode;
+
     // Detectar OS para que el LLM use comandos correctos (dir vs ls, etc.)
     const isWindows = typeof navigator !== 'undefined' && navigator.platform.toLowerCase().includes('win');
     const osName = isWindows ? 'Windows' : runtime.isTauri ? 'Linux/macOS' : 'navegador';
@@ -641,12 +663,52 @@ export function Composer() {
           '- NUNCA uses me_create_note / me_create_task / me_create_event / me_add_shopping / ' +
           'me_log_health para registrar cosas sobre ti mismo (tus capacidades, tu estado, ' +
           'tus reflexiones, tu memoria, etc.). Esos datos van al USUARIO, no a ti.\n' +
-          '- SÓLO usa estas tools cuando el USUARIO te pida explícitamente algo como: ' +
-          '"anota en MI…", "agrega a mi lista…", "recuérdame…", "pon en mi calendario…", ' +
-          '"apunta en mi lista de la compra…", "registra mi peso…".\n' +
+          '- Usa estas tools cuando el usuario te pida EXPLÍCITA O IMPLÍCITAMENTE ' +
+          'recordar/anotar/guardar algo PARA ÉL en sus espacios personales. Triggers ' +
+          'válidos (lista NO exhaustiva — ante la duda razonable, USA la tool):\n' +
+          '  · "anota en MI…", "agrega a mi lista…", "recuérdame…", "pon en mi calendario…",\n' +
+          '  · "apunta en mi lista de la compra…", "registra mi peso…"\n' +
+          '  · "guarda esto: X" (si X es una nota/tarea/evento, va a MI)\n' +
+          '  · "recuerda que…", "anota", "apunta", "guárdame"\n' +
+          '  · "no te olvides de X"\n' +
           '- Si el usuario pregunta "¿qué puedes hacer?" o "¿quién eres?", RESPONDE en el ' +
           'chat directamente. NO crees una nota en MI con la respuesta.\n' +
-          '- Tu propia memoria/estado como agente se gestiona internamente, no en MI.\n\n' +
+          '- Tu propia memoria/estado como agente se gestiona con memory_save_fact (ver abajo).\n\n' +
+          '═══ MEMORIA DEL AGENTE (chat memory) ═══\n' +
+          'Tienes una MEMORIA PROPIA semántica con tres tools:\n' +
+          '- memory_save_fact(key, value): guarda un hecho breve para recordar en futuros chats.\n' +
+          '- memory_list_facts(): lista todo lo que recuerdas.\n' +
+          '- memory_delete_fact(key): olvida un hecho específico.\n\n' +
+          'USA memory_save_fact ACTIVAMENTE cuando el usuario comparta información que valga ' +
+          'la pena recordar en futuras conversaciones. Ejemplos:\n' +
+          '  · "me llamo John"           → memory_save_fact("user:name", "John")\n' +
+          '  · "trabajo como ingeniero"  → memory_save_fact("user:job", "Ingeniero")\n' +
+          '  · "prefiero respuestas cortas" → memory_save_fact("user:pref", "respuestas cortas")\n' +
+          '  · "hablo español"           → memory_save_fact("user:lang", "es")\n' +
+          '  · "ya configuré el deploy"  → memory_save_fact("project:deploy", "configurado")\n' +
+          '  · "mi cumple es el 15 de marzo" → memory_save_fact("user:birthday", "15 de marzo")\n' +
+          '  · "no me uses markdown"     → memory_save_fact("user:no_markdown", "true")\n\n' +
+          'Cuando el usuario diga "guarda esto: X" o "recuerda que X" o "anota X" o similar,\n' +
+          'DECIDE si X es una nota/tarea/evento (→ va a MI con me_create_*) o un hecho breve ' +
+          'sobre el usuario/proyecto (→ va a chat memory con memory_save_fact). Por defecto,\n' +
+          'si es info personal como nombre/profesión/gustos/preferencias, usa memory_save_fact.\n\n' +
+          'Cuando el usuario te pregunte "¿qué recuerdas de mí?", "¿qué tienes en tu memoria?",\n' +
+          '"¿qué sabes sobre mí?", usa memory_list_facts() para responder con la verdad — NO ' +
+          'inventes. Si la memoria está vacía, dilo honestamente.\n\n' +
+          'Cuando el usuario te pida "olvida X" / "borra Y de tu memoria", usa memory_delete_fact.\n\n' +
+          (chatMemoryMode
+            ? 'MODO MEMORIA CHAT ACTIVO: vas a guardar AUTOMÁTICAMENTE hechos clave que notes ' +
+              'en la conversación (sin que el usuario te lo pida). Si el usuario menciona su ' +
+              'nombre, profesión, preferencias, proyectos, decisiones importantes, instrucciones ' +
+              'de uso — llama memory_save_fact de forma proactiva. No anuncies que lo estás ' +
+              'haciendo, simplemente hazlo y responde al usuario normalmente.\n\n'
+            : 'Memoria chat está desactivada — sólo guarda hechos cuando el usuario te lo pida ' +
+              'explícitamente ("guarda X", "recuerda Y").\n\n') +
+          '═══ CONTEXTO RECUPERADO DE TU MEMORIA ═══\n' +
+          (memoryContext || '(memoria vacía — aún no has guardado ningún hecho)') + '\n\n' +
+          'Usa este contexto PARA PERSONALIZAR tus respuestas (ej: si sabes su nombre, ' +
+          'úsalo; si sabes su profesión, adapta el nivel técnico; si sabes sus preferencias, ' +
+          'respétalas). NUNCA digas "según mi memoria…", simplemente úsala naturalmente.\n\n' +
           '═══ CIERRE OBLIGATORIO ═══\n' +
           'Cuando termines de usar herramientas, SIEMPRE debes escribir una respuesta\n' +
           'final al usuario con esta estructura:\n' +
@@ -1197,6 +1259,21 @@ export function Composer() {
                     <ToggleSwitch on={cognitiveMode} />
                   </button>
 
+                  {/* Memoria Chat (toggle) */}
+                  <button
+                    onClick={() => setChatMemoryMode(!chatMemoryMode)}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
+                  >
+                    <BookMarked size={15} className={chatMemoryMode ? 'text-accent' : 'text-text-muted shrink-0'} />
+                    <div className="flex-1">
+                      <div className="font-medium">Memoria chat</div>
+                      <div className="text-[10px] text-text-muted">
+                        Recuerda nombre, gustos y contexto entre chats (memoria infinita)
+                      </div>
+                    </div>
+                    <ToggleSwitch on={chatMemoryMode} />
+                  </button>
+
                   {/* Separador */}
                   <div className="border-t border-border" />
 
@@ -1244,6 +1321,11 @@ export function Composer() {
             {cognitiveMode && (
               <span className="hidden md:inline-flex text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent border border-accent/30 items-center gap-1">
                 <Network size={9} /> Cognitivo
+              </span>
+            )}
+            {chatMemoryMode && (
+              <span className="hidden md:inline-flex text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent border border-accent/30 items-center gap-1">
+                <BookMarked size={9} /> Memoria
               </span>
             )}
 

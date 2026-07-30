@@ -44,6 +44,7 @@ import {
   Puzzle,
   Cog,
   Sparkles,
+  BookMarked,
 } from 'lucide-react';
 import { formatSize } from '@/lib/attachments';
 
@@ -886,6 +887,10 @@ function getToolIcon(toolName: string) {
       return <ShoppingCart size={size} />;
     case 'me_log_health':
       return <Heart size={size} />;
+    case 'memory_save_fact':
+    case 'memory_list_facts':
+    case 'memory_delete_fact':
+      return <BookMarked size={size} />;
     default:
       return <Download size={size} />;
   }
@@ -917,6 +922,10 @@ function getToolColor(toolName: string): string {
       return '#f59e0b';
     case 'me_log_health':
       return '#ef4444';
+    case 'memory_save_fact':
+    case 'memory_list_facts':
+    case 'memory_delete_fact':
+      return '#22d3ee';
     default:
       return 'var(--text-muted)';
   }

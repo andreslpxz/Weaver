@@ -162,9 +162,18 @@ interface WeaverState {
    * Requiere Tauri para escanear archivos.
    */
   cognitiveMode: boolean;
+  /**
+   * Memoria Chat: el agente guarda automáticamente hechos clave durante la
+   * conversación (nombre del usuario, preferencias, decisiones, lo que ya
+   * hizo). Es una "memoria infinita" que se inyecta en el contexto de
+   * futuros chats para que el agente recuerde al usuario y proyectos pasados.
+   * Uses `memory.setFact()` from @/agent/memory (semantic agent memory).
+   */
+  chatMemoryMode: boolean;
   setPlanMode: (v: boolean) => void;
   setPursueObjective: (v: boolean) => void;
   setCognitiveMode: (v: boolean) => void;
+  setChatMemoryMode: (v: boolean) => void;
 
   // --- Regeneración de mensajes ---
   regenerateMessage: (messageId: string) => Promise<void>;
@@ -882,9 +891,11 @@ export const useWeaver = create<WeaverState>((set, get) => ({
   planMode: false,
   pursueObjective: true,
   cognitiveMode: false,
+  chatMemoryMode: true,
   setPlanMode: (v) => set({ planMode: v }),
   setPursueObjective: (v) => set({ pursueObjective: v }),
   setCognitiveMode: (v) => set({ cognitiveMode: v }),
+  setChatMemoryMode: (v) => set({ chatMemoryMode: v }),
 
   // --- Regeneración ---
   regenerateMessage: async (messageId) => {

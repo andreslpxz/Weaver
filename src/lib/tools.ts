@@ -184,6 +184,55 @@ export const ADVANCED_TOOLS: ToolDef[] = [
       notes: { type: 'string', description: 'Notas opcionales' },
     },
   },
+  // ===================== Memoria del AGENTE (chat memory) =====================
+  // Esta es la MEMORIA PROPIA DEL AGENTE — hechos clave que vale la pena
+  // recordar en futuras conversaciones (nombre del usuario, preferencias,
+  // decisiones, contexto de proyectos, instrucciones de uso). Se inyecta
+  // automáticamente en el system prompt de cada chat cuando chatMemoryMode
+  // está activo. Es DISTINTA de "MI"/"ME" — esa es la sección personal del
+  // usuario (notas, tareas, calendario, salud, compra). Esta es la memoria
+  // semántica del agente sobre el usuario y la relación con él.
+  {
+    name: 'memory_save_fact',
+    description:
+      'Guarda un hecho en tu memoria semántica (chat memory) para recordarlo en futuras conversaciones. ' +
+      'Úsalo ACTIVAMENTE cuando el usuario comparta información personal, preferencias, contexto, ' +
+      'instrucciones o decisiones que valga la pena recordar: nombre, profesión, gustos, fechas ' +
+      'importantes, reglas de funcionamiento, idioma preferido, proyectos en curso, lo que ya ' +
+      'hiciste por él, etc. También ÚSALO cuando el usuario te pida explícitamente "guarda esto", ' +
+      '"recuerda que", "anota", "apunta", "memoriza", "no te olvides de" — aunque no mencione "MI".\n' +
+      'Para notas largas con título/formateo, usa me_create_note en su lugar.\n' +
+      'Ejemplos de uso:\n' +
+      '- User dice "me llamo John" → memory_save_fact(key="user:name", value="John")\n' +
+      '- User dice "prefiero que me hables en tú, no en usted" → memory_save_fact(key="user:tuteo", value="true")\n' +
+      '- User dice "trabajo como ingeniero en Google" → memory_save_fact(key="user:job", value="Ingeniero en Google")\n' +
+      '- User dice "ya configuré el deploy en Vercel" → memory_save_fact(key="project:deploy", value="Vercel configurado")',
+    category: 'fs',
+    parameters: {
+      key: { type: 'string', description: 'Clave corta y única en formato namespace:nombre (ej: "user:name", "user:preferred_language", "user:birthday", "project:status"). Si la clave ya existe, se sobrescribe.' },
+      value: { type: 'string', description: 'Valor del hecho. Breve (1-2 frases). Para cosas más largas usa me_create_note.' },
+    },
+  },
+  {
+    name: 'memory_list_facts',
+    description:
+      'Lista todos los hechos guardados en tu memoria semántica (chat memory). ' +
+      'Úsalo cuando el usuario te pregunte "¿qué recuerdas de mí?", "¿qué tienes en tu memoria?", ' +
+      '"¿qué sabes sobre mí?", o quieras refrescar tu memoria antes de responder.',
+    category: 'fs',
+    parameters: {},
+  },
+  {
+    name: 'memory_delete_fact',
+    description:
+      'Elimina un hecho específico de tu memoria semántica por su clave. ' +
+      'Úsalo cuando el usuario te pida "olvida X", "borra lo que guardaste sobre Y", ' +
+      '"ya no quiero que recuerdes Z".',
+    category: 'fs',
+    parameters: {
+      key: { type: 'string', description: 'Clave del hecho a eliminar (ej: "user:name")' },
+    },
+  },
   {
     name: 'render_html',
     description:
@@ -312,6 +361,12 @@ export async function dispatchAdvancedTool(
         return await meAddShopping(args);
       case 'me_log_health':
         return await meLogHealth(args);
+      case 'memory_save_fact':
+        return await memorySaveFact(args);
+      case 'memory_list_facts':
+        return await memoryListFacts();
+      case 'memory_delete_fact':
+        return await memoryDeleteFact(args);
       case 'render_html':
         return await renderHtml(args);
       case 'render_pdf':
@@ -489,6 +544,53 @@ async function meLogHealth(args: Record<string, unknown>): Promise<ToolExecResul
   };
   await useWeaver.getState().upsertMeHealth(h);
   return { ok: true, output: `Registro de salud añadido: ${kind} = ${h.value}${h.unit ? ' ' + h.unit : ''}` };
+}
+
+// ============================================================================
+// Memoria del AGENTE (chat memory) — hechos semánticos que el agente recuerda
+// sobre el usuario y sus proyectos en futuras conversaciones.
+// Uses @/agent/memory (SQLite in Tauri, localStorage fallback in browser).
+// ============================================================================
+
+async function memorySaveFact(args: Record<string, unknown>): Promise<ToolExecResult> {
+  const { memory } = await import('@/agent/memory');
+  const key = String(args.key ?? '').trim();
+  const value = String(args.value ?? '').trim();
+  if (!key) return { ok: false, output: '', error: 'memory_save_fact requiere "key"' };
+  if (!value) return { ok: false, output: '', error: 'memory_save_fact requiere "value"' };
+  await memory.setFact(key, value, 'agent');
+  return {
+    ok: true,
+    output: `Hecho guardado en memoria: ${key} = ${value.slice(0, 80)}${value.length > 80 ? '…' : ''}`,
+  };
+}
+
+async function memoryListFacts(): Promise<ToolExecResult> {
+  const { memory } = await import('@/agent/memory');
+  const facts = await memory.listFacts();
+  if (facts.length === 0) {
+    return { ok: true, output: 'Memoria vacía. Aún no has guardado ningún hecho.' };
+  }
+  const lines = facts.map((f) => `- ${f.key}: ${f.value}`);
+  return {
+    ok: true,
+    output: `Memoria del agente (${facts.length} hechos):\n${lines.join('\n')}`,
+  };
+}
+
+async function memoryDeleteFact(args: Record<string, unknown>): Promise<ToolExecResult> {
+  const { memory } = await import('@/agent/memory');
+  const key = String(args.key ?? '').trim();
+  if (!key) return { ok: false, output: '', error: 'memory_delete_fact requiere "key"' };
+  const existingValue = await memory.getFact(key);
+  if (!existingValue) {
+    return { ok: true, output: `No había ningún hecho con la clave "${key}".` };
+  }
+  await memory.deleteFact(key);
+  return {
+    ok: true,
+    output: `Hecho eliminado de memoria: ${key} (era: ${existingValue.slice(0, 80)})`,
+  };
 }
 
 // ============================================================================

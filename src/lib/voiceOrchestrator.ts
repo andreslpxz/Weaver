@@ -78,10 +78,88 @@ const BACKGROUND_PATTERNS = [
 ];
 
 export interface VoiceIntent {
-  kind: 'chat' | 'background' | 'stop' | 'cancel_background' | 'clear';
+  kind: 'chat' | 'background' | 'stop' | 'cancel_background' | 'clear' | 'memory_save' | 'memory_query' | 'memory_delete';
   text: string;
   /** Solo para background: label corto para la UI. */
   taskLabel?: string;
+  /** Para memory_save: el hecho a guardar (key, value inferidos). */
+  memoryFact?: { key: string; value: string };
+  /** Para memory_delete: la clave a eliminar. */
+  memoryKey?: string;
+}
+
+// --- Detección de memoria (save / query / delete) --------------------------
+//
+// En Modo Live NO tenemos tools disponibles (el LLM no puede llamar
+// memory_save_fact directamente), así que interceptamos patrones obvios
+// y guardamos/recuperamos/eliminamos directamente desde el orchestrator.
+// Esto es best-effort — el LLM sigue siendo quien responde al usuario,
+// pero la acción de persistencia la hacemos nosotros por él.
+
+// Patrones para detectar "guarda esto: X" / "recuerda que X" / "anota X"
+// donde X es información breve sobre el usuario o un proyecto.
+const MEMORY_SAVE_PATTERNS = [
+  // "guarda esto: X" / "guárdame X" / "guarda en memoria X"
+  /^(?:guarda|guárdame|guardar)\s+(?:esto\s*[:：]?\s*|en\s+memoria\s*[:：]?\s*|que\s+|el\s+siguiente\s*[:：]?\s*)(.+)/i,
+  // "recuerda que X" / "recuérdame X" / "recuerda X"
+  /^(?:recuerda|recuérdame|recordar)\s+(?:que\s+)?(.+)/i,
+  // "anota X" / "apunta X" / "memoriza X"
+  /^(?:anota|apunta|memoriza)\s+(?:que\s+|esto\s*[:：]?\s*)?(.+)/i,
+  // "no te olvides de X"
+  /^no\s+te\s+olvides\s+de\s+(?:que\s+)?(.+)/i,
+  // "mi nombre es X" → user:name
+  /^mi\s+nombre\s+es\s+([A-ZÁÉÍÓÚÑa-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑa-záéíóúñ]+)?)/i,
+  // "me llamo X" → user:name
+  /^me\s+llamo\s+([A-ZÁÉÍÓÚÑa-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑa-záéíóúñ]+)?)/i,
+  // "soy X" (si X parece un nombre propio)
+  /^soy\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)?)/i,
+];
+
+// Patrones para detectar "¿qué recuerdas?" / "¿qué tienes en tu memoria?"
+const MEMORY_QUERY_PATTERNS = [
+  /\b(?:qu[eé]\s+(?:recuerdas|tienes|sabes))\s+(?:de\s+mi|sobre\s+mi|en\s+tu\s+memoria)?\b/i,
+  /\b(?:qu[eé]\s+tienes)\s+en\s+(?:tu\s+)?memoria\b/i,
+  /\b(?:qu[eé]\s+sabes)\s+(?:de\s+mi|sobre\s+mi)\b/i,
+  /\bmi\s+memoria\b/i,
+];
+
+// Patrones para detectar "olvida X" / "borra Y de tu memoria"
+const MEMORY_DELETE_PATTERNS = [
+  /^(?:olvida|borra|elimina)\s+(?:de\s+tu\s+memoria\s+)?(?:todo\s+lo\s+que\s+sabes\s+de\s+)?(?:sobre\s+)?(.+)/i,
+];
+
+/**
+ * Intenta inferir una clave semántica para un hecho a partir del texto.
+ * Ej: "me llamo John" → user:name; "trabajo como ingeniero" → user:job
+ */
+function inferMemoryKey(text: string): { key: string; value: string } | null {
+  const t = text.trim();
+
+  // Nombre
+  let m = t.match(/^(?:me\s+llamo|mi\s+nombre\s+es|soy)\s+(.+)$/i);
+  if (m) return { key: 'user:name', value: m[1].trim() };
+
+  // Profesión / trabajo
+  m = t.match(/^(?:trabajo\s+como|soy)\s+(?:un|una|el|la)?\s*(.+?)(?:\s+en\s+(.+))?$/i);
+  if (m) {
+    const job = m[2] ? `${m[1]} en ${m[2]}` : m[1];
+    return { key: 'user:job', value: job.trim() };
+  }
+
+  // Idioma preferido
+  m = t.match(/^(?:hablo|prefiero\s+hablar\s+en)\s+(español|inglés|francés|alemán|italiano|portugués|chino|japon[eé]s)/i);
+  if (m) return { key: 'user:language', value: m[1].toLowerCase() };
+
+  // Cumpleaños
+  m = t.match(/^(?:mi\s+cumple(?:años)?\s+es|nací\s+el)\s+(.+)$/i);
+  if (m) return { key: 'user:birthday', value: m[1].trim() };
+
+  // Preferencia genérica: "prefiero X"
+  m = t.match(/^prefiero\s+(?:que\s+)?(.+)$/i);
+  if (m) return { key: 'user:preference', value: m[1].trim() };
+
+  // Default: genérico
+  return { key: `user:fact:${Date.now().toString(36)}`, value: t };
 }
 
 export function classifyIntent(text: string): VoiceIntent {
@@ -93,6 +171,31 @@ export function classifyIntent(text: string): VoiceIntent {
     return { kind: 'cancel_background', text };
   if (/^(limpia|borra)\s+(la\s+)?(?:conversaci[oó]n|transcripci[oó]n)\b/i.test(t))
     return { kind: 'clear', text };
+
+  // Memoria: query (antes que save para no confundir "¿qué recuerdas?" con "recuerda X")
+  for (const re of MEMORY_QUERY_PATTERNS) {
+    if (re.test(text)) return { kind: 'memory_query', text };
+  }
+
+  // Memoria: delete
+  for (const re of MEMORY_DELETE_PATTERNS) {
+    const m = text.match(re);
+    if (m) {
+      return { kind: 'memory_delete', text, memoryKey: m[1].trim() };
+    }
+  }
+
+  // Memoria: save
+  for (const re of MEMORY_SAVE_PATTERNS) {
+    const m = text.match(re);
+    if (m) {
+      const factText = m[1] || m[0];
+      const inferred = inferMemoryKey(factText);
+      if (inferred) {
+        return { kind: 'memory_save', text, memoryFact: inferred };
+      }
+    }
+  }
 
   // Background
   for (const re of BACKGROUND_PATTERNS) {
@@ -107,8 +210,29 @@ export function classifyIntent(text: string): VoiceIntent {
 }
 
 // --- System prompt para Live ------------------------------------------------
+//
+// El system prompt se construye dinámicamente con `buildLiveSystemPrompt()`
+// para inyectar el contexto de chat memory (hechos recordados del usuario)
+// en cada turno. Esto permite que el Modo Live también "recuerde" al usuario
+// y proyectos pasados.
 
-const LIVE_SYSTEM_PROMPT = `Eres Weaver en Modo Live — una conversación de voz bidireccional en español.
+async function buildLiveSystemPrompt(): Promise<string> {
+  // Cargar hechos de chat memory para inyectarlos en el contexto.
+  let memoryBlock = '(memoria vacía)';
+  try {
+    const { memory } = await import('@/agent/memory');
+    const facts = await memory.listFacts();
+    if (facts.length > 0) {
+      const recent = facts.slice(-20);
+      memoryBlock = recent.map((f) => `- ${f.key}: ${f.value}`).join('\n');
+    }
+  } catch (e) {
+    console.warn('[Live] No se pudo cargar memoria:', e);
+  }
+
+  const chatMemoryMode = useWeaver.getState().chatMemoryMode;
+
+  return `Eres Weaver en Modo Live — una conversación de voz bidireccional en español.
 
 REGLAS CRÍTICAS:
 - Responde en español, de forma natural y conversacional.
@@ -121,17 +245,32 @@ REGLAS CRÍTICAS:
 IMPORTANTE SOBRE HERRAMIENTAS:
 - En este modo NO tienes acceso a herramientas (web search, archivos, etc).
 - Si el usuario pide buscar en internet, analizar archivos, o cualquier tarea
-  que requiera herramientas, NO intentes usarlas. Responde con texto plano
-  diciendo brevemente qué harías o pide más contexto.
+  que requiera herramientas, delega en background diciendo brevemente "Lo investigo
+  en segundo plano y te aviso". El usuario puede seguir hablando mientras tanto.
 - NUNCA devuelvas una respuesta vacía. Siempre di algo, aunque sea
   "Déjame pensar..." o "No tengo herramientas en modo voz, pero puedo...".
 - Si la pregunta es sobre conocimiento general, responde directamente con
   lo que sepas, sin buscar en web.
 
+MEMORIA DEL AGENTE:
+- Tienes una memoria semántica con hechos guardados de conversaciones anteriores.
+- Cuando el usuario te pida "guarda X" / "recuerda Y" / "anota Z" / "memoriza W",
+  dile brevemente que lo vas a recordar y se guardará automáticamente.
+- Si chatMemoryMode está activo, también guardas proactivamente info personal
+  (nombre, profesión, gustos, proyectos) que el usuario mencione.
+- NUNCA digas "según mi memoria" — simplemente usa la info naturalmente.
+
+CONTEXTO RECUPERADO DE TU MEMORIA:
+${memoryBlock}
+
+${chatMemoryMode
+  ? 'MODO MEMORIA CHAT ACTIVO: guardarás automáticamente hechos clave (nombre, profesión, preferencias, proyectos) que notes en la conversación.'
+  : 'Memoria chat desactivada — sólo guardas hechos cuando el usuario te lo pida explícitamente.'}
+
 Contexto del entorno:
 - App: Weaver (asistente desktop con agentes, MCP, skills)
-- Plataforma: ${runtime.isTauri ? 'Tauri (desktop)' : 'navegador'}
-- Modos activos se indican en cada mensaje usuario si procede.`;
+- Plataforma: ${runtime.isTauri ? 'Tauri (desktop)' : 'navegador'}`;
+}
 
 // --- Ejecución de intención -------------------------------------------------
 
@@ -208,6 +347,104 @@ export async function runVoiceCommand(
       voiceStore.setState('listening');
       return;
 
+    case 'memory_save': {
+      // Guardar el hecho directamente (Live Mode no tiene tools disponibles).
+      // El LLM ya verá el contexto de memoria en el system prompt.
+      if (intent.memoryFact) {
+        try {
+          const { memory } = await import('@/agent/memory');
+          await memory.setFact(intent.memoryFact.key, intent.memoryFact.value, 'user');
+          const confirmMsg = `Hecho guardado. ${intent.memoryFact.key.split(':').slice(1).join(':') || 'recuerdo'}: ${intent.memoryFact.value}.`;
+          voiceStore.pushTurn({ role: 'assistant', text: confirmMsg });
+          syncToActiveChat('assistant', confirmMsg);
+          speak(confirmMsg);
+        } catch (e) {
+          const errMsg = `No pude guardarlo en memoria: ${e instanceof Error ? e.message : String(e)}`;
+          voiceStore.pushTurn({ role: 'assistant', text: errMsg });
+          syncToActiveChat('assistant', errMsg);
+          speak(errMsg);
+        }
+      }
+      voiceStore.setState('listening');
+      return;
+    }
+
+    case 'memory_query': {
+      // Listar hechos y hablarlos. Limitamos a los 5 más recientes para
+      // no hacer la respuesta demasiado larga en voz.
+      try {
+        const { memory } = await import('@/agent/memory');
+        const facts = await memory.listFacts();
+        let msg: string;
+        if (facts.length === 0) {
+          msg = 'Mi memoria está vacía por ahora. Si me dices tu nombre o algo que quieras que recuerde, lo guardo.';
+        } else {
+          const recent = facts.slice(-5);
+          const userFacts = recent.filter((f) => f.key.startsWith('user:'));
+          const otherFacts = recent.filter((f) => !f.key.startsWith('user:'));
+          const parts: string[] = [];
+          if (userFacts.length) {
+            parts.push('Sobre ti: ' + userFacts.map((f) => f.value).join('; '));
+          }
+          if (otherFacts.length) {
+            parts.push('Otros recuerdos: ' + otherFacts.map((f) => `${f.key} = ${f.value}`).join('; '));
+          }
+          msg = `Recuerdo ${facts.length} cosas. ${parts.join('. ')}.`;
+        }
+        voiceStore.pushTurn({ role: 'assistant', text: msg });
+        syncToActiveChat('assistant', msg);
+        speak(msg);
+      } catch (e) {
+        const errMsg = `No pude leer la memoria: ${e instanceof Error ? e.message : String(e)}`;
+        voiceStore.pushTurn({ role: 'assistant', text: errMsg });
+        syncToActiveChat('assistant', errMsg);
+        speak(errMsg);
+      }
+      voiceStore.setState('listening');
+      return;
+    }
+
+    case 'memory_delete': {
+      if (intent.memoryKey) {
+        try {
+          const { memory } = await import('@/agent/memory');
+          // Intentar match exacto primero, luego por substring.
+          let keyToDelete: string | null = intent.memoryKey;
+          const existing = await memory.getFact(intent.memoryKey);
+          if (!existing) {
+            // Buscar por substring en las claves existentes.
+            const allFacts = await memory.listFacts();
+            const match = allFacts.find((f) =>
+              f.key.toLowerCase().includes(intent.memoryKey!.toLowerCase()) ||
+              f.value.toLowerCase().includes(intent.memoryKey!.toLowerCase()),
+            );
+            if (match) {
+              keyToDelete = match.key;
+            }
+          }
+          if (keyToDelete) {
+            await memory.deleteFact(keyToDelete);
+            const msg = `Hecho eliminado de mi memoria: ${keyToDelete}.`;
+            voiceStore.pushTurn({ role: 'assistant', text: msg });
+            syncToActiveChat('assistant', msg);
+            speak(msg);
+          } else {
+            const msg = `No encontré nada en mi memoria que coincida con "${intent.memoryKey}".`;
+            voiceStore.pushTurn({ role: 'assistant', text: msg });
+            syncToActiveChat('assistant', msg);
+            speak(msg);
+          }
+        } catch (e) {
+          const errMsg = `No pude borrarlo de memoria: ${e instanceof Error ? e.message : String(e)}`;
+          voiceStore.pushTurn({ role: 'assistant', text: errMsg });
+          syncToActiveChat('assistant', errMsg);
+          speak(errMsg);
+        }
+      }
+      voiceStore.setState('listening');
+      return;
+    }
+
     case 'chat':
       await runChatTurn(userText, opts);
       return;
@@ -282,7 +519,8 @@ async function runChatTurn(userText: string, opts: VoiceRunOpts): Promise<void> 
 
   // System prompt con modos activos inline (NO como mensaje system separado
   // después del user — OpenRouter rechaza system messages intercalados).
-  let systemPrompt = LIVE_SYSTEM_PROMPT;
+  // Se construye dinámicamente para inyectar el contexto de chat memory.
+  let systemPrompt = await buildLiveSystemPrompt();
   const modeTags: string[] = [];
   if (planMode) modeTags.push('[MODO PLAN]');
   if (pursueObjective) modeTags.push('[PERSEGUIR OBJETIVO]');
