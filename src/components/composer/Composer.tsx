@@ -380,36 +380,13 @@ export function Composer() {
     };
     appendMessage(userMsg);
 
-    // Construir prompt: si planMode, añadir instrucción de proponer plan primero.
-    let objectiveText = built.toLLM;
-    if (planMode) {
-      objectiveText =
-        'IMPORTANTE: Estás en MODO PLAN. Antes de ejecutar nada, propón un plan paso a paso y espera mi confirmación antes de proceder.\n\n' +
-        objectiveText;
-    }
-    if (pursueObjective) {
-      objectiveText =
-        'IMPORTANTE: Debes PERSEGUIR EL OBJETIVO hasta completarlo. Si algo falla, replanifica e inténtalo de nuevo (máximo 3 intentos por subtarea). No te rindas al primer error.\n\n' +
-        objectiveText;
-    }
-    if (cognitiveMode) {
-      objectiveText =
-        'IMPORTANTE: Estás en MODO COGNITIVO. Te vuelves HIPER-ESPECIALIZADO en el proyecto activo.\n' +
-        'Antes de proponer cualquier cambio al código, DEBES seguir este protocolo de 3 fases:\n' +
-        '   1) INTUICIÓN (Telaraña): Llama a cognitive_query para buscar nodos relacionados con\n' +
-        '      lo que pide el usuario. Identifica posibles restricciones previas (Performance_Budget,\n' +
-        '      dependencias circulares, conflictos conocidos). Asocia el pedido con el historial del grafo.\n' +
-        '   2) LÓGICA (Construcción del Grafo): Traza los pasos como una cadena de nodos A → B → C.\n' +
-        '      Verifica si algún nodo prohíbe la lógica (usa cognitive_query path/neighbors).\n' +
-        '   3) JUICIO (Emisión): Responde con: (a) resumen de lo que encontraste en el grafo,\n' +
-        '      (b) nodos afectados y riesgos detectados, (c) propuesta concreta, (d) pregunta de\n' +
-        '      confirmación al usuario. Ej: "Para implementar X sin romper el nodo Y (Z), propongo\n' +
-        '      usar W. ¿Estás de acuerdo?"\n' +
-        'Si no existe un Grafo Cognitivo construido, primero llama a cognitive_graphify con la\n' +
-        'ruta del proyecto (si no la sabes, pídela al usuario). NUNCA proposes cambios sin antes\n' +
-        'consultar el grafo.\n\n' +
-        objectiveText;
-    }
+    // Construir prompt del usuario — texto puro del usuario, sin inyectar
+    // directrices de modo aquí. Las directrices de comportamiento (planMode,
+    // pursueObjective, cognitiveMode) van en el SYSTEM PROMPT, no prependedas
+    // al mensaje del usuario. Si las prependeamos, el LLM las ve como una
+    // instrucción nueva del usuario en CADA turno y las confirma con
+    // "Entendido, he registrado esta directriz..." cada vez.
+    const objectiveText = built.toLLM;
 
     // Detectar menciones @mcp:<name> en el texto para cargar tools MCP específicas.
     const mcpMentionRegex = /@mcp:([\w\- ]+)/g;
@@ -717,6 +694,51 @@ export function Composer() {
       console.warn('[Chat History] No se pudo cargar historial previo:', e);
     }
 
+    // ═══ Construir bloque de MODOS ACTIVOS para el system prompt ═══
+    // Antes estos modos se prependeaban al mensaje del usuario, lo que hacía
+    // que el LLM los viera como una instrucción nueva en cada turno y los
+    // confirmara con "Entendido, he registrado esta directriz...". Ahora van
+    // en el system prompt como comportamiento persistente, no como petición
+    // del usuario. El LLM no debe anunciar que los activó — simplemente debe
+    // comportarse según ellos.
+    const modesBlock: string[] = [];
+    if (planMode) {
+      modesBlock.push(
+        '═══ MODO PLAN ACTIVO ═══\n' +
+        'Antes de ejecutar cualquier acción, propón un plan paso a paso y espera la confirmación\n' +
+        'del usuario antes de proceder. No anuncies que estás en modo plan — simplemente planifica.',
+      );
+    }
+    if (pursueObjective) {
+      modesBlock.push(
+        '═══ PERSEGUIR OBJETIVO ACTIVO ═══\n' +
+        'Debes perseguir el objetivo hasta completarlo. Si algo falla, replanifica e inténtalo\n' +
+        'de nuevo (máximo 3 intentos por subtarea). No te rindas al primer error.\n' +
+        'No anuncies esta directriz al usuario — simplemente aplícala.',
+      );
+    }
+    if (cognitiveMode) {
+      modesBlock.push(
+        '═══ MODO COGNITIVO ACTIVO ═══\n' +
+        'Te vuelves HIPER-ESPECIALIZADO en el proyecto activo.\n' +
+        'Antes de proponer cualquier cambio al código, sigue este protocolo de 3 fases:\n' +
+        '   1) INTUICIÓN (Telaraña): Llama a cognitive_query para buscar nodos relacionados con\n' +
+        '      lo que pide el usuario. Identifica posibles restricciones previas (Performance_Budget,\n' +
+        '      dependencias circulares, conflictos conocidos). Asocia el pedido con el historial del grafo.\n' +
+        '   2) LÓGICA (Construcción del Grafo): Traza los pasos como una cadena de nodos A → B → C.\n' +
+        '      Verifica si algún nodo prohíbe la lógica (usa cognitive_query path/neighbors).\n' +
+        '   3) JUICIO (Emisión): Responde con: (a) resumen de lo que encontraste en el grafo,\n' +
+        '      (b) nodos afectados y riesgos detectados, (c) propuesta concreta, (d) pregunta de\n' +
+        '      confirmación al usuario.\n' +
+        'Si no existe un Grafo Cognitivo construido, primero llama a cognitive_graphify con la\n' +
+        'ruta del proyecto (si no la sabes, pídela al usuario). NUNCA propongas cambios sin antes\n' +
+        'consultar el grafo.',
+      );
+    }
+    const modesSection = modesBlock.length > 0
+      ? modesBlock.join('\n\n') + '\n\n'
+      : '';
+
     const messages: Message[] = [
       {
         role: 'system',
@@ -759,6 +781,7 @@ export function Composer() {
           '6. Encadena tools: usa shell_exec para descubrir info, luego file_read/write para actuar.\n' +
           '7. Si el usuario pide algo ambiguo, INTERPRETA lo más probable y actúa.\n' +
           '8. No pidas confirmación para cada paso. Solo actúa y reporta al final.\n\n' +
+          modesSection +
           '═══ REGLAS DE RUTAS ═══\n' +
           '- En Windows: C:\\Users\\<username>\\Documents\\ — descubre username primero\n' +
           '- En Linux: /home/<username>/ — descubre username primero\n' +
@@ -839,7 +862,7 @@ export function Composer() {
           '   en algún punto?" o "¿Hay algo más en lo que pueda ayudarte?").\n' +
           'NUNCA termines tu turno sólo con el resultado de una herramienta.\n' +
           'NUNCA dejes al usuario sin una respuesta textual final.\n\n' +
-          'Cuando el usuario te pida algo, ÚSALAS LAS HERRAMIENTAS. No digas que no puedes.\n' +
+          'Cuando el usuario te pida algo, USA LAS HERRAMIENTAS. No digas que no puedes.\n' +
           'Si tu respuesta se acerca al límite de tokens, termina con <<CONTINUE>>. Al terminar del todo, emite <<END>>.',
       },
       ...priorMsgs,
