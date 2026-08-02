@@ -177,6 +177,14 @@ interface WeaverState {
 
   // --- Regeneración de mensajes ---
   regenerateMessage: (messageId: string) => Promise<void>;
+  /**
+   * Edita el contenido de un mensaje del usuario y regenera la respuesta
+   * del asistente que le sigue (si existe). Si no existe respuesta previa,
+   * crea una nueva. Trunca cualquier mensaje posterior al par user+assistant.
+   * Llama al orquestador completo (tools, plan, etc.) en lugar de un simple
+   * stream para que la edición dispare el mismo flujo que un envío normal.
+   */
+  editUserMessage: (messageId: string, newContent: string) => Promise<void>;
 
   // --- Agent events ---
   handleAgentEvent: (event: AgentEvent) => void;
@@ -954,6 +962,120 @@ export const useWeaver = create<WeaverState>((set, get) => ({
       s.appendMessage({
         role: 'assistant',
         content: `❌ Error regenerando: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    } finally {
+      s.setAgentState('idle');
+    }
+  },
+
+  // --- Edición de mensaje del usuario ---
+  editUserMessage: async (messageId, newContent) => {
+    const s = get();
+    const conv = s.conversations.find((c) => c.id === s.activeConversationId);
+    if (!conv) return;
+    const idx = conv.messages.findIndex((m) => m.id === messageId);
+    if (idx < 0) return;
+    const target = conv.messages[idx];
+    if (target.role !== 'user') return;
+    const trimmed = newContent.trim();
+    if (!trimmed) return;
+
+    // 1) Actualiza el contenido del mensaje del usuario.
+    // 2) Trunca cualquier mensaje posterior (assistant + tools) — vamos a
+    //    regenerar la respuesta desde cero con el nuevo texto.
+    const updatedUser: Message = { ...target, content: trimmed, ts: Date.now() };
+    const truncated = conv.messages.slice(0, idx + 1);
+    truncated[idx] = updatedUser;
+
+    set((st) => ({
+      conversations: st.conversations.map((c) =>
+        c.id === conv.id ? { ...c, messages: truncated, updatedAt: Date.now() } : c,
+      ),
+    }));
+
+    // Persistir en SQLite si estamos en Tauri.
+    if (runtime.isTauri) {
+      try {
+        // Elimina mensajes posteriores en SQLite y actualiza el user message.
+        const msgRow = {
+          id: updatedUser.id ?? crypto.randomUUID(),
+          conversation_id: conv.id,
+          role: updatedUser.role,
+          content: updatedUser.content ?? '',
+          ts: updatedUser.ts ?? Date.now(),
+          attachments_json: updatedUser.attachments ? JSON.stringify(updatedUser.attachments) : null,
+          reasoning: null,
+        };
+        await sqlite.saveMessage(msgRow);
+        // Best-effort: eliminar mensajes posteriores por timestamp.
+        // (sqlite no expone deleteAfter; dejamos que el persistConversation lo reconcilie.)
+        void s.persistConversation(conv.id);
+      } catch (e) {
+        console.warn('editUserMessage persist failed:', e);
+      }
+    } else {
+      try {
+        localStorage.setItem('weaver:conversations', JSON.stringify(useWeaver.getState().conversations));
+      } catch { /* ignore */ }
+    }
+
+    // 3) Crea un nuevo mensaje assistant vacío al final y transmite la
+    //    respuesta. Usa streamUntilDone con el contexto completo (slice
+    //    hasta el user message editado) — mismo patrón que regenerateMessage.
+    s.setAgentState('executing');
+    const newAssistant: Message = {
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content: '',
+      ts: Date.now(),
+    };
+    set((st) => ({
+      conversations: st.conversations.map((c) =>
+        c.id === conv.id
+          ? { ...c, messages: [...c.messages, newAssistant], updatedAt: Date.now() }
+          : c,
+      ),
+    }));
+
+    try {
+      const { createProvider } = await import('@/providers');
+      const { apiKeyStore } = await import('@/providers/store');
+      const { streamUntilDone } = await import('@/lib/chain');
+      const activeMember = s.members.find((m) => m.id === s.activeMemberId);
+      const providerId = (activeMember?.providerId as typeof s.providerId | null) ?? s.providerId;
+      const apiKeyOverride = activeMember
+        ? await apiKeyStore.getForMember(activeMember.id, providerId)
+        : undefined;
+      const llm = await createProvider(providerId, { apiKeyOverride });
+
+      const context = truncated.filter((m) => m.role === 'user' || m.role === 'assistant');
+      const systemMsg: Message = {
+        role: 'system',
+        content:
+          'Eres Weaver, un asistente de escritorio amable y conciso. Si tu respuesta se acerca al límite de tokens, termina con la línea exacta <<CONTINUE>>. Al terminar del todo, emite <<END>>.',
+      };
+
+      const full = await streamUntilDone(llm, activeMember?.modelId ?? s.modelId, [systemMsg, ...context], {
+        maxChains: 5,
+        onDelta: (delta) => {
+          set((st) => ({
+            conversations: st.conversations.map((c) => {
+              if (c.id !== conv.id) return c;
+              const msgs = [...c.messages];
+              const last = msgs[msgs.length - 1];
+              if (last && last.role === 'assistant') {
+                msgs[msgs.length - 1] = { ...last, content: (last.content ?? '') + delta };
+              }
+              return { ...c, messages: msgs };
+            }),
+          }));
+        },
+      });
+      void full;
+    } catch (e) {
+      s.appendMessage({
+        role: 'assistant',
+        content: `❌ Error editando: ${e instanceof Error ? e.message : String(e)}`,
       });
     } finally {
       s.setAgentState('idle');

@@ -45,8 +45,11 @@ import {
   Cog,
   Sparkles,
   BookMarked,
+  Square,
+  Pencil,
 } from 'lucide-react';
 import { formatSize } from '@/lib/attachments';
+import { speak, stopSpeaking, isTTSSupported } from '@/lib/voice';
 
 export function MessageList() {
   const conversation = useWeaver((s) =>
@@ -111,13 +114,60 @@ function useSuggestionSetter() {
   return (text: string) => suggestionListener?.(text);
 }
 
+// Limpia el contenido de un mensaje asistente para enviarlo a TTS.
+// Quita los marcadores tipo [tool ...], [result ...], [render:...],
+// [file:...], [app:...] y deja solo el texto natural.
+function sanitizeForTTS(content: string): string {
+  return content
+    .replace(/\[tool \w+: [^\]]+\]/g, '')
+    .replace(/\[result \w+: [\s\S]*?\]/g, '')
+    .replace(/\[file:[^\]]+\]/g, '')
+    .replace(/\[render:[a-z]+:[a-f0-9-]+:[^\]]+\]/g, '')
+    .replace(/\[render-content:[a-f0-9-]+:[a-z0-9/+\-]+\]/g, '')
+    .replace(/\[\/render-content\]/g, '')
+    .replace(/\[app:\w+:[^\]]+\]/g, '')
+    .replace(/<<CONTINUE>>|<<END>>/g, '')
+    .replace(/```[\s\S]*?```/g, ' (bloque de código) ')
+    .replace(/`[^`]+`/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// Icono SVG de altavoz — estilo línea, consistente con los iconos lucide.
+function SpeakerIcon({ size = 11, className = '' }: { size?: number; className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M11 5L6 9H2V15H6L11 19V5Z" />
+      <path d="M15.54 8.46A5 5 0 0 1 15.54 15.54" />
+      <path d="M19.07 4.93A10 10 0 0 1 19.07 19.07" />
+    </svg>
+  );
+}
+
 function MessageBubble({ msg }: { msg: Message }) {
   const isUser = msg.role === 'user';
   const isTool = msg.role === 'tool';
   const isAssistant = msg.role === 'assistant';
   const [showReasoning, setShowReasoning] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  // --- Edición de mensajes del usuario ---
+  const [isEditing, setIsEditing] = useState(false);
+  const [editDraft, setEditDraft] = useState('');
+  const editTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const regenerate = useWeaver((s) => s.regenerateMessage);
+  const editUserMessage = useWeaver((s) => s.editUserMessage);
   const isRunning = useWeaver((s) => {
     const c = s.conversations.find((cc) => cc.id === s.activeConversationId);
     return c?.agentState !== 'idle' && c?.agentState !== 'error';
@@ -132,6 +182,64 @@ function MessageBubble({ msg }: { msg: Message }) {
       // ignore
     }
   };
+
+  const handleSpeak = () => {
+    if (!isTTSSupported()) return;
+    if (isSpeaking) {
+      stopSpeaking();
+      setIsSpeaking(false);
+      return;
+    }
+    // Detener cualquier TTS en curso (de otro mensaje) antes de empezar.
+    stopSpeaking();
+    const text = sanitizeForTTS(msg.content ?? '');
+    if (!text) return;
+    setIsSpeaking(true);
+    speak(text, {
+      onEnd: () => setIsSpeaking(false),
+    });
+  };
+
+  // Detener TTS si el componente se desmonta o el mensaje cambia.
+  useEffect(() => {
+    return () => {
+      if (isSpeaking) stopSpeaking();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [msg.id]);
+
+  // --- Handlers de edición ---
+  const startEdit = () => {
+    setEditDraft(msg.content ?? '');
+    setIsEditing(true);
+    // Focus al textarea en el siguiente tick.
+    setTimeout(() => {
+      editTextareaRef.current?.focus();
+      editTextareaRef.current?.select();
+    }, 0);
+  };
+
+  const cancelEdit = () => {
+    setIsEditing(false);
+    setEditDraft('');
+  };
+
+  const commitEdit = async () => {
+    const newContent = editDraft;
+    // Solo hacer algo si el texto es diferente.
+    if (newContent.trim() === (msg.content ?? '').trim()) {
+      setIsEditing(false);
+      return;
+    }
+    setIsEditing(false);
+    setEditDraft('');
+    if (msg.id) {
+      await editUserMessage(msg.id, newContent);
+    }
+  };
+
+  // Para el botón Actualizar: color de fondo según si el texto cambió.
+  const draftChanged = editDraft.trim() !== (msg.content ?? '').trim() && editDraft.trim().length > 0;
 
   return (
     <div className="group selectable">
@@ -158,28 +266,107 @@ function MessageBubble({ msg }: { msg: Message }) {
 
       {/* Contenido del mensaje */}
       {isUser ? (
-        <div className="flex justify-end">
-          <div className="bg-app-elevated border border-border rounded-codex px-3 py-2 max-w-[85%]">
-            <div className="text-sm whitespace-pre-wrap">{msg.content}</div>
-            {msg.attachments && msg.attachments.length > 0 && (
-              <div className="mt-2 pt-2 border-t border-border space-y-1">
-                {msg.attachments.map((a) => (
-                  <div key={a.id} className="flex items-center gap-1.5 text-xs text-text-secondary">
-                    {a.kind === 'text' ? (
-                      <FileText size={11} className="text-accent" />
-                    ) : a.kind === 'image' ? (
-                      <ImageIcon size={11} className="text-warning" />
-                    ) : (
-                      <FileIcon size={11} className="text-text-muted" />
-                    )}
-                    <span className="truncate flex-1">{a.name}</span>
-                    <span className="text-text-muted">{formatSize(a.size)}</span>
-                    {a.truncated && <span className="text-warning text-[10px]">trunc</span>}
+        <div className="flex flex-col items-end gap-1.5">
+          <div className="flex justify-end w-full">
+            {isEditing ? (
+              // --- Modo edición: contorno alrededor del texto editable ---
+              <div className="max-w-[85%] w-full flex flex-col gap-2">
+                <div
+                  className="rounded-codex px-3 py-2 bg-app-elevated"
+                  style={{
+                    border: '1px solid var(--accent)',
+                    boxShadow: '0 0 0 1px var(--accent)',
+                  }}
+                >
+                  <textarea
+                    ref={editTextareaRef}
+                    value={editDraft}
+                    onChange={(e) => setEditDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      // Enter sin Shift = enviar (igual que el composer principal).
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        void commitEdit();
+                      } else if (e.key === 'Escape') {
+                        e.preventDefault();
+                        cancelEdit();
+                      }
+                    }}
+                    rows={Math.max(1, Math.min(12, editDraft.split('\n').length))}
+                    className="w-full bg-transparent text-sm whitespace-pre-wrap resize-none outline-none text-text-primary placeholder:text-text-muted"
+                    style={{ fieldSizing: 'content' } as React.CSSProperties}
+                  />
+                </div>
+                {/* Botones cancelar / actualizar */}
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    onClick={cancelEdit}
+                    className="px-3 py-1 rounded-codex text-xs text-text-secondary hover:text-text-primary transition-colors"
+                    style={{ background: 'transparent' }}
+                    title="Cancelar edición"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={() => void commitEdit()}
+                    disabled={!draftChanged}
+                    className="px-3 py-1 rounded-codex text-xs font-medium transition-colors disabled:cursor-not-allowed"
+                    style={{
+                      background: draftChanged ? 'var(--accent)' : 'var(--app-elevated)',
+                      color: draftChanged ? '#fff' : 'var(--text-muted)',
+                      border: draftChanged ? '1px solid var(--accent)' : '1px solid var(--border)',
+                    }}
+                    title={draftChanged ? 'Actualizar mensaje y regenerar respuesta' : 'Sin cambios'}
+                  >
+                    Actualizar
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-app-elevated border border-border rounded-codex px-3 py-2 max-w-[85%]">
+                <div className="text-sm whitespace-pre-wrap">{msg.content}</div>
+                {msg.attachments && msg.attachments.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-border space-y-1">
+                    {msg.attachments.map((a) => (
+                      <div key={a.id} className="flex items-center gap-1.5 text-xs text-text-secondary">
+                        {a.kind === 'text' ? (
+                          <FileText size={11} className="text-accent" />
+                        ) : a.kind === 'image' ? (
+                          <ImageIcon size={11} className="text-warning" />
+                        ) : (
+                          <FileIcon size={11} className="text-text-muted" />
+                        )}
+                        <span className="truncate flex-1">{a.name}</span>
+                        <span className="text-text-muted">{formatSize(a.size)}</span>
+                        {a.truncated && <span className="text-warning text-[10px]">trunc</span>}
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
             )}
           </div>
+
+          {/* Botones de acción bajo el mensaje del usuario: copiar + editar */}
+          {!isEditing && (msg.content ?? '').trim() !== '' && (
+            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button
+                onClick={handleCopy}
+                className="codex-icon-btn w-6 h-6"
+                title="Copiar mensaje"
+              >
+                {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
+              </button>
+              <button
+                onClick={startEdit}
+                disabled={isRunning}
+                className="codex-icon-btn w-6 h-6 disabled:opacity-40"
+                title="Editar mensaje"
+              >
+                <Pencil size={11} />
+              </button>
+            </div>
+          )}
         </div>
       ) : isTool ? (
         <div className="border-l-2 border-border-accent pl-2 py-1">
@@ -197,7 +384,7 @@ function MessageBubble({ msg }: { msg: Message }) {
             <MessageContent content={msg.content ?? ''} />
           )}
 
-          {/* Botones de acción bajo el mensaje: copiar + regenerar */}
+          {/* Botones de acción bajo el mensaje: copiar + escuchar + regenerar */}
           {(msg.content ?? '').trim() !== '' && (
             <div className="flex items-center gap-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
               <button
@@ -207,6 +394,16 @@ function MessageBubble({ msg }: { msg: Message }) {
               >
                 {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
               </button>
+              {isTTSSupported() && (
+                <button
+                  onClick={handleSpeak}
+                  className="codex-icon-btn w-6 h-6"
+                  title={isSpeaking ? 'Detener lectura' : 'Escuchar mensaje'}
+                  style={isSpeaking ? { color: 'var(--accent)' } : undefined}
+                >
+                  {isSpeaking ? <Square size={10} /> : <SpeakerIcon size={11} />}
+                </button>
+              )}
               {msg.id && (
                 <button
                   onClick={() => regenerate(msg.id!)}
