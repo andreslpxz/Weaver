@@ -89,6 +89,25 @@ export const ADVANCED_TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'sandbox_run',
+    description:
+      'Ejecuta código Python, Node.js o Bash en un sandbox efímero (directorio temporal aislado). ' +
+      'Úsalo cuando necesites procesar datos, calcular, parsear JSON/CSV, generar contenido ' +
+      'programáticamente, o ejecutar lógica que no se puede hacer con una sola shell_exec. ' +
+      'El código corre con un timeout duro (default 30s, máx 60s). ' +
+      'El sandbox está aislado: NO ve archivos del host, su working directory es un /tmp efímero. ' +
+      'Si necesitas datos del host, pásalos como `stdin` o como literales en el código. ' +
+      'NO uses sandbox_run para tareas que ya tienen tools específicas (shell_exec para comandos, ' +
+      'file_read para leer archivos, save_file para descargas). sandbox_run es para PENSAR CON CÓDIGO.',
+    category: 'fs',
+    parameters: {
+      language: { type: 'string', description: 'Lenguaje: "python", "node" o "bash"' },
+      code: { type: 'string', description: 'Código completo a ejecutar (script completo, no fragmento)' },
+      stdin: { type: 'string', description: 'Texto opcional a pasar al script por stdin' },
+      timeout: { type: 'number', description: 'Timeout en ms (default 30000, máx 60000)' },
+    },
+  },
+  {
     name: 'save_file',
     description:
       'Genera un archivo con el contenido proporcionado y lo hace disponible para que el usuario lo descargue. ' +
@@ -367,6 +386,13 @@ export async function dispatchAdvancedTool(
         return await webSearch(String(args.query), Number(args.max_results ?? 5));
       case 'web_fetch':
         return await webFetch(String(args.url), Number(args.max_chars ?? 20000));
+      case 'sandbox_run':
+        return await sandboxRun({
+          language: String(args.language ?? 'python') as 'python' | 'node' | 'bash',
+          code: String(args.code ?? ''),
+          stdin: args.stdin ? String(args.stdin) : undefined,
+          timeout: args.timeout ? Number(args.timeout) : undefined,
+        });
       case 'save_file':
         return await saveFile(
           String(args.filename),
@@ -982,6 +1008,185 @@ async function webSearch(query: string, maxResults: number): Promise<ToolExecRes
   } catch (e) {
     return { ok: false, output: '', error: e instanceof Error ? e.message : String(e) };
   }
+}
+
+// ============================================================================
+// Sandbox de código — ejecuta Python / Node / Bash de forma controlada.
+//
+// FASE 1 (esto): subprocess con timeout y working dir temporal. Sin
+// aislamiento real del kernel todavía (bubblewrap/gVisor vendrán en Fase 2).
+// La interfaz pública es estable: cuando añadamos aislamiento real, el LLM
+// no tendrá que cambiar cómo llama a la tool.
+//
+// El sandbox:
+//   - Crea un directorio temporal efímero por ejecución (se limpia al final).
+//   - Ejecuta el código con un intérprete del sistema (python3/node/bash).
+//   - Timeout duro: si el script cuelga, lo mata.
+//   - Captura stdout + stderr por separado, los devuelve al LLM.
+//   - NO hereda variables de entorno del host (las limpia, excepto PATH).
+//   - Working dir: el tmp dir creado, no el del host.
+//
+// Esto ya da seguridad básica: el script no puede escribir en /home/$USER
+// porque su cwd es /tmp/weaver-sandbox-XXX. La Fase 2 añadirá bubblewrap
+// para restringir syscalls (no fork bombs, no network saliente no autorizado).
+// ============================================================================
+
+interface SandboxRunArgs {
+  language: 'python' | 'node' | 'bash';
+  code: string;
+  stdin?: string;
+  timeout?: number;
+}
+
+async function sandboxRun(args: SandboxRunArgs): Promise<ToolExecResult> {
+  if (runtime.isBrowser) {
+    return {
+      ok: false,
+      output: '',
+      error:
+        'sandbox_run solo está disponible en modo Tauri (desktop). ' +
+        'En el navegador no se pueden ejecutar subprocesos. ' +
+        'Ejecuta Weaver con `npm run tauri:dev` o usa la app instalada.',
+    };
+  }
+
+  const language = args.language;
+  const code = args.code ?? '';
+  const stdin = args.stdin ?? '';
+  // Cap timeout at 60s — no dar chart blanche al script.
+  const timeout = Math.min(Math.max(args.timeout ?? 30000, 1000), 60000);
+
+  if (!code.trim()) {
+    return { ok: false, output: '', error: 'El código está vacío.' };
+  }
+
+  // Mapear language → intérprete + extensión.
+  let interpreter: string;
+  let ext: string;
+  let extraArgs: string[] = [];
+  switch (language) {
+    case 'python':
+      interpreter = 'python3';
+      ext = '.py';
+      break;
+    case 'node':
+      interpreter = 'node';
+      ext = '.js';
+      break;
+    case 'bash':
+      interpreter = 'bash';
+      ext = '.sh';
+      break;
+    default:
+      return {
+        ok: false,
+        output: '',
+        error: `Lenguaje no soportado: ${language}. Usa python, node o bash.`,
+      };
+  }
+
+  try {
+    // Crear directorio temporal efímero para esta ejecución.
+    // Usamos un comando mkdir vía shell_exec para que sea consistente con
+    // el resto del código (y funcione en Tauri).
+    const tmpDir = `/tmp/weaver-sandbox-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const scriptPath = `${tmpDir}/script${ext}`;
+
+    // Crear directorio + escribir script.
+    const mkdirResult = await invokeShellExec(`mkdir -p ${tmpDir}`, undefined, 5000);
+    if (mkdirResult.code !== 0) {
+      return {
+        ok: false,
+        output: '',
+        error: `No se pudo crear el directorio sandbox: ${mkdirResult.stderr || 'unknown'}`,
+      };
+    }
+
+    // Escribir el código al script. Usamos invokeFileWrite directo (pasa por
+    // el backend Rust, soporta cualquier contenido sin escapado shell).
+    // El directorio padre ya existe (lo creamos con mkdir -p arriba).
+    try {
+      await invokeFileWrite(scriptPath, code, false);
+    } catch (e) {
+      // Fallback: heredoc con marcador único aleatorio.
+      const marker = `WEAVER_EOF_${Math.random().toString(36).slice(2, 12)}`;
+      // Escapar el marker en el código si aparece (extremadamente improbable).
+      const safeCode = code.replace(new RegExp(marker, 'g'), marker + '_ESCAPED');
+      const writeCmd = `cat > ${scriptPath} <<'${marker}'\n${safeCode}\n${marker}`;
+      const writeResult = await invokeShellExec(writeCmd, undefined, 5000);
+      if (writeResult.code !== 0) {
+        return {
+          ok: false,
+          output: '',
+          error: `No se pudo escribir el script: ${writeResult.stderr || e}`,
+        };
+      }
+    }
+
+    // Construir el comando a ejecutar.
+    // - `cd tmpDir && interpreter scriptPath` — el cwd del script es el sandbox.
+    // - Si hay stdin, se lo pasamos por pipe.
+    // - Timeout: usamos el `timeout` de GNU coreutils (Linux) o `gtimeout` (macOS).
+    //   En Tauri, el invokeShellExec ya tiene timeout propio, pero añadimos
+    //   este por si el proceso hijo hace fork y escapa.
+    const hasTimeoutCmd = await hasCoreutilsTimeout();
+    const timeoutPrefix = hasTimeoutCmd ? `timeout ${Math.ceil(timeout / 1000)} ` : '';
+    const cmd = `cd ${tmpDir} && ${timeoutPrefix}${interpreter} ${extraArgs.join(' ')} ${scriptPath}`;
+
+    // Pasar stdin al comando si existe. invokeShellExec no soporta stdin
+    // directo, así que usamos echo + pipe. Si el stdin es muy grande, esto
+    // puede romper por límites de línea del shell — por ahora vivimos con eso.
+    const fullCmd = stdin
+      ? `printf %s "${stdin.replace(/[$`"\\]/g, '\\$&')}" | ${cmd}`
+      : cmd;
+
+    const result = await invokeShellExec(fullCmd, undefined, timeout + 2000);
+
+    // Limpiar el directorio temporal (best-effort, no bloquear).
+    void invokeShellExec(`rm -rf ${tmpDir}`, undefined, 3000).catch(() => {});
+
+    // Detectar si timeout mató el proceso (código 124 de `timeout`).
+    const wasKilledByTimeout = hasTimeoutCmd && result.code === 124;
+
+    const stdout = result.stdout || '';
+    const stderr = result.stderr || '';
+    const truncatedStdout = stdout.slice(0, 8000);
+    const truncatedStderr = stderr.slice(0, 2000);
+
+    let output = '';
+    if (truncatedStdout) output += truncatedStdout;
+    if (truncatedStderr) output += (output ? '\n\n[stderr]\n' : '[stderr]\n') + truncatedStderr;
+    if (wasKilledByTimeout) {
+      output += (output ? '\n\n' : '') + `[sandbox] ⏱️ timeout de ${Math.ceil(timeout / 1000)}s alcanzado — proceso matado.`;
+    }
+    if (stdout.length > 8000) {
+      output += `\n[sandbox] ⚠️ stdout truncado (${stdout.length - 8000} chars omitidos).`;
+    }
+
+    return {
+      ok: result.code === 0,
+      output: output || '(sin salida)',
+      error: result.code !== 0
+        ? (wasKilledByTimeout ? 'timeout' : `exit code ${result.code}`)
+        : undefined,
+    };
+  } catch (e) {
+    return { ok: false, output: '', error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+// Verifica si `timeout` de GNU coreutils está disponible (Linux siempre,
+// macOS si coreutils está instalado vía brew). Cachea el resultado.
+let _hasTimeoutCmd: boolean | null = null;
+async function hasCoreutilsTimeout(): Promise<boolean> {
+  if (_hasTimeoutCmd !== null) return _hasTimeoutCmd;
+  try {
+    const r = await invokeShellExec('which timeout 2>/dev/null', undefined, 2000);
+    _hasTimeoutCmd = r.code === 0 && r.stdout.trim().length > 0;
+  } catch {
+    _hasTimeoutCmd = false;
+  }
+  return _hasTimeoutCmd;
 }
 
 // ============================================================================

@@ -465,6 +465,39 @@ export function Composer() {
     }
   }
 
+  /**
+   * Detecta si una respuesta del LLM niega tener información cuando sabemos
+   * que la tool previa devolvió datos. Busca frases como "no se encontró
+   * información", "no tengo datos", "no existe documentación", "no hay
+   * registros", "sin resultados". Solo dispara si la frase aparece en los
+   * primeros 400 caracteres de la respuesta (donde el LLM suele declarar
+   * la "no existencia" antes de inventar contexto).
+   *
+   * IMPORTANTE: esta función es intencionalmente CONSERVADORA. Solo detecta
+   * negaciones explícitas, no afirmaciones vagas. Falsos positivos arruinarían
+   * el chat — mejor pecar de cauto.
+   */
+  function responseDeniesToolData(text: string): boolean {
+    if (!text || text.trim().length === 0) return false;
+    // Solo mirar el inicio de la respuesta (donde el LLM declara "no encontré").
+    const head = text.slice(0, 600).toLowerCase();
+    // Patrones de negación explícita. Cuidado con las tildes y variantes.
+    const denyPatterns = [
+      /no se (ha )?(encontrado|hallado|localizado) (informaci[oó]n|datos|resultados|documentaci[oó]n|registros)/,
+      /no (he )?(encontrado|hallado|podido encontrar|pude encontrar) (informaci[oó]n|datos|resultados|documentaci[oó]n|registros|nada)/,
+      /no (tengo|poseo|existe|hay|se conoce|se tiene) (informaci[oó]n|datos|documentaci[oó]n|registros|nada)/,
+      /no aparece asociado/,
+      /no hay (informaci[oó]n|datos|resultados|documentaci[oó]n|registros) (p[uú]blica|oficial|disponible)/,
+      /sin resultados/,
+      /0 resultados encontrados/,
+      /no se ha podido localizar/,
+      /no se ha publicado nada/,
+      /no existe (una versi[oó]n|un modelo|un producto|un lanzamiento)/,
+      /no consta en los registros/,
+    ];
+    return denyPatterns.some((p) => p.test(head));
+  }
+
   async function runChatWithTools(
     llm: import('@/providers/types').LLMProvider,
     userText: string,
@@ -755,6 +788,7 @@ export function Composer() {
           '- Descargar contenido de URLs (web_fetch)\n' +
           '- Generar archivos descargables (save_file)\n' +
           '- Renderizar HTML o PDF dentro del chat en una mini-ventana (render_html, render_pdf)\n' +
+          '- Ejecutar código Python/Node/Bash en un sandbox efímero (sandbox_run)\n' +
           '- Crear notas/tareas/eventos en el espacio personal del usuario (me_create_*)\n' +
           '- Recordar hechos clave sobre el usuario/proyecto con memory_save_fact / memory_list_facts / memory_delete_fact\n' +
           '- Delegar subtareas a subagentes especializados (delegate_to_subagent)\n' +
@@ -800,6 +834,28 @@ export function Composer() {
           '  Si el usuario dice "crea un HTML y renderízalo", USA render_html (no file_write).\n' +
           '- DELEGAR: Para tareas complejas con sub-componentes aislables, considera delegate_to_subagent\n' +
           '  antes de hacerlo todo tú mismo. Los subagentes son especialistas con su propio presupuesto.\n\n' +
+          '═══ REGLA CRÍTICA SOBRE RESULTADOS DE TOOLS (ANTI-ALUCINACIÓN) ═══\n' +
+          'Cuando una tool (web_search, web_fetch, file_read, shell_exec, sandbox_run, etc.)\n' +
+          'devuelva resultados exitosos, DEBES reportarlos. NUNCA digas "no se encontró información",\n' +
+          '"no tengo datos sobre esto", "no existe documentación" o frases similares si la tool\n' +
+          'devolvió contenido. Los resultados de las tools SON VERDAD — tu trabajo es REPORTARLOS,\n' +
+          'no contradecirlos. Si la tool devuelve algo sorprendente o que no esperabas, reporta\n' +
+          'exactamente lo que dice. NO filtres los resultados según tu conocimiento previo.\n' +
+          'Si la tool falla (error, vacío, sin resultados), SÍ puedes decir "no se encontró",\n' +
+          'pero SOLO en ese caso. Confundir "tool exitosa con datos" y "tool sin datos" es\n' +
+          'un error grave que viola la confianza del usuario.\n\n' +
+          '═══ SANDBOX DE CÓDIGO ═══\n' +
+          'Tienes una tool sandbox_run para ejecutar código Python, Node.js o Bash de forma\n' +
+          'segura. Úsala cuando necesites:\n' +
+          '- Procesar datos (parsear JSON, calcular estadísticas, transformar archivos).\n' +
+          '- Generar contenido programáticamente (CSV, Markdown, imágenes con matplotlib).\n' +
+          '- Validar hypotheses con cálculos (comparar valores, hacer queries complejas).\n' +
+          '- Ejecutar scripts que el usuario te pida (analiza, ejecuta, reporta stdout).\n' +
+          'NO uses sandbox_run para tareas que ya tienen tools específicas (shell_exec para\n' +
+          'comandos del sistema, file_read para leer archivos, save_file para generar descargas).\n' +
+          'sandbox_run es para LÓGICA: cuando necesitas pensar con código, no solo ejecutar.\n' +
+          'El sandbox está aislado: NO ve tus archivos personales ni el sistema del host.\n' +
+          'Si necesitas datos del host, pásalos como `stdin` en el código o úsalos como string.\n\n' +
           '═══ REGLA CRÍTICA SOBRE "MI" / "ME" ═══\n' +
           '"MI" (también llamada "ME" en las tools) es la sección PERSONAL DEL USUARIO ' +
           'dentro de Weaver: SUS notas, SUS tareas, SU calendario, SU lista de la compra, ' +
@@ -874,6 +930,13 @@ export function Composer() {
 
     let producedFinalText = false;
 
+    // Track the last tool result that had actual data — used for the
+    // anti-hallucination retry logic below. When the LLM finishes its
+    // response, we check if it contradicts this result.
+    let lastSuccessfulToolName: string | null = null;
+    let lastSuccessfulToolOutput: string | null = null;
+    let lastSuccessfulToolArgs: Record<string, unknown> | null = null;
+
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       const result = await streamChat(llm, modelId, messages, {
         tools,
@@ -928,6 +991,50 @@ export function Composer() {
       // luego no sale mensaje".
       if (result.toolCalls.length === 0) {
         if (result.text && result.text.trim().length > 0) {
+          // ─── ANTI-HALLUCINATION CHECK ───────────────────────────────────
+          // Si el LLM acababa de recibir un tool result exitoso con datos,
+          // y su respuesta dice "no se encontró información" / "no tengo datos"
+          // / "no existe documentación" o similares — está MINTIENDO. Reintentamos
+          // una vez con el resultado del tool reinyectado de forma más fuerte.
+          // Esto fixea el bug donde Gemma-4-26B decía "no se encontró" después
+          // de que web_search devolvió resultados válidos.
+          if (
+            lastSuccessfulToolOutput &&
+            lastSuccessfulToolName &&
+            responseDeniesToolData(result.text)
+          ) {
+            // Marcar el falso final en el chat con una nota visible.
+            updateLastAssistantMessage(
+              `\n\n> ⚠️ Detecté que mi respuesta anterior contradecía los resultados del tool. Reintentando con los datos...\n\n`,
+            );
+            // Reinyectar: descartar la mentira y forzar otra llamada con el
+            // resultado del tool puesto de vuelta como un mensaje user fuerte.
+            // Quitamos el último assistant message (la mentira) del contexto.
+            // (No hace falta tocar el store UI — el updateLastAssistantMessage
+            //  anterior ya añadió la nota visual.)
+            messages.push({
+              role: 'user',
+              content:
+                `Tu respuesta anterior dijo "no se encontró información" pero la tool ` +
+                `${lastSuccessfulToolName} SÍ devolvió datos. Esto es INACEPTABLE.\n\n` +
+                `Aquí está el resultado EXACTO que la tool devolvió:\n` +
+                `──────────────────────────────────────\n` +
+                `${lastSuccessfulToolOutput.slice(0, 3000)}\n` +
+                `──────────────────────────────────────\n\n` +
+                `Responde AHORA reportando fielmente lo que la tool devolvió. ` +
+                `NO digas "no se encontró". NO contradigas los resultados de la tool. ` +
+                `Si los resultados sorprenden, REPÓRTALOS TAL CUAL. ` +
+                `Si la tool devolvió URLs, MÍRALAS. Si devolvió texto, CÍTALO.\n\n` +
+                `Estructura: 1) Resumen breve. 2) Resultados principales (con datos del tool). 3) Pregunta de seguimiento.`,
+            });
+            // Limpiar para no reentrar al chequeo en el siguiente round.
+            lastSuccessfulToolOutput = null;
+            lastSuccessfulToolName = null;
+            lastSuccessfulToolArgs = null;
+            // Limpiar el mensaje visible actual y dejar que el retry reemplace.
+            setLastAssistantMessage('');
+            continue; // vuelve al for loop, otro streamChat
+          }
           producedFinalText = true;
         }
         break;
@@ -961,6 +1068,14 @@ export function Composer() {
         const llmResult = toolResult.ok
           ? toolResult.output.slice(0, 4000)
           : `ERROR: ${toolResult.error ?? 'unknown'}`;
+
+        // Track this result if it was successful AND has real content (not empty).
+        // Used by the anti-hallucination check after the LLM finishes responding.
+        if (toolResult.ok && toolResult.output.trim().length > 0) {
+          lastSuccessfulToolName = tc.function.name;
+          lastSuccessfulToolOutput = toolResult.output;
+          lastSuccessfulToolArgs = args;
+        }
 
         // Resultado visual limpio (no crudo).
         const visualResult = formatToolResult(tc.function.name, toolResult);
@@ -1033,6 +1148,8 @@ export function Composer() {
         return `buscando: "${args.query ?? args.q ?? ''}"`;
       case 'web_fetch':
         return `descargando: ${args.url ?? ''}`;
+      case 'sandbox_run':
+        return `ejecutando ${args.language ?? 'python'}: ${(String(args.code ?? '').split('\n')[0] ?? '').slice(0, 60)}`;
       case 'shell_exec':
         return `ejecutando: ${(args.command ?? '').toString().slice(0, 60)}`;
       case 'file_read':

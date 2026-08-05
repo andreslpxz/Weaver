@@ -824,6 +824,7 @@ async function runTaskWithTools(
         '- Descargar contenido de URLs (web_fetch)\n' +
         '- Generar archivos descargables (save_file)\n' +
         '- Renderizar HTML o PDF dentro del chat (render_html, render_pdf)\n' +
+        '- Ejecutar código Python/Node/Bash en un sandbox efímero (sandbox_run)\n' +
         '- Recordar hechos clave (memory_save_fact, memory_list_facts, memory_delete_fact)\n' +
         '- Delegar a subagentes especializados (delegate_to_subagent)\n\n' +
         '═══ REGLAS DE TOOLS ═══\n' +
@@ -831,7 +832,9 @@ async function runTaskWithTools(
         '- Si web_fetch falla, no insistas. Usa web_search.\n' +
         '- Para crear archivos que el usuario descargue, usa save_file (no file_write).\n' +
         '- RENDERIZAR EN EL CHAT: Si el usuario pide renderizar/mostrar/previsualizar HTML en el\n' +
-        '  chat, usa render_html — NO uses file_write ni save_file.\n\n' +
+        '  chat, usa render_html — NO uses file_write ni save_file.\n' +
+        '- RESULTADOS DE TOOLS: Si una tool devuelve datos, REPÓRTELLOS. NUNCA digas "no se encontró\n' +
+        '  información" si la tool devolvió contenido. Los resultados de las tools son VERDAD.\n\n' +
         '═══ COMPORTAMIENTO PROACTIVO ═══\n' +
         '1. NUNCA te rindas al primer error. Si algo falla, intenta una alternativa.\n' +
         '2. Si no conoces algo, DESCÚBRELO primero con shell_exec.\n' +
@@ -972,6 +975,8 @@ function formatToolLabel(toolName: string, args: Record<string, unknown>): strin
       return `buscando: "${args.query ?? args.q ?? ''}"`;
     case 'web_fetch':
       return `descargando: ${args.url ?? ''}`;
+    case 'sandbox_run':
+      return `ejecutando ${args.language ?? 'python'}: ${(String(args.code ?? '').split('\n')[0] ?? '').slice(0, 60)}`;
     case 'shell_exec':
       return `ejecutando: ${(args.command ?? '').toString().slice(0, 60)}`;
     case 'file_read':
