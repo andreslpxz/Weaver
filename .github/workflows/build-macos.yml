@@ -1,0 +1,148 @@
+name: Build macOS
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (universal toolchain)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build Tauri app (universal macOS)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Code signing + notarization (requiere Apple Developer account).
+          # Los secrets se configuran en Settings → Secrets and variables → Actions.
+          # Ver docs/signing.md para instrucciones detalladas.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Weaver ${{ github.ref_name }}'
+          releaseBody: 'See the assets below to download this version.'
+          releaseDraft: true
+          prerelease: false
+          args: --target universal-apple-darwin
+
+      - name: Upload .dmg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: weaver-macos
+          path: |
+            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app
+          if-no-files-found: warn
+
+  # Job separado para notarización explícita con xcrun notarytool.
+  # Solo corre en tags v* cuando los secrets de Apple están configurados.
+  # Esto complementa la notarización automática de tauri-action: si esa falla,
+  # este job intenta notarizar el .app manualmente y stapla el ticket.
+  notarize:
+    needs: build
+    runs-on: macos-14
+    if: startsWith(github.ref, 'refs/tags/v') && secrets.APPLE_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != ''
+    steps:
+      - name: Download .app artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: weaver-macos
+          path: ./weaver-macos-artifacts
+
+      - name: Find .app bundle
+        id: find_app
+        run: |
+          APP_PATH=$(find ./weaver-macos-artifacts -name "*.app" -type d | head -1)
+          echo "app_path=$APP_PATH" >> $GITHUB_OUTPUT
+          echo "Found app: $APP_PATH"
+
+      - name: Create ZIP for notarization
+        run: |
+          cd $(dirname "${{ steps.find_app.outputs.app_path }}")
+          ditto -c -k --keepParent "$(basename ${{ steps.find_app.outputs.app_path }})" weaver-notarize.zip
+
+      - name: Submit to Apple notarization service
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          echo "Submitting to notarization service (puede tardar 5-30 min)..."
+          SUBMISSION_ID=$(xcrun notarytool submit weaver-notarize.zip \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait \
+            2>&1 | tee notarytool.log | grep -oE 'id: [a-f0-9-]+' | head -1 | awk '{print $2}')
+          echo "Submission ID: $SUBMISSION_ID"
+
+          # Verificar status final
+          xcrun notarytool info "$SUBMISSION_ID" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID"
+
+          # Si el status no es "Accepted", fallar.
+          STATUS=$(xcrun notarytool info "$SUBMISSION_ID" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            | grep -oE 'status: \w+' | awk '{print $2}')
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "Notarization failed with status: $STATUS"
+            cat notarytool.log
+            exit 1
+          fi
+          echo "Notarization accepted!"
+
+      - name: Staple ticket to app
+        run: |
+          xcrun stapler staple "${{ steps.find_app.outputs.app_path }}"
+          # Verificar
+          xcrun stapler validate "${{ steps.find_app.outputs.app_path }}"
+
+      - name: Re-package .dmg with notarized .app
+        run: |
+          # Crear un nuevo .dmg con el .app notarizado y staplado.
+          mkdir -p dmg_staging
+          cp -R "${{ steps.find_app.outputs.app_path }}" dmg_staging/
+          # hdiutil create -volname "Weaver" -srcfolder dmg_staging -ov -format UDZO weaver-notarized.dmg
+          # Localizar el nombre del .app original
+          APP_NAME=$(basename "${{ steps.find_app.outputs.app_path }}" .app)
+          hdiutil create -volname "Weaver" -srcfolder dmg_staging -ov -format UDZO "weaver-${APP_NAME}-notarized.dmg"
+
+      - name: Upload notarized artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: weaver-macos-notarized
+          path: |
+            weaver-*-notarized.dmg
+            notarytool.log
+          if-no-files-found: warn

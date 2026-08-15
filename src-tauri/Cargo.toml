@@ -1,0 +1,121 @@
+[package]
+name = "weaver"
+version = "0.1.0"
+description = "Weaver — desktop agent that operates any app via Accessibility APIs"
+authors = ["andreslpxz"]
+license = "Apache-2.0"
+repository = "https://github.com/andreslpxz/Weaver"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "weaver_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-store = "2"
+tauri-plugin-dialog = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures-util = "0.3"
+
+# D-Bus / AT-SPI (Linux accessibility)
+zbus = { version = "4", default-features = false, features = ["tokio"] }
+
+# OS keychain for API keys
+keyring = "3"
+
+# SQLite for episodic/semantic memory
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Misc utilities
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+once_cell = "1"
+which = "7"
+
+# HTTP client para bedrock_invoke (SigV4)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# Webhook server (FASE 9)
+axum = "0.7"
+tower-http = { version = "0.5", features = ["cors", "limit", "trace"] }
+
+# AES-256-GCM para credentials (FASE 8)
+aes-gcm = "0.10"
+rand = "0.8"
+
+# Cron parsing para scheduler (FASE 10)
+cron = "0.12"
+
+# AWS SigV4 signing (para Bedrock nativo sin proxy)
+aws-sigv4 = "1"
+aws-credential-types = "1"
+aws-smithy-async = "1"
+http = "1"
+sha2 = "0.10"
+hex = "0.4"
+url = "2"
+base64 = "0.22"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# X11 raw protocol for synthetic input events (keyboard/mouse)
+x11rb = "0.13"
+# xdg-desktop-portal: Wayland-compatible screen capture and remote desktop (Fase 7)
+# zbus ya está incluido en deps comunes; reusamos para portal D-Bus.
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Las deps de Windows (uiautomation, windows, enigo) están comentadas
+# temporalmente porque causan conflictos de versiones (windows 0.58 vs 0.59).
+# El backend de Windows es un stub por ahora. Se reactivarán cuando se
+# resuelvan los issues de tipos.
+# uiautomation = "0.16"
+# windows = { version = "0.58", features = [...] }
+# enigo = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# AXUIElement bindings (ApplicationServices.framework)
+accessibility = "0.2"
+# Objective-C runtime + AppKit
+objc2 = "0.5"
+objc2-app-kit = { version = "0.2", features = [
+    "NSPasteboard",
+    "NSWorkspace",
+    "NSRunningApplication",
+    "NSScreen",
+] }
+objc2-foundation = { version = "0.2", features = ["NSString"] }
+objc2-core-graphics = "0.3"
+core-foundation = "0.10"
+# Cross-platform input synth (uses CGEvent on macOS)
+enigo = "0.2"
+
+[features]
+# This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
