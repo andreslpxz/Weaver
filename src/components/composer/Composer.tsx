@@ -46,6 +46,7 @@ import type { Skill } from '@/skills/registry';
 import { mcpClient, type McpServer } from '@/mcp/client';
 import { getPreset } from '@/mcp/presets';
 import { useVoiceStore } from '@/store/voice';
+import { BrainIcon } from '@/components/chat/MessageList';
 
 const newMsgId = () =>
   typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `m-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -76,9 +77,9 @@ export function Composer() {
     modelId: globalModelId,
     setModelPickerOpen,
     modelPickerOpen,
-    appendMessage,
-    updateLastAssistantMessage,
-    setLastAssistantMessage,
+    appendMessage: storeAppendMessage,
+    updateLastAssistantMessage: storeUpdateLastAssistantMessage,
+    setLastAssistantMessage: storeSetLastAssistantMessage,
     setAgentState,
     handleAgentEvent,
     activeConversationId,
@@ -91,10 +92,12 @@ export function Composer() {
     pursueObjective,
     cognitiveMode,
     chatMemoryMode,
+    projectMemoryMode,
     setPlanMode,
     setPursueObjective,
     setCognitiveMode,
     setChatMemoryMode,
+    setProjectMemoryMode,
     projects,
     setView,
     view,
@@ -371,7 +374,7 @@ export function Composer() {
 
     const validation = validateCommand(parsed);
     if (!validation.valid) {
-      appendMessage({
+      storeAppendMessage({
         id: newMsgId(),
         ts: Date.now(),
         role: 'assistant',
@@ -381,7 +384,7 @@ export function Composer() {
     }
 
     if (parsed.command === 'help') {
-      appendMessage({
+      storeAppendMessage({
         id: newMsgId(),
         ts: Date.now(),
         role: 'assistant',
@@ -394,7 +397,7 @@ export function Composer() {
       const sub = parsed.subcommand;
       if (sub === 'on') {
         setRlmEnabled(true);
-        appendMessage({
+        storeAppendMessage({
           id: newMsgId(),
           ts: Date.now(),
           role: 'assistant',
@@ -402,21 +405,21 @@ export function Composer() {
         });
       } else if (sub === 'off') {
         setRlmEnabled(false);
-        appendMessage({
+        storeAppendMessage({
           id: newMsgId(),
           ts: Date.now(),
           role: 'assistant',
           content: '✓ Modo RLM desactivado. Volviendo al executor legacy.',
         });
       } else if (sub === 'status') {
-        appendMessage({
+        storeAppendMessage({
           id: newMsgId(),
           ts: Date.now(),
           role: 'assistant',
           content: `Modo RLM: **${rlmEnabled ? 'activado' : 'desactivado'}**\n\nLímites:\n- Max depth: 3\n- Max children: 50\n- Max concurrent: 5\n- Max time: 10 min\n\nUsa \`/rlm on\` o \`/rlm off\` para cambiar.`,
         });
       } else {
-        appendMessage({
+        storeAppendMessage({
           id: newMsgId(),
           ts: Date.now(),
           role: 'assistant',
@@ -434,7 +437,7 @@ export function Composer() {
         const { memory } = await import('@/agent/memory');
         const episodes = await memory.listEpisodes();
         if (episodes.length === 0) {
-          appendMessage({
+          storeAppendMessage({
             id: newMsgId(),
             ts: Date.now(),
             role: 'assistant',
@@ -442,14 +445,14 @@ export function Composer() {
           });
           return true;
         }
-        appendMessage({
+        storeAppendMessage({
           id: newMsgId(),
           ts: Date.now(),
           role: 'assistant',
           content: `⏳ Analizando ${episodes.length} episodio(s) para refinamiento...`,
         });
         const result = await runRefineCommand(llm, modelId, episodes, autoApply);
-        appendMessage({
+        storeAppendMessage({
           id: newMsgId(),
           ts: Date.now(),
           role: 'assistant',
@@ -462,7 +465,7 @@ export function Composer() {
           }));
         }
       } catch (e) {
-        appendMessage({
+        storeAppendMessage({
           id: newMsgId(),
           ts: Date.now(),
           role: 'assistant',
@@ -478,7 +481,7 @@ export function Composer() {
       // usamos un evento global que el loop escucha.
       if (sub === 'list') {
         window.dispatchEvent(new CustomEvent('weaver:rlm-context-list-request'));
-        appendMessage({
+        storeAppendMessage({
           id: newMsgId(),
           ts: Date.now(),
           role: 'assistant',
@@ -487,7 +490,7 @@ export function Composer() {
       } else if (sub === 'clear') {
         window.dispatchEvent(new CustomEvent('weaver:rlm-context-clear'));
         setRlmFragments([], 0);
-        appendMessage({
+        storeAppendMessage({
           id: newMsgId(),
           ts: Date.now(),
           role: 'assistant',
@@ -496,14 +499,14 @@ export function Composer() {
       } else if (sub === 'get') {
         const key = parsed.args?.[0];
         if (!key) {
-          appendMessage({
+          storeAppendMessage({
             id: newMsgId(),
             ts: Date.now(),
             role: 'assistant',
             content: 'Uso: `/ctx get <key>`.',
           });
         } else {
-          appendMessage({
+          storeAppendMessage({
             id: newMsgId(),
             ts: Date.now(),
             role: 'assistant',
@@ -554,7 +557,7 @@ export function Composer() {
       })),
       images: images.length > 0 ? images : undefined,
     };
-    appendMessage(userMsg);
+    storeAppendMessage(userMsg, convId);
 
     // Construir prompt del usuario — texto puro del usuario, sin inyectar
     // directrices de modo aquí. Las directrices de comportamiento (planMode,
@@ -592,6 +595,13 @@ export function Composer() {
     const ac = new AbortController();
     abortRef.current = ac;
 
+    // Mantiene la app "despierta" mientras el agente trabaja, para que el
+    // streaming no se ralentice si el usuario minimiza la ventana o cambia
+    // de app (ver src/lib/wakeLock.ts). Best-effort — si el SO/WebView no
+    // lo soporta, simplemente no hace nada.
+    const { acquireAgentWakeLock, releaseAgentWakeLock } = await import('@/lib/wakeLock');
+    await acquireAgentWakeLock();
+
     try {
       // Si hay un miembro activo, usar su API key específica (o fallback a la global).
       const apiKeyOverride = activeMember
@@ -617,7 +627,12 @@ export function Composer() {
         // Un append vacío dejaría un mensaje fantasma al inicio del chat.
         for await (const _event of runAgent(llm, modelId, objectiveText, {
           signal: ac.signal,
-          onEvent: handleAgentEvent,
+          // Fija convId explícito por la misma razón que en runChatWithTools
+          // (ver comentario ahí): sin esto, los mensajes de progreso del
+          // agente (planificando, plan, episodio) aterrizan en la
+          // conversación que esté activa al momento de cada evento, no en
+          // la que arrancó la tarea.
+          onEvent: (event) => handleAgentEvent(event, convId),
           useRlm: rlmEnabled,
         })) {
           // Manejar eventos RLM específicos para actualizar el store.
@@ -632,18 +647,19 @@ export function Composer() {
         // tiene capacidades de agente de escritorio, incluso si la pregunta
         // no es directamente agentiva. Así puede responder "sí, puedo
         // ejecutar comandos" en lugar de "no puedo".
-        await runChatWithTools(llm, objectiveText, images, ac.signal, mcpMentionedNames, skillMentionedNames);
+        await runChatWithTools(llm, objectiveText, images, ac.signal, convId, mcpMentionedNames, skillMentionedNames);
       }
     } catch (e) {
-      appendMessage({
+      storeAppendMessage({
         role: 'assistant',
         content: `❌ Error: ${e instanceof Error ? e.message : String(e)}`,
-      });
+      }, convId);
       setAgentState('error');
     } finally {
       setIsRunning(false);
       abortRef.current = null;
       setAgentState('idle');
+      await releaseAgentWakeLock();
     }
   }
 
@@ -685,12 +701,31 @@ export function Composer() {
     userText: string,
     images: ImageContent[],
     signal: AbortSignal,
+    conversationId: string,
     mcpMentionedNames: string[] = [],
     skillMentionedNames: string[] = [],
   ) {
     const { buildAdvancedToolsList, dispatchAdvancedTool } = await import('@/lib/tools');
     const { streamChat } = await import('@/lib/chain');
     const { parseTextToolCalls, maybeHasTextToolCall } = await import('@/lib/textToolParser');
+
+    // ------------------------------------------------------------------------
+    // FIX crítico: appendMessage/updateLastAssistantMessage/setLastAssistantMessage
+    // del store escriben por defecto en la conversación ACTIVA en ese instante.
+    // Si el usuario navega a otro chat (o crea uno nuevo) mientras esta tarea
+    // sigue generando en segundo plano, los deltas de texto se mezclaban con
+    // la conversación que quedara abierta — dos respuestas entrelazadas en un
+    // mismo mensaje, o una respuesta completa "apareciendo" en el chat
+    // equivocado. Los wrappers de abajo fijan SIEMPRE `conversationId` (el
+    // chat donde arrancó ESTA tarea), sin importar a dónde navegue el usuario
+    // después. Todo el resto de esta función usa estos wrappers en vez de las
+    // funciones del store directamente.
+    // ------------------------------------------------------------------------
+    const appendMessage = (msg: Message) => storeAppendMessage(msg, conversationId);
+    const updateLastAssistantMessage = (delta: string) =>
+      storeUpdateLastAssistantMessage(delta, conversationId);
+    const setLastAssistantMessage = (content: string) =>
+      storeSetLastAssistantMessage(content, conversationId);
 
     appendMessage({ role: 'assistant', content: '', id: newMsgId(), ts: Date.now() });
 
@@ -712,6 +747,25 @@ export function Composer() {
       console.warn('[Chat] No se pudo cargar memoria para contexto:', e);
     }
     const chatMemoryMode = useWeaver.getState().chatMemoryMode;
+
+    // --- Cargar memoria de PROYECTO (scoped a este chat) para inyectar ---
+    // Bitácora de trabajo de esta conversación: qué se hizo, qué falta,
+    // decisiones tomadas. No cruza a otros chats (a diferencia de memoryContext
+    // arriba, que es memoria semántica global sobre el usuario).
+    let projectMemoryContext = '';
+    try {
+      const { memory } = await import('@/agent/memory');
+      const convId = useWeaver.getState().activeConversationId;
+      if (convId) {
+        const projectFacts = await memory.listProjectFacts(convId);
+        if (projectFacts.length > 0) {
+          projectMemoryContext = projectFacts.map((f) => `- ${f.key}: ${f.value}`).join('\n');
+        }
+      }
+    } catch (e) {
+      console.warn('[Chat] No se pudo cargar memoria de proyecto:', e);
+    }
+    const projectMemoryMode = useWeaver.getState().projectMemoryMode;
 
     // Detectar OS para que el LLM use comandos correctos (dir vs ls, etc.)
     const isWindows = typeof navigator !== 'undefined' && navigator.platform.toLowerCase().includes('win');
@@ -969,10 +1023,35 @@ export function Composer() {
           '- Buscar en internet (web_search)\n' +
           '- Descargar contenido de URLs (web_fetch)\n' +
           '- Generar archivos descargables (save_file)\n' +
-          '- Renderizar HTML o PDF dentro del chat en una mini-ventana (render_html, render_pdf)\n' +
+          '- Renderizar contenido VISUAL/INTERACTIVO dentro del chat en una mini-ventana (render)\n' +
+          '  render({kind, title, content}) — kind es uno de: "html", "svg", "mermaid", "markdown", "pdf".\n' +
+          '  ⚠️ REGLA OBLIGATORIA: si el usuario pide "renderiza/muéstrame/genera/crea/haz/dibuja" algo\n' +
+          '  visual o interactivo, DEBES llamar a render con el kind correcto — NUNCA escribas el\n' +
+          '  código (HTML, SVG, Mermaid) como texto plano de tu respuesta. Escribir el código como\n' +
+          '  texto en vez de llamar render es un ERROR: el usuario NO verá ninguna ventana, sólo\n' +
+          '  código crudo sin sentido. La única excepción es si el usuario pide explícitamente "el\n' +
+          '  código" o "muéstrame el código fuente" (ahí sí va como bloque ```html normal).\n\n' +
+          '  Cuándo usar cada kind:\n' +
+          '  · kind="html" → JUEGOS Y CUALQUIER COSA INTERACTIVA (cartas, memoria, trivia/quiz con\n' +
+          '    puntaje, tres en raya, temporizadores, calculadoras, formularios, dashboards,\n' +
+          '    animaciones, prototipos de UI). El HTML corre en un iframe CON JavaScript habilitado —\n' +
+          '    escribe la lógica completa en <script> (estado del juego, event listeners de click,\n' +
+          '    puntajes, temporizadores, validaciones) usando sólo JS vanilla, sin backend ni Python.\n' +
+          '    Ejemplo: "hazme un juego de cartas" → genera un <div id="game"> con las cartas como\n' +
+          '    elementos clicables y toda la lógica (baraja, turnos, puntaje) en un <script> dentro\n' +
+          '    del mismo HTML. Para gráficas de datos usa Chart.js vía CDN\n' +
+          '    (<script src="https://cdn.jsdelivr.net/npm/chart.js">), es más flexible que dibujar a mano.\n' +
+          '  · kind="svg" → sólo el código <svg>...</svg> (sin html/head/body) para íconos, diagramas\n' +
+          '    geométricos, ilustraciones vectoriales estáticas.\n' +
+          '  · kind="mermaid" → sólo el código Mermaid ("graph TD; A-->B;") para diagramas de flujo,\n' +
+          '    secuencia, Gantt, ER, mapas mentales. Se renderiza solo, no necesitas escribir HTML.\n' +
+          '  · kind="markdown" → texto con formato en su propia ventana separada de la respuesta.\n' +
+          '  · kind="pdf" → documentos PDF (texto/HTML o base64).\n' +
+          '  render_html y render_pdf siguen disponibles como alias directos de compatibilidad.\n' +
           '- Ejecutar código Python/Node/Bash en un sandbox efímero (sandbox_run)\n' +
           '- Crear notas/tareas/eventos en el espacio personal del usuario (me_create_*)\n' +
           '- Recordar hechos clave sobre el usuario/proyecto con memory_save_fact / memory_list_facts / memory_delete_fact\n' +
+          '- Llevar la bitácora de ESTE chat (qué se hizo/falta) con project_memory_save / project_memory_list / project_memory_delete\n' +
           '- Delegar subtareas a subagentes especializados (delegate_to_subagent)\n' +
           '- Construir un Grafo Cognitivo del proyecto (cognitive_graphify, cognitive_query)\n' +
           '- Usar tools de servidores MCP externos cuando el usuario las mencione con @mcp:\n\n' +
@@ -1091,6 +1170,34 @@ export function Composer() {
           'Usa este contexto PARA PERSONALIZAR tus respuestas (ej: si sabes su nombre, ' +
           'úsalo; si sabes su profesión, adapta el nivel técnico; si sabes sus preferencias, ' +
           'respétalas). NUNCA digas "según mi memoria…", simplemente úsala naturalmente.\n\n' +
+          '═══ MEMORIA DE PROYECTO (bitácora de ESTE chat) ═══\n' +
+          'Además de tu memoria semántica global (arriba), tienes una bitácora PROPIA de ' +
+          'ESTA conversación con tres tools:\n' +
+          '- project_memory_save(key, value): guarda o actualiza el estado del trabajo en curso.\n' +
+          '- project_memory_list(): lista todo lo que llevas registrado de este proyecto.\n' +
+          '- project_memory_delete(key): elimina una entrada que ya no aplica.\n\n' +
+          'Esta bitácora es DISTINTA de memory_save_fact: memory_save_fact es sobre EL USUARIO ' +
+          '(nombre, gustos, preferencias) y se comparte entre TODOS los chats. project_memory_save ' +
+          'es sobre ESTE PROYECTO/TRABAJO específico y NO se comparte con otros chats — es tu ' +
+          'bitácora de "qué llevamos hecho aquí".\n\n' +
+          'USA project_memory_save PROACTIVAMENTE, sin que el usuario te lo pida, cuando:\n' +
+          '  · Completes una parte del trabajo → project_memory_save("hecho:<algo>", "qué se hizo")\n' +
+          '  · Identifiques algo pendiente → project_memory_save("pendiente:<algo>", "qué falta")\n' +
+          '  · Se tome una decisión de diseño/enfoque → project_memory_save("decision:<tema>", "qué se decidió")\n' +
+          '  · El usuario defina el objetivo general → project_memory_save("objetivo", "resumen breve")\n' +
+          'No anuncies que lo estás haciendo — hazlo en silencio y sigue respondiendo normal. ' +
+          'Actualiza (sobrescribe) una entrada existente en vez de duplicarla cuando el estado cambie ' +
+          '(ej: si "pendiente:tests" ya no aplica porque los hiciste, bórrala con project_memory_delete ' +
+          'y/o guarda "hecho:tests" con project_memory_save).\n\n' +
+          (projectMemoryMode
+            ? 'MODO MEMORIA DE PROYECTO ACTIVO: al empezar a trabajar en algo sustancial en este chat, ' +
+              'considera llamar project_memory_list() si no tienes el contexto ya cargado abajo, para ' +
+              'no perder el hilo de lo que ya se hizo.\n\n'
+            : '') +
+          '═══ CONTEXTO RECUPERADO DE LA MEMORIA DE ESTE PROYECTO ═══\n' +
+          (projectMemoryContext || '(vacía — es la primera vez que se trabaja en esto en este chat)') + '\n\n' +
+          'Si hay contexto arriba, tenlo en cuenta antes de repetir trabajo ya hecho o de preguntar ' +
+          'cosas que ya se decidieron en esta conversación.\n\n' +
           '═══ CIERRE OBLIGATORIO ═══\n' +
           'Cuando termines de usar herramientas, SIEMPRE debes escribir una respuesta\n' +
           'final al usuario con esta estructura:\n' +
@@ -1162,6 +1269,51 @@ export function Composer() {
           // queda vacío — el siguiente bloque añade el feedback de ejecución.
           setLastAssistantMessage(parsed.cleanedText);
           result.text = parsed.cleanedText;
+        }
+      }
+
+      // ----------------------------------------------------------------------
+      // Red de seguridad: modelos pequeños/gratuitos a veces IGNORAN la
+      // instrucción de usar la tool render y escriben el código (HTML o SVG)
+      // completo como texto plano de su respuesta (bug reportado: usuario
+      // pide "renderiza un HTML de un dado" y el modelo devuelve el código
+      // crudo en vez de abrir la mini-ventana). Si detectamos un documento
+      // HTML o un bloque <svg> completo sin que haya habido tool call, lo
+      // envolvemos nosotros mismos con el mismo marcador que produce la tool
+      // render, para que se abra la ventana igual — sin depender de que el
+      // modelo haya llamado la tool.
+      // ----------------------------------------------------------------------
+      if (result.toolCalls.length === 0 && result.text && !result.text.includes('[render:')) {
+        const htmlMatch = result.text.match(/<!DOCTYPE html[\s\S]*<\/html\s*>/i)
+          ?? result.text.match(/<html[\s>][\s\S]*<\/html\s*>/i);
+        const svgMatch = !htmlMatch ? result.text.match(/<svg[\s>][\s\S]*<\/svg\s*>/i) : null;
+        const rawMatch = htmlMatch ?? svgMatch;
+        const kind = htmlMatch ? 'html' : 'svg';
+        const mime = htmlMatch ? 'text/html' : 'image/svg+xml';
+        if (rawMatch) {
+          const rawCode = rawMatch[0];
+          const id = crypto.randomUUID();
+          const title = kind === 'html' ? 'HTML renderizado' : 'SVG renderizado';
+          const renderMarker = `\n[render:${kind}:${id}:${title}]\n[render-content:${id}:${mime}]\n${rawCode}\n[/render-content]\n`;
+          // Reemplazar solo el bloque de código crudo por el marcador — se
+          // conserva cualquier texto explicativo que el modelo haya escrito
+          // alrededor.
+          const newText = result.text.slice(0, rawMatch.index) + renderMarker
+            + result.text.slice((rawMatch.index ?? 0) + rawCode.length);
+          setLastAssistantMessage(newText);
+          result.text = newText;
+        }
+      }
+
+      // Limpieza de marcadores de fin de turno propios de Weaver (<<END>>,
+      // <<CONTINUE>>) que algunos modelos pequeños emiten mal formados
+      // (ej: ">>END>>" en vez de "<<END>>") y que nunca deben quedar
+      // visibles en el chat — son instrucciones de protocolo, no contenido.
+      if (result.text && /(<<|>>)\s*(END|CONTINUE)\s*(>>|<<)/i.test(result.text)) {
+        const cleanedEnd = result.text.replace(/\s*(<<|>>)\s*(END|CONTINUE)\s*(>>|<<)\s*$/i, '').trimEnd();
+        if (cleanedEnd !== result.text) {
+          setLastAssistantMessage(cleanedEnd);
+          result.text = cleanedEnd;
         }
       }
 
@@ -1270,8 +1422,16 @@ export function Composer() {
         });
       }
 
-      // Pequeña pausa para que el UI se actualice antes del siguiente round.
-      await new Promise((r) => setTimeout(r, 100));
+      // Ceder el hilo brevemente para que el UI pinte el resultado del tool
+      // antes del siguiente round. OJO: NO usar setTimeout aquí — los
+      // navegadores/WebViews clampan setTimeout a ~1s+ cuando la ventana
+      // está minimizada/oculta (throttling de background tabs), lo que hacía
+      // que el agente pareciera "congelarse" en tareas largas al minimizar
+      // la app. requestAnimationFrame también se pausa en background, así
+      // que usamos una microtask (setTimeout(fn, 0) vía Promise.resolve),
+      // que los motores V8/JSC NO throttlean — sigue corriendo a máxima
+      // velocidad esté o no la ventana visible.
+      await Promise.resolve();
     }
 
     // Si el LLM nunca produjo texto final (sólo llamó tools hasta agotar rounds,
@@ -1342,6 +1502,8 @@ export function Composer() {
         return `listando: ${args.path ?? ''}`;
       case 'save_file':
         return `generando: ${args.filename ?? 'archivo'}`;
+      case 'render':
+        return `renderizando ${String(args.kind ?? 'html').toUpperCase()}: "${args.title ?? 'sin título'}"`;
       case 'render_html':
         return `renderizando HTML: "${args.title ?? 'sin título'}"`;
       case 'render_pdf':
@@ -1350,6 +1512,18 @@ export function Composer() {
         return args.subagent_name
           ? `delegando a subagente: ${args.subagent_name}`
           : `delegando a subagente (auto-selección)`;
+      case 'memory_save_fact':
+        return `recordando: ${args.key ?? ''}`;
+      case 'memory_list_facts':
+        return `revisando memoria`;
+      case 'memory_delete_fact':
+        return `olvidando: ${args.key ?? ''}`;
+      case 'project_memory_save':
+        return `bitácora: ${args.key ?? ''}`;
+      case 'project_memory_list':
+        return `revisando bitácora del proyecto`;
+      case 'project_memory_delete':
+        return `borrando de bitácora: ${args.key ?? ''}`;
       default:
         // Tools MCP con prefijo mcp__<serverId>__<toolName>
         if (toolName.startsWith('mcp__')) {
@@ -1374,8 +1548,16 @@ export function Composer() {
     const output = result.output;
     // Patrones que DEBEN preservarse completos (no truncarse) porque el
     // MessageList los parsea para renderizar ventanas especiales.
-    if (output.startsWith('[file:') || output.startsWith('[render:')) {
-      return output;
+    // OJO: renderHtml/renderPdf devuelven el output con un "\n" inicial
+    // (para separarlo visualmente en el prompt del LLM), así que hay que
+    // comparar contra la versión sin espacios — de lo contrario
+    // startsWith('[render:') daba false, el marcador caía al camino de
+    // truncado normal de abajo, y en vez de abrirse la ventana con el
+    // HTML/PDF renderizado se veía el texto crudo "[render:html:...]"
+    // cortado a 150 caracteres dentro de la cápsula de resultado.
+    const trimmedOutput = output.trimStart();
+    if (trimmedOutput.startsWith('[file:') || trimmedOutput.startsWith('[render:')) {
+      return trimmedOutput;
     }
     const truncated = output.slice(0, 150);
     const hasMore = output.length > 150;
@@ -1726,6 +1908,21 @@ export function Composer() {
                     <ToggleSwitch on={chatMemoryMode} />
                   </button>
 
+                  {/* Memoria de Proyecto (toggle) — bitácora scoped a ESTE chat */}
+                  <button
+                    onClick={() => setProjectMemoryMode(!projectMemoryMode)}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
+                  >
+                    <BrainIcon size={15} className={projectMemoryMode ? 'text-accent' : 'text-text-muted shrink-0'} />
+                    <div className="flex-1">
+                      <div className="font-medium">Memoria de proyecto</div>
+                      <div className="text-[10px] text-text-muted">
+                        Bitácora de este chat: qué se hizo, qué falta, decisiones
+                      </div>
+                    </div>
+                    <ToggleSwitch on={projectMemoryMode} />
+                  </button>
+
                   {/* RLM — Recursive Language Model (toggle) */}
                   <button
                     onClick={() => setRlmEnabled(!rlmEnabled)}
@@ -1793,6 +1990,11 @@ export function Composer() {
             {chatMemoryMode && (
               <span className="hidden md:inline-flex text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent border border-accent/30 items-center gap-1">
                 <BookMarked size={9} /> Memoria
+              </span>
+            )}
+            {projectMemoryMode && (
+              <span className="hidden md:inline-flex text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent border border-accent/30 items-center gap-1">
+                <BrainIcon size={9} /> Bitácora
               </span>
             )}
             {rlmEnabled && (

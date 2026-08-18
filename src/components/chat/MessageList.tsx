@@ -123,7 +123,7 @@ function sanitizeForTTS(content: string): string {
     .replace(/\[result \w+\][\s\S]*?\[\/result\]/g, '')
     .replace(/\[file:[^\]]+\]/g, '')
     .replace(/\[render:[a-z]+:[a-f0-9-]+:[^\]]+\]/g, '')
-    .replace(/\[render-content:[a-f0-9-]+:[a-z0-9/+\-]+\]/g, '')
+    .replace(/\[render-content:[a-f0-9-]+:[a-z0-9/+.\-]+\]/g, '')
     .replace(/\[\/render-content\]/g, '')
     .replace(/\[app:\w+:[^\]]+\]/g, '')
     .replace(/<<CONTINUE>>|<<END>>/g, '')
@@ -157,7 +157,7 @@ function SpeakerIcon({ size = 11, className = '' }: { size?: number; className?:
 
 // Icono SVG de cerebro — estilo línea consistente con SpeakerIcon/lucide,
 // con un hemisferio "trazado" y una costura central que sugiere pensamiento.
-function BrainIcon({ size = 13, className = '' }: { size?: number; className?: string }) {
+export function BrainIcon({ size = 13, className = '' }: { size?: number; className?: string }) {
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -534,7 +534,7 @@ interface CapsuleGroup {
 
 interface RenderWindow {
   id: string;
-  type: 'html' | 'pdf' | 'docx' | 'xlsx' | 'md';
+  type: 'html' | 'pdf' | 'docx' | 'xlsx' | 'md' | 'svg' | 'mermaid';
   title: string;
   content: string;
   capsuleId: string;
@@ -552,9 +552,10 @@ interface ParsedSegment {
 function parseMessageContent(content: string): ParsedSegment[] {
   const segments: ParsedSegment[] = [];
   // Regex que captura: tool, result, file, render-open, render-close, render-content-open, render-content-close, app
-  // Nota: el mime en render-content puede contener /, +, números y letras (ej: text/html, application/pdf).
+  // Nota: el mime en render-content puede contener /, +, ., números y letras
+  // (ej: text/html, application/pdf, application/vnd.ms-excel).
   // result usa [/result] como cierre explícito (ver nota arriba) — jamás "]".
-  const pattern = /(\[tool \w+: [^\]]+\]|\[result \w+\][\s\S]*?\[\/result\]|\[file:[^\]]+\]|\[render:[a-z]+:[a-f0-9-]+:[^\]]+\]|\[render-content:[a-f0-9-]+:[a-z0-9/+\-]+\]|\[\/render-content\]|\[app:\w+:[^\]]+\])/g;
+  const pattern = /(\[tool \w+: [^\]]+\]|\[result \w+\][\s\S]*?\[\/result\]|\[file:[^\]]+\]|\[render:[a-z]+:[a-f0-9-]+:[^\]]+\]|\[render-content:[a-f0-9-]+:[a-z0-9/+.\-]+\]|\[\/render-content\]|\[app:\w+:[^\]]+\])/g;
   const parts = content.split(pattern).filter((p) => p !== undefined && p !== '');
 
   const pendingCapsules: CapsuleGroup[] = [];
@@ -618,7 +619,7 @@ function parseMessageContent(content: string): ParsedSegment[] {
     }
 
     // render-open
-    const renderOpenMatch = part.match(/^\[render:(html|pdf|docx|xlsx|md):([a-f0-9-]+):([^\]]+)\]$/);
+    const renderOpenMatch = part.match(/^\[render:(html|pdf|docx|xlsx|md|svg|mermaid):([a-f0-9-]+):([^\]]+)\]$/);
     if (renderOpenMatch) {
       openRenders.set(renderOpenMatch[2], {
         type: renderOpenMatch[1] as RenderWindow['type'],
@@ -630,7 +631,11 @@ function parseMessageContent(content: string): ParsedSegment[] {
     }
 
     // render-content-open
-    const rcOpenMatch = part.match(/^\[render-content:([a-f0-9-]+):([a-z+]+)\]$/);
+    // El mime puede traer "/" y "." (ej: text/html, application/pdf,
+    // application/vnd.ms-excel) — el regex debe aceptar ambos o nunca
+    // matchea, dejando el contenido como texto plano suelto en el chat en
+    // vez de activar la ventana de render.
+    const rcOpenMatch = part.match(/^\[render-content:([a-f0-9-]+):([a-z0-9/+.\-]+)\]$/);
     if (rcOpenMatch) {
       currentRenderContentId = rcOpenMatch[1];
       currentRenderContentBuf = '';
@@ -878,33 +883,75 @@ function RenderWindowBlock({ rw }: { rw: RenderWindow }) {
   const [hidden, setHidden] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [size, setSize] = useState<{ w: number; h: number }>({ w: 480, h: 320 });
-  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
-  const [dragging, setDragging] = useState<{ dx: number; dy: number } | null>(null);
+  const [maximized, setMaximized] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const hideCapsule = useWeaver((s) => s.hideCapsule);
 
-  const onRefresh = useCallback(() => setRefreshKey((k) => k + 1), []);
-  const onClose = useCallback(() => setHidden(true), []);
-  const onOpenExternal = useCallback(() => {
-    // Crear blob y abrir
-    const mime = rw.type === 'html' ? 'text/html' : rw.type === 'pdf' ? 'application/pdf' : rw.type === 'md' ? 'text/markdown' : 'application/octet-stream';
-    const blob = new Blob([rw.content], { type: mime });
-    const url = URL.createObjectURL(blob);
-    window.open(url, '_blank');
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-  }, [rw]);
-
-  if (hidden) return null;
-
-  // Construir src para iframe
+  // Construir src para iframe — declarado ANTES de onOpenExternal porque éste
+  // lo referencia (svg/mermaid abren el srcDoc ya renderizado, no el content
+  // crudo). Si se declara después, es un ReferenceError en tiempo de
+  // ejecución (temporal dead zone de `const`).
   const srcDoc = useMemo(() => {
     if (rw.type === 'html') return rw.content;
     if (rw.type === 'md') {
       // Renderizar como markdown simple dentro de HTML
       return `<!doctype html><html><body style="font-family: -apple-system, system-ui, sans-serif; padding: 1rem; line-height: 1.5;">${escapeHtml(rw.content).replace(/\n/g, '<br>')}</body></html>`;
     }
+    if (rw.type === 'svg') {
+      // El SVG se centra y se escala para llenar la ventana sin recortarse.
+      return `<!doctype html><html><head><style>
+        html,body{margin:0;height:100%;display:flex;align-items:center;justify-content:center;background:#fff;}
+        svg{max-width:100%;max-height:100%;}
+      </style></head><body>${rw.content}</body></html>`;
+    }
+    if (rw.type === 'mermaid') {
+      // Carga mermaid.js desde CDN y renderiza el diagrama dentro del iframe.
+      // Aislado del resto de la app — si el CDN falla, se ve un mensaje claro
+      // en vez de una ventana en blanco.
+      return `<!doctype html><html><head><style>
+        html,body{margin:0;height:100%;display:flex;align-items:center;justify-content:center;
+          background:#fff;font-family:-apple-system,system-ui,sans-serif;overflow:auto;padding:1rem;box-sizing:border-box;}
+        #err{color:#b91c1c;font-size:13px;display:none;}
+      </style></head><body>
+        <div class="mermaid" id="dgm">${escapeHtml(rw.content)}</div>
+        <div id="err">No se pudo cargar el renderizador de diagramas (sin conexión a internet).</div>
+        <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js" onerror="document.getElementById('dgm').style.display='none';document.getElementById('err').style.display='block';"></script>
+        <script>
+          window.addEventListener('load', function() {
+            if (window.mermaid) {
+              mermaid.initialize({ startOnLoad: true, theme: 'default' });
+            }
+          });
+        </script>
+      </body></html>`;
+    }
     return '';
   }, [rw.content, rw.type]);
+
+  const onRefresh = useCallback(() => setRefreshKey((k) => k + 1), []);
+  const onClose = useCallback(() => setHidden(true), []);
+  const onOpenExternal = useCallback(() => {
+    // Crear blob y abrir. Para svg/mermaid abrimos el mismo srcDoc renderizado
+    // (no el contenido crudo) para que también funcione fuera del chat.
+    const isSrcDocType = rw.type === 'svg' || rw.type === 'mermaid';
+    const mime = rw.type === 'html' || isSrcDocType
+      ? 'text/html'
+      : rw.type === 'pdf' ? 'application/pdf' : rw.type === 'md' ? 'text/markdown' : 'application/octet-stream';
+    const blob = new Blob([isSrcDocType ? srcDoc : rw.content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }, [rw, srcDoc]);
+
+  // Cerrar el modal de maximizado con Escape.
+  useEffect(() => {
+    if (!maximized) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setMaximized(false);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [maximized]);
 
   // PDF: blob URL
   const pdfUrl = useMemo(() => {
@@ -917,117 +964,164 @@ function RenderWindowBlock({ rw }: { rw: RenderWindow }) {
     return () => { if (pdfUrl) URL.revokeObjectURL(pdfUrl); };
   }, [pdfUrl]);
 
-  useEffect(() => {
-    function onMouseMove(e: MouseEvent) {
-      if (!dragging) return;
-      setPos({ x: e.clientX - dragging.dx, y: e.clientY - dragging.dy });
-    }
-    function onMouseUp() { setDragging(null); }
-    if (dragging) {
-      window.addEventListener('mousemove', onMouseMove);
-      window.addEventListener('mouseup', onMouseUp);
-      return () => {
-        window.removeEventListener('mousemove', onMouseMove);
-        window.removeEventListener('mouseup', onMouseUp);
-      };
-    }
-  }, [dragging]);
+  // El "return null" temprano va DESPUÉS de todos los hooks (Reglas de los
+  // Hooks de React: el número/orden de hooks debe ser el mismo en cada
+  // render — un return antes de un useMemo/useEffect posterior hace que
+  // React los salte solo quando hidden=true, lo que dispara "Rendered fewer
+  // hooks than expected" y puede romper el estado del componente).
+  if (hidden) return null;
 
-  const style: React.CSSProperties = pos
-    ? { position: 'fixed', left: pos.x, top: pos.y, width: size.w, height: size.h, zIndex: 60 }
-    : { position: 'relative', width: size.w, height: size.h };
 
-  return (
-    <div
-      ref={containerRef}
-      className="my-3 rounded-codex border border-border-accent bg-app-bg overflow-hidden shadow-lg flex flex-col"
-      style={style}
-    >
-      {/* Title bar */}
-      <div
-        className="flex items-center gap-2 px-2 py-1.5 bg-app-elevated border-b border-border cursor-move select-none"
-        onMouseDown={(e) => {
-          const rect = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
-          setDragging({ dx: e.clientX - rect.left, dy: e.clientY - rect.top });
-          setPos({ x: rect.left, y: rect.top });
-        }}
+  const renderContent = (heightOverride?: string) => (
+    <div className="flex-1 overflow-hidden bg-white relative" style={heightOverride ? { height: heightOverride } : undefined}>
+      {rw.type === 'html' && (
+        <iframe
+          key={refreshKey}
+          srcDoc={srcDoc}
+          title={rw.title}
+          sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+          className="w-full h-full border-0"
+        />
+      )}
+      {rw.type === 'md' && (
+        <iframe
+          key={refreshKey}
+          srcDoc={srcDoc}
+          title={rw.title}
+          className="w-full h-full border-0"
+        />
+      )}
+      {rw.type === 'svg' && (
+        <iframe
+          key={refreshKey}
+          srcDoc={srcDoc}
+          title={rw.title}
+          className="w-full h-full border-0"
+        />
+      )}
+      {rw.type === 'mermaid' && (
+        <iframe
+          key={refreshKey}
+          srcDoc={srcDoc}
+          title={rw.title}
+          sandbox="allow-scripts"
+          className="w-full h-full border-0"
+        />
+      )}
+      {rw.type === 'pdf' && pdfUrl && (
+        <iframe
+          key={refreshKey}
+          src={pdfUrl}
+          title={rw.title}
+          className="w-full h-full border-0"
+        />
+      )}
+      {rw.type === 'docx' && <DocxPreview key={refreshKey} content={rw.content} title={rw.title} />}
+      {rw.type === 'xlsx' && <XlsxPreview key={refreshKey} content={rw.content} title={rw.title} />}
+    </div>
+  );
+
+  const titleBar = (isMaximizedBar: boolean) => (
+    <div className="flex items-center gap-2 px-2 py-1.5 bg-app-elevated border-b border-border select-none">
+      <FileIcon size={12} className="text-accent shrink-0" />
+      <span className="text-xs font-medium truncate flex-1">{rw.title}</span>
+      <button onClick={onRefresh} className="codex-icon-btn w-6 h-6" title="Refrescar">
+        <RefreshCw size={12} />
+      </button>
+      <button onClick={onOpenExternal} className="codex-icon-btn w-6 h-6" title="Abrir externo">
+        <ExternalLink size={12} />
+      </button>
+      <button
+        onClick={() => setMaximized((v) => !v)}
+        className="codex-icon-btn w-6 h-6"
+        title={isMaximizedBar ? 'Restaurar' : 'Maximizar'}
       >
-        <FileIcon size={12} className="text-accent shrink-0" />
-        <span className="text-xs font-medium truncate flex-1">{rw.title}</span>
-        <button onClick={onRefresh} className="codex-icon-btn w-5 h-5" title="Refrescar">
-          <RefreshCw size={10} />
-        </button>
-        <button onClick={onOpenExternal} className="codex-icon-btn w-5 h-5" title="Abrir externo">
-          <ExternalLink size={10} />
-        </button>
+        <Maximize2 size={12} />
+      </button>
+      {!isMaximizedBar && (
         <button
           onClick={() => { hideCapsule(rw.capsuleId); setHidden(true); }}
-          className="codex-icon-btn w-5 h-5"
+          className="codex-icon-btn w-6 h-6"
           title="Ocultar"
         >
-          <EyeOff size={10} />
+          <EyeOff size={12} />
         </button>
-        <button onClick={onClose} className="codex-icon-btn w-5 h-5" title="Cerrar">
-          <X size={10} />
-        </button>
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 overflow-hidden bg-white relative">
-        {rw.type === 'html' && (
-          <iframe
-            key={refreshKey}
-            srcDoc={srcDoc}
-            title={rw.title}
-            sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
-            className="w-full h-full border-0"
-          />
-        )}
-        {rw.type === 'md' && (
-          <iframe
-            key={refreshKey}
-            srcDoc={srcDoc}
-            title={rw.title}
-            className="w-full h-full border-0"
-          />
-        )}
-        {rw.type === 'pdf' && pdfUrl && (
-          <iframe
-            key={refreshKey}
-            src={pdfUrl}
-            title={rw.title}
-            className="w-full h-full border-0"
-          />
-        )}
-        {rw.type === 'docx' && <DocxPreview key={refreshKey} content={rw.content} title={rw.title} />}
-        {rw.type === 'xlsx' && <XlsxPreview key={refreshKey} content={rw.content} title={rw.title} />}
-      </div>
-
-      {/* Resize handle */}
-      <div
-        className="absolute bottom-0 right-0 w-3 h-3 cursor-nwse-resize"
-        onMouseDown={(e) => {
-          e.stopPropagation();
-          const startX = e.clientX;
-          const startY = e.clientY;
-          const startW = size.w;
-          const startH = size.h;
-          function move(ev: MouseEvent) {
-            setSize({ w: Math.max(280, startW + (ev.clientX - startX)), h: Math.max(180, startH + (ev.clientY - startY)) });
-          }
-          function up() {
-            window.removeEventListener('mousemove', move);
-            window.removeEventListener('mouseup', up);
-          }
-          window.addEventListener('mousemove', move);
-          window.addEventListener('mouseup', up);
-        }}
-        style={{
-          backgroundImage: 'linear-gradient(135deg, transparent 50%, var(--text-muted) 50%, var(--text-muted) 60%, transparent 60%, transparent 70%, var(--text-muted) 70%, var(--text-muted) 80%, transparent 80%)',
-          opacity: 0.5,
-        }}
-      />
+      )}
+      <button onClick={onClose} className="codex-icon-btn w-6 h-6" title="Cerrar">
+        <X size={12} />
+      </button>
     </div>
+  );
+
+  return (
+    <>
+      {/*
+        Ventana embebida — vive SIEMPRE dentro del flujo normal del chat
+        (position: relative), nunca en position: fixed. Antes se volvía
+        fixed en cuanto el usuario arrastraba la barra de título, lo que la
+        dejaba flotando pegada al viewport: al hacer scroll "seguía" al
+        usuario por toda la pantalla, tapando el resto del chat, y los
+        botones de la barra de título quedaban fuera de alcance o debajo de
+        otro contenido — por eso "ocultar/maximizar/recargar no servían".
+        Ahora el arrastre libre desapareció; para verla en grande existe el
+        botón Maximizar, que abre un modal real (fixed + backdrop) separado
+        de la tarjeta normal — nunca se mezclan ambos comportamientos.
+      */}
+      <div
+        ref={containerRef}
+        className="my-3 rounded-codex border border-border-accent bg-app-bg overflow-hidden shadow-lg flex flex-col relative"
+        style={{ width: '100%', maxWidth: size.w, height: size.h }}
+      >
+        {titleBar(false)}
+        {renderContent()}
+
+        {/* Resize handle */}
+        <div
+          className="absolute bottom-0 right-0 w-3 h-3 cursor-nwse-resize"
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            const startX = e.clientX;
+            const startY = e.clientY;
+            const startW = size.w;
+            const startH = size.h;
+            function move(ev: MouseEvent) {
+              setSize({ w: Math.max(280, startW + (ev.clientX - startX)), h: Math.max(180, startH + (ev.clientY - startY)) });
+            }
+            function up() {
+              window.removeEventListener('mousemove', move);
+              window.removeEventListener('mouseup', up);
+            }
+            window.addEventListener('mousemove', move);
+            window.addEventListener('mouseup', up);
+          }}
+          style={{
+            backgroundImage: 'linear-gradient(135deg, transparent 50%, var(--text-muted) 50%, var(--text-muted) 60%, transparent 60%, transparent 70%, var(--text-muted) 70%, var(--text-muted) 80%, transparent 80%)',
+            opacity: 0.5,
+          }}
+        />
+      </div>
+
+      {/*
+        Modal de maximizado — overlay fixed explícito con backdrop, separado
+        de la tarjeta de arriba. Se cierra con el botón Restaurar, la X, o
+        Escape. No se mueve con el scroll (a propósito: es un modal), pero
+        a diferencia del bug anterior, aquí SÍ es la intención — el usuario
+        lo abrió deliberadamente con un botón, y siempre tiene forma clara
+        de cerrarlo.
+      */}
+      {maximized && (
+        <div
+          className="fixed inset-0 bg-black/60 flex items-center justify-center p-4"
+          style={{ zIndex: 200 }}
+          onClick={(e) => { if (e.target === e.currentTarget) setMaximized(false); }}
+        >
+          <div className="w-full h-full max-w-5xl bg-app-bg rounded-codex border border-border-accent shadow-lg flex flex-col overflow-hidden">
+            {titleBar(true)}
+            {renderContent('100%')}
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1259,6 +1353,10 @@ function getToolIcon(toolName: string) {
     case 'memory_list_facts':
     case 'memory_delete_fact':
       return <BookMarked size={size} />;
+    case 'project_memory_save':
+    case 'project_memory_list':
+    case 'project_memory_delete':
+      return <BrainIcon size={size} />;
     default:
       return <Download size={size} />;
   }
@@ -1294,6 +1392,10 @@ function getToolColor(toolName: string): string {
     case 'memory_list_facts':
     case 'memory_delete_fact':
       return '#22d3ee';
+    case 'project_memory_save':
+    case 'project_memory_list':
+    case 'project_memory_delete':
+      return 'var(--accent-strong)';
     default:
       return 'var(--text-muted)';
   }

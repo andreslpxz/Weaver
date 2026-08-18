@@ -11,6 +11,8 @@ import {
 } from '@/views/Views';
 import { WorkflowsView } from '@/views/WorkflowsView';
 import { WorkflowEditorView } from '@/views/WorkflowEditorView';
+import { NotebooksView } from '@/views/NotebooksView';
+import { NotebookDetailView } from '@/views/NotebookDetailView';
 import { MeView } from '@/views/MeView';
 import { IdeLayout } from '@/components/ide/IdeLayout';
 import { SubagentsView } from '@/components/agent/SubagentsView';
@@ -25,7 +27,7 @@ import { LiveOverlay } from '@/components/voice/LiveOverlay';
 import { useVoiceStore } from '@/store/voice';
 
 export default function App() {
-  const { view, loadConversations, themeId, loadMeAll, appMode, setAppMode, activeConversationId } = useWeaver();
+  const { view, loadConversations, themeId, loadMeAll, appMode, setAppMode, activeConversationId, activeNotebookId } = useWeaver();
 
   // Inicializar tema al montar.
   useEffect(() => {
@@ -81,6 +83,8 @@ export default function App() {
           {view === 'automatizaciones' && <AutomatizacionesView />}
           {view === 'workflows' && <WorkflowsView />}
           {view === 'workflow-editor' && <WorkflowEditorView />}
+          {view === 'notebooks' && <NotebooksView />}
+          {view === 'notebook-detail' && activeNotebookId && <NotebookDetailView notebookId={activeNotebookId} />}
           {view === 'configuracion' && <ConfiguracionView />}
           {view === 'subagentes' && <SubagentsView />}
           {view === 'memoria' && <MemoryPanel />}
@@ -111,6 +115,8 @@ export default function App() {
           {view === 'automatizaciones' && <AutomatizacionesView />}
           {view === 'workflows' && <WorkflowsView />}
           {view === 'workflow-editor' && <WorkflowEditorView />}
+          {view === 'notebooks' && <NotebooksView />}
+          {view === 'notebook-detail' && activeNotebookId && <NotebookDetailView notebookId={activeNotebookId} />}
           {view === 'configuracion' && <ConfiguracionView />}
           {view === 'subagentes' && <SubagentsView />}
           {view === 'memoria' && <MemoryPanel />}
@@ -160,6 +166,7 @@ function IdeLayoutShell({ children, onExitToNormal }: { children: React.ReactNod
             { id: 'complementos', label: 'MCP / Skills', icon: '🧩' },
             { id: 'automatizaciones', label: 'Schedules', icon: '⏰' },
             { id: 'workflows', label: 'Workflows', icon: '🔀' },
+            { id: 'notebooks', label: 'Notebooks', icon: '📓' },
             { id: 'subagentes', label: 'Subagentes', icon: '🤖' },
             { id: 'memoria', label: 'Memoria', icon: '🧠' },
             { id: 'metricas', label: 'Métricas', icon: '📊' },

@@ -255,12 +255,84 @@ export const ADVANCED_TOOLS: ToolDef[] = [
       key: { type: 'string', description: 'Clave del hecho a eliminar (ej: "user:name")' },
     },
   },
+  // ===================== Memoria de PROYECTO (por conversación) =====================
+  // Bitácora de trabajo de ESTE chat/proyecto en particular — no cruza a otros
+  // chats. Es distinta de memory_save_fact (memoria semántica GLOBAL sobre el
+  // usuario: nombre, gustos, preferencias). Aquí va: qué se está construyendo,
+  // qué ya se hizo, qué falta, decisiones y acuerdos tomados en ESTA conversación.
+  {
+    name: 'project_memory_save',
+    description:
+      'Guarda o actualiza una entrada en la memoria de ESTE proyecto/chat (no se comparte con otros chats). ' +
+      'Úsala para llevar la bitácora del trabajo en curso: qué se está haciendo, qué ya quedó hecho, ' +
+      'qué falta, decisiones tomadas, convenciones acordadas, bugs pendientes, próximos pasos. ' +
+      'Si la clave ya existe, se sobrescribe (úsalo para ir actualizando el estado del "qué falta").\n' +
+      'Ejemplos:\n' +
+      '- "vamos a usar Tailwind para los estilos" → project_memory_save(key="decision:estilos", value="Tailwind")\n' +
+      '- terminaste de implementar el login → project_memory_save(key="hecho:login", value="Login con JWT implementado y probado")\n' +
+      '- "falta agregar tests" → project_memory_save(key="pendiente:tests", value="Agregar tests del login")\n' +
+      '- resumen general del objetivo → project_memory_save(key="objetivo", value="App de tareas con React + FastAPI")',
+    category: 'fs',
+    parameters: {
+      key: { type: 'string', description: 'Clave corta en formato tipo:nombre (ej: "hecho:login", "pendiente:tests", "decision:estilos", "objetivo"). Si ya existe, se sobrescribe.' },
+      value: { type: 'string', description: 'Descripción breve del hecho/decisión/pendiente. 1-3 frases.' },
+    },
+  },
+  {
+    name: 'project_memory_list',
+    description:
+      'Lista todo lo guardado en la memoria de ESTE proyecto/chat: qué se hizo, qué falta, decisiones tomadas. ' +
+      'Úsala al empezar una sesión de trabajo en un chat existente para refrescar el contexto, o cuando ' +
+      'el usuario pregunte "¿qué llevamos hecho?", "¿qué falta?", "¿en qué quedamos?", "resume el proyecto".',
+    category: 'fs',
+    parameters: {},
+  },
+  {
+    name: 'project_memory_delete',
+    description:
+      'Elimina una entrada específica de la memoria de este proyecto/chat por su clave. ' +
+      'Úsala cuando algo ya no aplica (ej: un pendiente que ya se resolvió y quieres limpiar, ' +
+      'o una decisión que cambió).',
+    category: 'fs',
+    parameters: {
+      key: { type: 'string', description: 'Clave de la entrada a eliminar (ej: "pendiente:tests")' },
+    },
+  },
+  {
+    name: 'render',
+    description:
+      'Renderiza contenido VISUAL O INTERACTIVO dentro del chat, en una mini-ventana con ' +
+      'botones refrescar/maximizar/ocultar/cerrar/redimensionar. Es la tool UNIVERSAL para ' +
+      'mostrarle algo al usuario en vez de describírselo en texto — cúbrela con "kind":\n\n' +
+      '• kind="html" → HTML/CSS/JS completo. USA ESTO PARA TODO LO INTERACTIVO: juegos ' +
+      '(cartas, memoria, trivia, tres en raya), quizzes/preguntas con puntaje, calculadoras, ' +
+      'formularios, dashboards, animaciones, prototipos de UI, simulaciones, temporizadores, etc. ' +
+      'El HTML corre en un iframe con JavaScript habilitado (sandbox="allow-scripts") — puedes usar ' +
+      '<script> con lógica de juego completa (estado, eventos de click, puntajes, temporizadores) ' +
+      'sin ninguna librería externa. NO necesitas backend ni Python: para un juego de cartas, genera ' +
+      'las cartas en el propio JS (array de objetos, shuffle, event listeners de click).\n' +
+      '• kind="svg" → Solo el código <svg>...</svg> (sin html/head/body). Para íconos, diagramas ' +
+      'geométricos, ilustraciones vectoriales, gráficas dibujadas a mano.\n' +
+      '• kind="mermaid" → Solo el código Mermaid (ej: "graph TD; A-->B;"). Para diagramas de flujo, ' +
+      'diagramas de secuencia, Gantt, ER, mapas mentales. Se renderiza automáticamente con mermaid.js.\n' +
+      '• kind="markdown" → Texto markdown que se quiere mostrar en su propia ventana con formato ' +
+      '(en vez de mezclado en la respuesta normal).\n' +
+      '• kind="pdf" → Documento PDF (contenido como texto/HTML o base64).\n\n' +
+      'Para gráficas de datos (barras, líneas, pie) usa kind="html" con Chart.js vía CDN ' +
+      '(<script src="https://cdn.jsdelivr.net/npm/chart.js">), es más flexible que SVG a mano.',
+    category: 'fs',
+    parameters: {
+      kind: { type: 'string', description: 'Tipo de contenido: "html", "svg", "mermaid", "markdown" o "pdf"' },
+      title: { type: 'string', description: 'Título de la ventana' },
+      content: { type: 'string', description: 'El contenido a renderizar, según kind: HTML completo, código <svg>, código Mermaid, texto markdown, o contenido de PDF' },
+    },
+  },
   {
     name: 'render_html',
     description:
-      'Renderiza HTML dentro del chat en una mini-ventana con botones refrescar/cerrar/ocultar/redimensionar. ' +
-      'Útil para mostrar dashboards, tablas interactivas, animaciones, prototipos, etc. ' +
-      'El HTML se ejecuta en un iframe sandboxed.',
+      '[Alias de render con kind="html"] Renderiza HTML dentro del chat en una mini-ventana con ' +
+      'botones refrescar/maximizar/cerrar/ocultar/redimensionar. Prefiere usar render({kind:"html", ...}) ' +
+      'directamente — este alias existe por compatibilidad.',
     category: 'fs',
     parameters: {
       title: { type: 'string', description: 'Título de la ventana' },
@@ -269,7 +341,7 @@ export const ADVANCED_TOOLS: ToolDef[] = [
   },
   {
     name: 'render_pdf',
-    description: 'Renderiza un PDF (contenido binario como base64 o texto) dentro del chat en una mini-ventana.',
+    description: '[Alias de render con kind="pdf"] Renderiza un PDF dentro del chat en una mini-ventana.',
     category: 'fs',
     parameters: {
       title: { type: 'string', description: 'Título' },
@@ -421,6 +493,14 @@ export async function dispatchAdvancedTool(
         return await memoryListFacts();
       case 'memory_delete_fact':
         return await memoryDeleteFact(args);
+      case 'project_memory_save':
+        return await projectMemorySave(args);
+      case 'project_memory_list':
+        return await projectMemoryList();
+      case 'project_memory_delete':
+        return await projectMemoryDelete(args);
+      case 'render':
+        return await renderUnified(args);
       case 'render_html':
         return await renderHtml(args);
       case 'render_pdf':
@@ -650,6 +730,72 @@ async function memoryDeleteFact(args: Record<string, unknown>): Promise<ToolExec
 }
 
 // ============================================================================
+// Memoria de PROYECTO (por conversación) — a diferencia de memory_save_fact
+// (memoria semántica GLOBAL que cruza chats: nombre del usuario, gustos,
+// preferencias), esta memoria vive DENTRO del chat actual. Es la bitácora de
+// trabajo: qué se está haciendo, qué ya se hizo, qué falta, decisiones
+// tomadas. Se limpia sola si se borra la conversación (no aplica hoy, pero
+// queda scoped por conversationId para no mezclarse entre chats).
+// ============================================================================
+
+async function projectMemorySave(args: Record<string, unknown>): Promise<ToolExecResult> {
+  const { memory } = await import('@/agent/memory');
+  const { useWeaver } = await import('@/store/weaver');
+  const conversationId = useWeaver.getState().activeConversationId;
+  if (!conversationId) {
+    return { ok: false, output: '', error: 'No hay conversación activa' };
+  }
+  const key = String(args.key ?? '').trim();
+  const value = String(args.value ?? '').trim();
+  if (!key) return { ok: false, output: '', error: 'project_memory_save requiere "key"' };
+  if (!value) return { ok: false, output: '', error: 'project_memory_save requiere "value"' };
+  await memory.setProjectFact(conversationId, key, value, 'agent');
+  return {
+    ok: true,
+    output: `Memoria de proyecto actualizada: ${key} = ${value.slice(0, 100)}${value.length > 100 ? '…' : ''}`,
+  };
+}
+
+async function projectMemoryList(): Promise<ToolExecResult> {
+  const { memory } = await import('@/agent/memory');
+  const { useWeaver } = await import('@/store/weaver');
+  const conversationId = useWeaver.getState().activeConversationId;
+  if (!conversationId) {
+    return { ok: false, output: '', error: 'No hay conversación activa' };
+  }
+  const facts = await memory.listProjectFacts(conversationId);
+  if (facts.length === 0) {
+    return { ok: true, output: 'La memoria de este proyecto/chat está vacía todavía.' };
+  }
+  const lines = facts.map((f) => `- ${f.key}: ${f.value}`);
+  return {
+    ok: true,
+    output: `Memoria de este proyecto (${facts.length} entradas):\n${lines.join('\n')}`,
+  };
+}
+
+async function projectMemoryDelete(args: Record<string, unknown>): Promise<ToolExecResult> {
+  const { memory } = await import('@/agent/memory');
+  const { useWeaver } = await import('@/store/weaver');
+  const conversationId = useWeaver.getState().activeConversationId;
+  if (!conversationId) {
+    return { ok: false, output: '', error: 'No hay conversación activa' };
+  }
+  const key = String(args.key ?? '').trim();
+  if (!key) return { ok: false, output: '', error: 'project_memory_delete requiere "key"' };
+  const existing = (await memory.listProjectFacts(conversationId)).find((f) => f.key === key);
+  if (!existing) {
+    return { ok: true, output: `No había ninguna entrada de proyecto con la clave "${key}".` };
+  }
+  await memory.deleteProjectFact(conversationId, key);
+  return {
+    ok: true,
+    output: `Entrada de memoria de proyecto eliminada: ${key} (era: ${existing.value.slice(0, 80)})`,
+  };
+}
+
+
+// ============================================================================
 // Render tools — devuelven un patrón que el MessageList renderiza
 // ============================================================================
 
@@ -670,6 +816,49 @@ async function renderPdf(args: Record<string, unknown>): Promise<ToolExecResult>
   return {
     ok: true,
     output: `\n[render:pdf:${id}:${title}]\n[render-content:${id}:application/pdf]\n${content}\n[/render-content]\n`,
+  };
+}
+
+// Tool unificada: render({kind, title, content}) — cubre html/svg/mermaid/markdown/pdf
+// con una sola interfaz, para que el LLM no tenga que elegir entre varias tools
+// parecidas (fuente de errores: a veces llamaba la equivocada o ninguna).
+const RENDER_KIND_TO_TYPE: Record<string, 'html' | 'pdf' | 'docx' | 'xlsx' | 'md' | 'svg' | 'mermaid'> = {
+  html: 'html',
+  svg: 'svg',
+  mermaid: 'mermaid',
+  markdown: 'md',
+  md: 'md',
+  pdf: 'pdf',
+};
+
+const RENDER_TYPE_TO_MIME: Record<string, string> = {
+  html: 'text/html',
+  pdf: 'application/pdf',
+  md: 'text/markdown',
+  svg: 'image/svg+xml',
+  mermaid: 'text/mermaid',
+};
+
+async function renderUnified(args: Record<string, unknown>): Promise<ToolExecResult> {
+  const kindRaw = String(args.kind ?? 'html').toLowerCase().trim();
+  const type = RENDER_KIND_TO_TYPE[kindRaw];
+  if (!type) {
+    return {
+      ok: false,
+      output: '',
+      error: `kind "${kindRaw}" no reconocido. Usa uno de: html, svg, mermaid, markdown, pdf.`,
+    };
+  }
+  const title = String(args.title ?? 'Render');
+  const content = String(args.content ?? '');
+  if (!content.trim()) {
+    return { ok: false, output: '', error: 'render requiere "content" (no puede ir vacío)' };
+  }
+  const id = crypto.randomUUID();
+  const mime = RENDER_TYPE_TO_MIME[type];
+  return {
+    ok: true,
+    output: `\n[render:${type}:${id}:${title}]\n[render-content:${id}:${mime}]\n${content}\n[/render-content]\n`,
   };
 }
 

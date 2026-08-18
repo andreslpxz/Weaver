@@ -19,7 +19,7 @@ import type { ThemeId } from '@/lib/themes';
 import { getActiveTheme, applyTheme } from '@/lib/themes';
 import { sqlite, runtime, type ProjectRow, type ProjectMemberRow, type MeEvent, type MeCalendar, type MeTask, type MeNote, type MeHealth, type MeShoppingItem, type MeIntegration } from '@/lib/tauri';
 
-export type ViewId = 'chat' | 'complementos' | 'habilidades' | 'automatizaciones' | 'configuracion' | 'me' | 'subagentes' | 'memoria' | 'metricas' | 'workflows' | 'workflow-editor' | 'rlm';
+export type ViewId = 'chat' | 'complementos' | 'habilidades' | 'automatizaciones' | 'configuracion' | 'me' | 'subagentes' | 'memoria' | 'metricas' | 'workflows' | 'workflow-editor' | 'rlm' | 'notebooks' | 'notebook-detail';
 
 export interface Conversation {
   id: string;
@@ -73,6 +73,9 @@ interface WeaverState {
   activeWorkflowId: string | null;
   setActiveWorkflowId: (id: string | null) => void;
 
+  activeNotebookId: string | null;
+  setActiveNotebookId: (id: string | null) => void;
+
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
 
@@ -125,10 +128,20 @@ interface WeaverState {
   persistConversation: (conversationId: string) => Promise<void>;
   deleteConversation: (id: string) => void;
   renameConversation: (id: string, title: string) => Promise<void>;
-  appendMessage: (msg: Message) => void;
-  updateLastAssistantMessage: (delta: string) => void;
+  /**
+   * targetConversationId es OPCIONAL — si se omite, usa la conversación
+   * ACTIVA (comportamiento histórico). Pásalo explícitamente en cualquier
+   * flujo de streaming largo (el chat del agente) para que los deltas
+   * lleguen siempre a la conversación donde arrancó la tarea, incluso si el
+   * usuario navega a otro chat o crea uno nuevo mientras el agente sigue
+   * generando — de lo contrario el texto en curso se mezcla con el chat que
+   * quede activo en ese momento (bug: respuestas de un chat aparecían
+   * mezcladas o "robadas" por otro chat abierto a mitad de generación).
+   */
+  appendMessage: (msg: Message, targetConversationId?: string) => void;
+  updateLastAssistantMessage: (delta: string, targetConversationId?: string) => void;
   /** Reemplaza el contenido completo del último mensaje asistente (no append). */
-  setLastAssistantMessage: (content: string) => void;
+  setLastAssistantMessage: (content: string, targetConversationId?: string) => void;
   setConversationPlan: (plan: Plan) => void;
   appendTrace: (subtaskId: string, step: TraceStep) => void;
   setSubtaskStatus: (subtaskId: string, status: Subtask['status']) => void;
@@ -174,6 +187,15 @@ interface WeaverState {
    */
   chatMemoryMode: boolean;
   /**
+   * Memoria de Proyecto: el agente guarda automáticamente una bitácora del
+   * trabajo dentro de ESTA conversación (qué se hizo, qué falta, decisiones
+   * tomadas). A diferencia de chatMemoryMode (memoria global sobre el
+   * usuario, cruza chats), esta memoria está scoped al conversationId activo
+   * — usa `memory.setProjectFact()` / `listProjectFacts()` de @/agent/memory,
+   * namespaceada internamente como facts con key `conv:<id>:<key>`.
+   */
+  projectMemoryMode: boolean;
+  /**
    * Modo RLM (Recursive Language Model). Cuando es true, runAgent usa
    * executeWithRlm en vez del executor legacy. El agente trata el contexto
    * como variable (ContextStore), delega subtareas a subagentes con ventanas
@@ -192,6 +214,7 @@ interface WeaverState {
   setPursueObjective: (v: boolean) => void;
   setCognitiveMode: (v: boolean) => void;
   setChatMemoryMode: (v: boolean) => void;
+  setProjectMemoryMode: (v: boolean) => void;
   setRlmEnabled: (v: boolean) => void;
   addRlmSpawn: (info: import('@/agent/rlm').SpawnInfo) => void;
   addRlmResult: (result: import('@/agent/rlm').SpawnResult) => void;
@@ -210,7 +233,7 @@ interface WeaverState {
   editUserMessage: (messageId: string, newContent: string) => Promise<void>;
 
   // --- Agent events ---
-  handleAgentEvent: (event: AgentEvent) => void;
+  handleAgentEvent: (event: AgentEvent, targetConversationId?: string) => void;
 
   // --- ME: Calendario + utilidades de vida ---
   meEvents: MeEvent[];
@@ -255,6 +278,9 @@ export const useWeaver = create<WeaverState>((set, get) => ({
 
   activeWorkflowId: null,
   setActiveWorkflowId: (id) => set({ activeWorkflowId: id }),
+
+  activeNotebookId: null,
+  setActiveNotebookId: (id) => set({ activeNotebookId: id }),
 
   sidebarCollapsed: false,
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
@@ -728,18 +754,19 @@ export const useWeaver = create<WeaverState>((set, get) => ({
     }
   },
 
-  appendMessage: (msg) => {
+  appendMessage: (msg, targetConversationId) => {
     set((s) => {
-      if (!s.activeConversationId) return s;
+      const convId = targetConversationId ?? s.activeConversationId;
+      if (!convId) return s;
       const conversations = s.conversations.map((c) =>
-        c.id === s.activeConversationId
+        c.id === convId
           ? { ...c, messages: [...c.messages, msg], updatedAt: Date.now() }
           : c,
       );
       return { conversations };
     });
     // Persistir mensaje en SQLite.
-    const convId = useWeaver.getState().activeConversationId;
+    const convId = targetConversationId ?? useWeaver.getState().activeConversationId;
     if (convId) {
       if (runtime.isTauri) {
         const msgRow = {
@@ -766,11 +793,12 @@ export const useWeaver = create<WeaverState>((set, get) => ({
     }
   },
 
-  updateLastAssistantMessage: (delta) => {
+  updateLastAssistantMessage: (delta, targetConversationId) => {
     set((s) => {
-      if (!s.activeConversationId) return s;
+      const convId = targetConversationId ?? s.activeConversationId;
+      if (!convId) return s;
       const conversations = s.conversations.map((c) => {
-        if (c.id !== s.activeConversationId) return c;
+        if (c.id !== convId) return c;
         const msgs = [...c.messages];
         const last = msgs[msgs.length - 1];
         if (last && last.role === 'assistant') {
@@ -793,11 +821,12 @@ export const useWeaver = create<WeaverState>((set, get) => ({
     }
   },
 
-  setLastAssistantMessage: (content) => {
+  setLastAssistantMessage: (content, targetConversationId) => {
     set((s) => {
-      if (!s.activeConversationId) return s;
+      const convId = targetConversationId ?? s.activeConversationId;
+      if (!convId) return s;
       const conversations = s.conversations.map((c) => {
-        if (c.id !== s.activeConversationId) return c;
+        if (c.id !== convId) return c;
         const msgs = [...c.messages];
         const last = msgs[msgs.length - 1];
         if (last && last.role === 'assistant') {
@@ -926,6 +955,7 @@ export const useWeaver = create<WeaverState>((set, get) => ({
   pursueObjective: true,
   cognitiveMode: false,
   chatMemoryMode: true,
+  projectMemoryMode: true,
   rlmEnabled: false,
   rlmSpawns: [],
   rlmResults: {},
@@ -935,6 +965,7 @@ export const useWeaver = create<WeaverState>((set, get) => ({
   setPursueObjective: (v) => set({ pursueObjective: v }),
   setCognitiveMode: (v) => set({ cognitiveMode: v }),
   setChatMemoryMode: (v) => set({ chatMemoryMode: v }),
+  setProjectMemoryMode: (v) => set({ projectMemoryMode: v }),
   setRlmEnabled: (v) => set({ rlmEnabled: v }),
   addRlmSpawn: (info) => set((s) => ({ rlmSpawns: [...s.rlmSpawns, info] })),
   addRlmResult: (result) => set((s) => ({ rlmResults: { ...s.rlmResults, [result.childId]: result } })),
@@ -1119,12 +1150,12 @@ export const useWeaver = create<WeaverState>((set, get) => ({
   },
 
   // --- Agent events → store mutations ---
-  handleAgentEvent: (event) => {
+  handleAgentEvent: (event, targetConversationId) => {
     const s = get();
     switch (event.type) {
       case 'planning_started':
         s.setAgentState('planning');
-        s.appendMessage({ role: 'assistant', content: '🔄 Planificando…' });
+        s.appendMessage({ role: 'assistant', content: '🔄 Planificando…' }, targetConversationId);
         break;
       case 'plan_ready':
         s.setConversationPlan(event.plan);
@@ -1134,7 +1165,7 @@ export const useWeaver = create<WeaverState>((set, get) => ({
           content: `📋 Plan generado con ${event.plan.subtasks.length} subtareas:\n\n${event.plan.subtasks
             .map((st, i) => `${i + 1}. ${st.description}`)
             .join('\n')}\n\nEjecutando…`,
-        });
+        }, targetConversationId);
         break;
       case 'subtask_started':
         s.setSubtaskStatus(event.subtask.id, 'in_progress');
@@ -1155,11 +1186,11 @@ export const useWeaver = create<WeaverState>((set, get) => ({
           content: `✅ Episodio terminado: ${event.episode.outcome}.\nLecciones: ${
             event.episode.lessons.join('; ') || '(ninguna)'
           }`,
-        });
+        }, targetConversationId);
         break;
       case 'error':
         s.setAgentState('error');
-        s.appendMessage({ role: 'assistant', content: `❌ Error: ${event.message}` });
+        s.appendMessage({ role: 'assistant', content: `❌ Error: ${event.message}` }, targetConversationId);
         break;
       default:
         // 'critic_verdict', 'replanning' → no mutan estado principal, sólo traces.
@@ -1170,7 +1201,7 @@ export const useWeaver = create<WeaverState>((set, get) => ({
             content: `Crítico: ${event.verdict} — ${event.reason}`,
           });
         } else if (event.type === 'replanning') {
-          s.appendMessage({ role: 'assistant', content: `⚠️ Replanificando: ${event.reason}` });
+          s.appendMessage({ role: 'assistant', content: `⚠️ Replanificando: ${event.reason}` }, targetConversationId);
         }
         break;
     }

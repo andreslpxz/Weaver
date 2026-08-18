@@ -153,6 +153,52 @@ export const memory = {
     );
   },
 
+  // --- Memoria de proyecto (por conversación) -------------------------------
+  // A diferencia de listFacts/setFact/deleteFact (memoria semántica GLOBAL
+  // del agente sobre el usuario, cruza chats), esta memoria vive DENTRO de
+  // una conversación específica: qué se está haciendo, qué ya se hizo, qué
+  // falta, decisiones tomadas. Reutiliza el mismo storage de "facts" (SQLite
+  // o localStorage) namespaceando la key con el conversationId, así no
+  // requiere tocar el esquema de la base de datos (Rust) para tener su
+  // propia tabla — es simplemente un Fact cuya key empieza con "conv:<id>:".
+  //
+  // Formato de key: `conv:<conversationId>:<slug>` — el slug lo elige el
+  // agente (ej: "estado", "hecho:auth", "pendiente:tests").
+
+  projectFactPrefix(conversationId: string): string {
+    return `conv:${conversationId}:`;
+  },
+
+  async listProjectFacts(conversationId: string): Promise<Fact[]> {
+    const prefix = memory.projectFactPrefix(conversationId);
+    const all = await memory.listFacts();
+    return all
+      .filter((f) => f.key.startsWith(prefix))
+      .map((f) => ({ ...f, key: f.key.slice(prefix.length) }));
+  },
+
+  async setProjectFact(
+    conversationId: string,
+    key: string,
+    value: string,
+    source: Fact['source'] = 'agent',
+  ): Promise<void> {
+    const prefix = memory.projectFactPrefix(conversationId);
+    await memory.setFact(`${prefix}${key}`, value, source);
+  },
+
+  async deleteProjectFact(conversationId: string, key: string): Promise<void> {
+    const prefix = memory.projectFactPrefix(conversationId);
+    await memory.deleteFact(`${prefix}${key}`);
+  },
+
+  async clearProjectFacts(conversationId: string): Promise<void> {
+    const facts = await memory.listProjectFacts(conversationId);
+    for (const f of facts) {
+      await memory.deleteProjectFact(conversationId, f.key);
+    }
+  },
+
   // --- Limpieza ------------------------------------------------------------
   async clearAll(): Promise<void> {
     if (runtime.isTauri) {

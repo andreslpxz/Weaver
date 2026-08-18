@@ -24,6 +24,7 @@ import {
   BarChart3,
   Workflow,
   Network,
+  BookOpen,
 } from 'lucide-react';
 import { useWeaver, type ViewId, type Project, type ProjectMember } from '@/store/weaver';
 import { cn } from '@/components/common/Button';
@@ -54,6 +55,7 @@ const SECTIONS: { title: string; items: SidebarItem[] }[] = [
       { id: 'complementos', label: 'sidebar.complementos', icon: <Puzzle size={14} /> },
       { id: 'automatizaciones', label: 'sidebar.schedules', icon: <Clock size={14} /> },
       { id: 'workflows', label: 'sidebar.workflows', icon: <Workflow size={14} /> },
+      { id: 'notebooks', label: 'sidebar.notebooks', icon: <BookOpen size={14} /> },
       { id: 'subagentes', label: 'Subagentes', icon: <Bot size={14} /> },
       { id: 'memoria', label: 'Memoria', icon: <Brain size={14} /> },
       { id: 'metricas', label: 'Métricas', icon: <BarChart3 size={14} /> },
