@@ -23,7 +23,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
-    Router, Server,
+    Router,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -66,8 +66,9 @@ pub async fn start_webhook_server(port: u16, db_path: String) -> Result<()> {
 
     info!("Webhook server listening on http://{}", addr);
 
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
     tokio::spawn(async move {
-        if let Err(e) = Server::bind(&addr).serve(app.into_make_service()).await {
+        if let Err(e) = axum::serve(listener, app).await {
             warn!("Webhook server error: {}", e);
         }
     });
