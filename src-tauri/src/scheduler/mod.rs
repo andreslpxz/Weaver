@@ -86,27 +86,25 @@ async fn reload_schedules(state: &Arc<SchedulerState>) -> Result<()> {
                 .config
                 .get("cronExpr")
                 .and_then(|v| v.as_str())
-                .unwrap_or("0 * * * *"); // default: cada hora
+                .unwrap_or("0 * * * *")
+                .to_string(); // default: cada hora
 
             let timezone = node
                 .config
                 .get("timezone")
                 .and_then(|v| v.as_str())
-                .unwrap_or("UTC");
+                .unwrap_or("UTC")
+                .to_string();
 
             let workflow_id = wf.id.clone();
             let trigger_node_id = node.id.clone();
 
             let state_clone = Arc::clone(state);
             let handle = tokio::spawn(async move {
-                run_cron_schedule(state_clone, workflow_id, trigger_node_id, cron_expr.to_string(), timezone.to_string()).await;
+                run_cron_schedule(state_clone, workflow_id, trigger_node_id, cron_expr, timezone).await;
             });
 
             timers.insert(node.id.clone(), handle);
-            info!(
-                "Registered schedule: workflow {} node {} cron='{}' tz='{}'",
-                wf.id, node.id, cron_expr, timezone
-            );
         }
     }
 
