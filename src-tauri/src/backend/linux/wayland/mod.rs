@@ -139,7 +139,8 @@ impl PortalSession {
         // state: 0 = released, 1 = pressed
         let state: u8 = if pressed { 1 } else { 0 };
         proxy
-            .notify_keyboard_keycode(session.as_path(), opts, keycode as i32, state)
+            .notify_keyboard_keycode(session, opts, keycode as i32, state)
+            .await
             .map_err(|e| anyhow!("notify_keyboard_keycode: {}", e))?;
         Ok(())
     }
@@ -154,7 +155,8 @@ impl PortalSession {
         let opts = std::collections::HashMap::<&str, zbus::zvariant::Value>::new();
         // stream = 0 (primer stream; para sesiones simples con 1 monitor basta)
         proxy
-            .notify_pointer_motion_absolute(session.as_path(), opts, 0, x, y)
+            .notify_pointer_motion_absolute(session, opts, 0, x, y)
+            .await
             .map_err(|e| anyhow!("notify_pointer_motion_absolute: {}", e))?;
         Ok(())
     }
@@ -179,7 +181,8 @@ impl PortalSession {
         let opts = std::collections::HashMap::<&str, zbus::zvariant::Value>::new();
         let state: u8 = if pressed { 1 } else { 0 };
         proxy
-            .notify_pointer_button(session.as_path(), opts, btn_code, state)
+            .notify_pointer_button(session, opts, btn_code, state)
+            .await
             .map_err(|e| anyhow!("notify_pointer_button: {}", e))?;
         Ok(())
     }
@@ -190,7 +193,7 @@ impl PortalSession {
         let session_guard = self.session_handle.lock().await;
         if let (Some(proxy), Some(session)) = (proxy_guard.as_ref(), session_guard.as_ref()) {
             let opts = std::collections::HashMap::<&str, zbus::zvariant::Value>::new();
-            let _ = proxy.close(session.as_path(), opts);
+            let _ = proxy.close(session, opts).await;
         }
         Ok(())
     }
@@ -208,9 +211,11 @@ impl PortalSession {
 pub async fn start_portal_session() -> Result<PortalSession> {
     // Conectar al bus de sesión.
     let connection = Connection::session()
+        .await
         .map_err(|e| anyhow!("Conexión D-Bus: {}", e))?;
 
     let proxy = RemoteDesktopProxy::new(&connection)
+        .await
         .map_err(|e| anyhow!("RemoteDesktopProxy::new: {}", e))?;
 
     // 1. Crear sesión.
@@ -218,6 +223,7 @@ pub async fn start_portal_session() -> Result<PortalSession> {
     opts.insert("session_handle_token", zbus::zvariant::Value::from("weaver_session"));
     let _create_response_path = proxy
         .create_session(opts)
+        .await
         .map_err(|e| anyhow!("create_session: {}", e))?;
 
     // El handle de sesión llega vía signal Response en org.freedesktop.portal.Request.

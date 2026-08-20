@@ -15,10 +15,10 @@
 use anyhow::{anyhow, Result};
 use aws_credential_types::Credentials;
 use aws_sigv4::http_request::{
-    sign as sigv4_sign, SignableBody, SignableRequest, SigningSettings,
+    sign as sigv4_sign, SignableBody, SignableRequest, SigningParams, SigningSettings,
 };
-use aws_sigv4::sign::v4::SigningParams;
-use aws_smithy_async::time::SystemTime;
+use aws_smithy_runtime_api::client::identity::Identity;
+use std::time::SystemTime;
 use http::{Method, Uri};
 use reqwest::Client;
 use std::time::Duration;
@@ -69,12 +69,13 @@ pub async fn invoke_bedrock(
         None,
         "weaver-bedrock",
     );
+    let identity = Identity::new(credentials, None);
 
     let signing_params = SigningParams::builder()
-        .identity(&credentials)
+        .identity(&identity)
         .region(region)
         .name(SERVICE_NAME)
-        .time(SystemTime::from_std(std::time::SystemTime::now()))
+        .time(SystemTime::now())
         .settings(SigningSettings::default())
         .build()
         .map_err(|e| anyhow!("SigningParams::build: {:?}", e))?;
@@ -95,8 +96,8 @@ pub async fn invoke_bedrock(
     ];
 
     let signable = SignableRequest::new(
-        Method::POST,
-        &uri,
+        "POST",
+        uri.to_string(),
         headers.iter().map(|(k, v)| (*k, *v)),
         SignableBody::Bytes(body.as_bytes()),
     )
@@ -115,9 +116,7 @@ pub async fn invoke_bedrock(
         .header("content-type", "application/json");
 
     for (name, value) in signing_instructions.headers() {
-        if let Ok(v) = std::str::from_utf8(value) {
-            reqwest_req = reqwest_req.header(name.as_str(), v);
-        }
+        reqwest_req = reqwest_req.header(name.as_str(), value.as_str());
     }
     if let Some(token) = session_token {
         reqwest_req = reqwest_req.header("x-amz-security-token", token);
