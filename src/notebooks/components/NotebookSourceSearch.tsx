@@ -14,17 +14,19 @@ import { Search, ChevronDown, Check, Loader2, Link2, Sparkles } from 'lucide-rea
 import { searchSources, type SourceSearchResultItem } from '../search';
 import { urlToSource, faviconUrl } from '../sources';
 import * as store from '../store';
-import type { NotebookToolMode } from '../types';
 import { cn } from '@/components/common/Button';
 
-const MODE_LABEL: Record<NotebookToolMode, string> = {
+/** Solo los 2 modos de búsqueda aplican aquí; "agent" es exclusivo del chat. */
+type SourceSearchMode = 'quick_search' | 'deep_research';
+
+const MODE_LABEL: Record<SourceSearchMode, string> = {
   quick_search: 'Fast Research',
   deep_research: 'Deep Research',
 };
 
 export function NotebookSourceSearch({ notebookId }: { notebookId: string }) {
   const [query, setQuery] = useState('');
-  const [mode, setMode] = useState<NotebookToolMode>('quick_search');
+  const [mode, setMode] = useState<SourceSearchMode>('quick_search');
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [status, setStatus] = useState<'idle' | 'searching' | 'done' | 'error'>('idle');
   const [results, setResults] = useState<SourceSearchResultItem[]>([]);

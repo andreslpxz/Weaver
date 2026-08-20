@@ -9,11 +9,12 @@
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ArrowUp, ChevronDown, Loader2, Search, BookOpen, Square } from 'lucide-react';
-import type { Notebook, NotebookChatMessage, NotebookToolMode } from '../types';
+import { ArrowUp, ChevronDown, Loader2, Search, BookOpen, Square, Bot, Code2, Sparkles, ShieldCheck } from 'lucide-react';
+import type { Notebook, NotebookChatMessage, NotebookToolMode, AgentStepRecord } from '../types';
 import { NotebookComposerMenu } from './NotebookComposerMenu';
 import { fileToSource, urlToSource } from '../sources';
 import { runNotebookChat, toProviderMessages } from '../chatEngine';
+import { runNotebookAgent } from '../agentEngine';
 import * as store from '../store';
 import { cn } from '@/components/common/Button';
 import { useWeaver } from '@/store/weaver';
@@ -25,6 +26,7 @@ export function NotebookChatPanel({ notebook }: { notebook: Notebook }) {
   const [sending, setSending] = useState(false);
   const [activeTool, setActiveTool] = useState<NotebookToolMode | null>(null);
   const [liveTrace, setLiveTrace] = useState<string[]>([]);
+  const [liveAgentSteps, setLiveAgentSteps] = useState<AgentStepRecord[]>([]);
   const [streamingText, setStreamingText] = useState('');
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -60,6 +62,7 @@ export function NotebookChatPanel({ notebook }: { notebook: Notebook }) {
     setInput('');
     setSending(true);
     setLiveTrace([]);
+    setLiveAgentSteps([]);
     setStreamingText('');
 
     const userMsg: NotebookChatMessage = {
@@ -79,31 +82,56 @@ export function NotebookChatPanel({ notebook }: { notebook: Notebook }) {
     abortRef.current = controller;
 
     try {
-      const result = await runNotebookChat({
-        notebook,
-        userMessage: text,
-        history,
-        toolMode: activeTool,
-        providerId,
-        modelId,
-        signal: controller.signal,
-        onChunk: (chunk) => {
-          if (chunk.type === 'delta') setStreamingText((prev) => prev + chunk.content);
-        },
-        onToolTrace: (trace) => setLiveTrace(trace),
-      });
+      if (activeTool === 'agent') {
+        // Modo Agente (Fase 5): bucle observación/razonamiento/acción con
+        // trace visible paso a paso, en vez de una sola llamada al modelo.
+        const result = await runNotebookAgent({
+          notebook,
+          userMessage: text,
+          history,
+          providerId,
+          modelId,
+          signal: controller.signal,
+          onStep: (step) => setLiveAgentSteps((prev) => [...prev, step]),
+        });
 
-      const assistantMsg: NotebookChatMessage = {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: result.content,
-        toolUsed: activeTool ?? undefined,
-        toolTrace: result.toolTrace.length > 0 ? result.toolTrace : undefined,
-        citedSourceIds: result.usedSourceIds.length > 0 ? result.usedSourceIds : undefined,
-        excludedSourceIds: result.excludedSourceIds.length > 0 ? result.excludedSourceIds : undefined,
-        createdAt: Date.now(),
-      };
-      store.appendChatMessage(notebook.id, assistantMsg);
+        const assistantMsg: NotebookChatMessage = {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: result.content,
+          toolUsed: 'agent',
+          agentSteps: result.steps,
+          citedSourceIds: result.usedSourceIds.length > 0 ? result.usedSourceIds : undefined,
+          createdAt: Date.now(),
+        };
+        store.appendChatMessage(notebook.id, assistantMsg);
+      } else {
+        const result = await runNotebookChat({
+          notebook,
+          userMessage: text,
+          history,
+          toolMode: activeTool,
+          providerId,
+          modelId,
+          signal: controller.signal,
+          onChunk: (chunk) => {
+            if (chunk.type === 'delta') setStreamingText((prev) => prev + chunk.content);
+          },
+          onToolTrace: (trace) => setLiveTrace(trace),
+        });
+
+        const assistantMsg: NotebookChatMessage = {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: result.content,
+          toolUsed: activeTool ?? undefined,
+          toolTrace: result.toolTrace.length > 0 ? result.toolTrace : undefined,
+          citedSourceIds: result.usedSourceIds.length > 0 ? result.usedSourceIds : undefined,
+          excludedSourceIds: result.excludedSourceIds.length > 0 ? result.excludedSourceIds : undefined,
+          createdAt: Date.now(),
+        };
+        store.appendChatMessage(notebook.id, assistantMsg);
+      }
     } catch (e) {
       const errMsg: NotebookChatMessage = {
         id: crypto.randomUUID(),
@@ -117,6 +145,7 @@ export function NotebookChatPanel({ notebook }: { notebook: Notebook }) {
       setSending(false);
       setStreamingText('');
       setLiveTrace([]);
+      setLiveAgentSteps([]);
       setActiveTool(null);
       abortRef.current = null;
     }
@@ -153,6 +182,7 @@ export function NotebookChatPanel({ notebook }: { notebook: Notebook }) {
 
           {sending && (
             <div className="flex flex-col gap-1.5">
+              {liveAgentSteps.length > 0 && <AgentStepsTrace steps={liveAgentSteps} />}
               {liveTrace.length > 0 && (
                 <div className="flex flex-col gap-1 rounded-lg bg-app-elevated/60 px-3 py-2 text-xs text-text-tertiary">
                   {liveTrace.map((t, i) => (
@@ -194,11 +224,13 @@ export function NotebookChatPanel({ notebook }: { notebook: Notebook }) {
               }
             }}
             placeholder={
-              activeTool === 'deep_research'
-                ? 'Investigación profunda: escribe tu pregunta...'
-                : activeTool === 'quick_search'
-                  ? 'Búsqueda rápida: escribe tu pregunta...'
-                  : 'Pregunta sobre tus fuentes...'
+              activeTool === 'agent'
+                ? 'Modo Agente: describe la tarea de investigación...'
+                : activeTool === 'deep_research'
+                  ? 'Investigación profunda: escribe tu pregunta...'
+                  : activeTool === 'quick_search'
+                    ? 'Búsqueda rápida: escribe tu pregunta...'
+                    : 'Pregunta sobre tus fuentes...'
             }
             rows={1}
             className="max-h-40 flex-1 resize-none bg-transparent px-1 py-1.5 text-sm outline-none placeholder:text-text-tertiary"
@@ -222,7 +254,12 @@ export function NotebookChatPanel({ notebook }: { notebook: Notebook }) {
         </div>
         {activeTool && (
           <div className="mx-auto mt-1.5 max-w-2xl px-1 text-xs text-accent">
-            {activeTool === 'deep_research' ? 'Investigación profunda activa' : 'Búsqueda rápida activa'} para el próximo mensaje
+            {activeTool === 'agent'
+              ? 'Modo Agente activo'
+              : activeTool === 'deep_research'
+                ? 'Investigación profunda activa'
+                : 'Búsqueda rápida activa'}{' '}
+            para el próximo mensaje
           </div>
         )}
       </div>
@@ -260,6 +297,7 @@ function ChatBubble({ message, sources }: { message: NotebookChatMessage; source
 
   return (
     <div className={cn('flex flex-col', isUser ? 'items-end' : 'items-start')}>
+      {message.agentSteps && message.agentSteps.length > 0 && <AgentStepsTrace steps={message.agentSteps} collapsible />}
       {message.toolTrace && message.toolTrace.length > 0 && (
         <div className="mb-1 flex flex-col gap-1 rounded-lg bg-app-elevated/60 px-3 py-2 text-xs text-text-tertiary max-w-[85%]">
           {message.toolTrace.map((t, i) => (
@@ -297,6 +335,41 @@ function ChatBubble({ message, sources }: { message: NotebookChatMessage; source
               +{excludedCount} fuente{excludedCount !== 1 ? 's' : ''} no incluida{excludedCount !== 1 ? 's' : ''}
             </span>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function stepIcon(kind: AgentStepRecord['kind']) {
+  if (kind === 'web_search') return <Search size={12} />;
+  if (kind === 'code_exec') return <Code2 size={12} />;
+  if (kind === 'self_critique') return <ShieldCheck size={12} />;
+  if (kind === 'final_answer') return <Sparkles size={12} />;
+  return <Bot size={12} />;
+}
+
+function AgentStepsTrace({ steps, collapsible }: { steps: AgentStepRecord[]; collapsible?: boolean }) {
+  const [expanded, setExpanded] = useState(!collapsible);
+  return (
+    <div className="mb-1 max-w-[85%] rounded-lg bg-app-elevated/60 text-xs text-text-tertiary">
+      {collapsible && (
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="flex w-full items-center gap-1.5 px-3 py-2 text-left hover:text-text-secondary"
+        >
+          <Bot size={12} />
+          {expanded ? 'Ocultar' : 'Ver'} razonamiento del agente ({steps.length} pasos)
+        </button>
+      )}
+      {expanded && (
+        <div className="flex flex-col gap-1 px-3 pb-2">
+          {steps.map((s, i) => (
+            <div key={i} className="flex items-start gap-1.5">
+              <span className="mt-0.5 shrink-0">{stepIcon(s.kind)}</span>
+              <span>{s.label}</span>
+            </div>
+          ))}
         </div>
       )}
     </div>

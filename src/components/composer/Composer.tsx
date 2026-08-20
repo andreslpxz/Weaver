@@ -1076,6 +1076,15 @@ export function Composer() {
           '6. Encadena tools: usa shell_exec para descubrir info, luego file_read/write para actuar.\n' +
           '7. Si el usuario pide algo ambiguo, INTERPRETA lo más probable y actúa.\n' +
           '8. No pidas confirmación para cada paso. Solo actúa y reporta al final.\n\n' +
+          '═══ RAZONAMIENTO INTERCALADO (VISIBLE ENTRE TOOL CALLS) ═══\n' +
+          'Antes de cada tool call cuya necesidad no sea obvia (es decir, salvo la primerísima tool de un turno simple), escribe una línea breve de razonamiento envuelta así:\n' +
+          '[think]una frase corta explicando qué vas a hacer ahora y por qué[/think]\n' +
+          'Reglas para [think]:\n' +
+          '- Va INMEDIATAMENTE ANTES de la tool call a la que corresponde, no todo junto al inicio del turno.\n' +
+          '- Una frase por bloque (máx. ~25 palabras). No un párrafo largo.\n' +
+          '- Sé específico: qué vas a hacer y por qué esta tool en particular ("Necesito confirmar la ruta antes de escribir el archivo" es útil; "voy a pensar" no lo es).\n' +
+          '- No emitas [think] después de la última tool call ni antes de tu respuesta final en texto.\n' +
+          '- No abuses: solo cuando la siguiente acción no sea evidente por sí misma.\n\n' +
           modesSection +
           '═══ REGLAS DE RUTAS ═══\n' +
           '- En Windows: C:\\Users\\<username>\\Documents\\ — descubre username primero\n' +
@@ -1216,8 +1225,13 @@ export function Composer() {
 
     const tools = [...buildAdvancedToolsList(), ...mcpExtraTools];
     const MAX_TOOL_ROUNDS = 8;
+    // A partir de esta ronda, se avisa al modelo en el propio mensaje de
+    // resultado de tool que le quedan pocas rondas, para que empiece a
+    // cerrar en vez de que el sistema lo corte a mitad de una tool call.
+    const WARN_ROUNDS_REMAINING = 2;
 
     let producedFinalText = false;
+    let hitRoundLimit = false;
 
     // Track the last tool result that had actual data — used for the
     // anti-hallucination retry logic below. When the LLM finishes its
@@ -1225,6 +1239,14 @@ export function Composer() {
     let lastSuccessfulToolName: string | null = null;
     let lastSuccessfulToolOutput: string | null = null;
     let lastSuccessfulToolArgs: Record<string, unknown> | null = null;
+
+    // Anti-repetición: recuerda la firma (tool + argumentos) de cada llamada
+    // ya ejecutada en este turno. Si el modelo repite exactamente la misma
+    // llamada, NO se bloquea la ejecución (sigue corriendo con normalidad) —
+    // se le agrega una nota al resultado de esa tool avisándole que ya
+    // probó eso y no funcionó, para que él mismo cambie de enfoque en la
+    // siguiente ronda.
+    const executedCallSignatures = new globalThis.Map<string, number>();
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       const result = await streamChat(llm, modelId, messages, {
@@ -1399,9 +1421,42 @@ export function Composer() {
         const toolResult = await dispatchAdvancedTool(tc.function.name, args);
 
         // Resultado para el LLM (completo, hasta 4000 chars).
-        const llmResult = toolResult.ok
+        let llmResult = toolResult.ok
           ? toolResult.output.slice(0, 4000)
           : `ERROR: ${toolResult.error ?? 'unknown'}`;
+
+        // ─── ANTI-REPETICIÓN (no bloquea la ejecución) ─────────────────────
+        // Si esta misma tool+argumentos ya se ejecutó antes en este turno,
+        // no se detiene nada — se ejecuta igual — pero se le añade al
+        // resultado una nota explícita para que el modelo se dé cuenta y
+        // pruebe otra cosa en la siguiente ronda, en vez de quedar atascado
+        // repitiendo lo mismo hasta agotar las rondas.
+        const callSignature = `${tc.function.name}:${JSON.stringify(args)}`;
+        const priorCount = executedCallSignatures.get(callSignature) ?? 0;
+        executedCallSignatures.set(callSignature, priorCount + 1);
+        if (priorCount >= 1) {
+          llmResult =
+            `⚠️ NOTA: ya llamaste a "${tc.function.name}" con estos mismos argumentos ` +
+            `${priorCount + 1} vez/veces en este turno y el resultado no cambió. Repetir la ` +
+            `misma llamada no va a darte un resultado distinto — prueba un enfoque diferente ` +
+            `(otros argumentos, otra tool, o si ya tienes suficiente información, responde ` +
+            `directamente en vez de seguir intentando).\n\n${llmResult}`;
+        }
+
+        // ─── AVISO DE CIERRE POR LÍMITE DE RONDAS ──────────────────────────
+        // A partir de WARN_ROUNDS_REMAINING rondas antes del final, se avisa
+        // al modelo en cada resultado de tool cuántas rondas le quedan, para
+        // que decida cerrar con un resumen en vez de que el sistema lo corte
+        // a mitad de una tool call.
+        const roundsRemaining = MAX_TOOL_ROUNDS - 1 - round;
+        if (roundsRemaining <= WARN_ROUNDS_REMAINING && roundsRemaining > 0) {
+          llmResult =
+            `${llmResult}\n\n⏳ AVISO DE SISTEMA: te quedan ${roundsRemaining} ronda(s) de ` +
+            `herramientas antes del límite de este turno. Si no vas a terminar a tiempo, no ` +
+            `sigas intentando más tools sin necesidad — usa la(s) ronda(s) que quedan para lo ` +
+            `esencial y luego cierra tu respuesta explicando: qué llevas hecho, qué falta, y ` +
+            `pregunta si el usuario quiere que continúes en el siguiente mensaje.`;
+        }
 
         // Track this result if it was successful AND has real content (not empty).
         // Used by the anti-hallucination check after the LLM finishes responding.
@@ -1434,6 +1489,15 @@ export function Composer() {
       await Promise.resolve();
     }
 
+    // Si el loop terminó las MAX_TOOL_ROUNDS sin que el modelo haya
+    // producido texto final, es porque se agotaron las rondas (no porque
+    // el modelo decidiera parar) — se distingue este caso para pedirle el
+    // cierre explicado ("llegué al límite, me falta X, ¿continúo?") en vez
+    // del cierre genérico de "ya terminaste, resume".
+    if (!producedFinalText) {
+      hitRoundLimit = true;
+    }
+
     // Si el LLM nunca produjo texto final (sólo llamó tools hasta agotar rounds,
     // O respondió vacío), forzar una respuesta final SIN tools para que el
     // usuario sí reciba respuesta.
@@ -1441,12 +1505,21 @@ export function Composer() {
       updateLastAssistantMessage('\n\n');
       messages.push({
         role: 'user',
-        content:
-          'Ya usaste las herramientas necesarias. Ahora DEBES responderme en texto plano:\n' +
-          '1) Un resumen breve de lo que hiciste.\n' +
-          '2) Los resultados principales.\n' +
-          '3) Una pregunta de seguimiento.\n' +
-          'No intentes usar más herramientas. Responde directamente.',
+        content: hitRoundLimit
+          ? 'Alcanzaste el límite de herramientas disponibles para este turno (' +
+            MAX_TOOL_ROUNDS +
+            ' rondas) antes de terminar. Ahora DEBES responderme en texto plano, sin usar más ' +
+            'herramientas, con este formato exacto:\n' +
+            '1) "He alcanzado el máximo de herramientas para este turno."\n' +
+            '2) Qué llevas hecho hasta ahora (resultados concretos obtenidos).\n' +
+            '3) Qué falta por terminar exactamente.\n' +
+            '4) Pregunta: "¿Quieres que continúe?"\n' +
+            'No repitas herramientas ya usadas. Responde directamente.'
+          : 'Ya usaste las herramientas necesarias. Ahora DEBES responderme en texto plano:\n' +
+            '1) Un resumen breve de lo que hiciste.\n' +
+            '2) Los resultados principales.\n' +
+            '3) Una pregunta de seguimiento.\n' +
+            'No intentes usar más herramientas. Responde directamente.',
       });
       try {
         const finalResult = await streamChat(llm, modelId, messages, {

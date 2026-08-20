@@ -46,6 +46,7 @@ import {
   BookMarked,
   Square,
   Pencil,
+  BrainCircuit,
 } from 'lucide-react';
 import { formatSize } from '@/lib/attachments';
 import { speak, stopSpeaking, isTTSSupported } from '@/lib/voice';
@@ -121,6 +122,7 @@ function sanitizeForTTS(content: string): string {
   return content
     .replace(/\[tool \w+: [^\]]+\]/g, '')
     .replace(/\[result \w+\][\s\S]*?\[\/result\]/g, '')
+    .replace(/\[think\][\s\S]*?\[\/think\]/g, '')
     .replace(/\[file:[^\]]+\]/g, '')
     .replace(/\[render:[a-z]+:[a-f0-9-]+:[^\]]+\]/g, '')
     .replace(/\[render-content:[a-f0-9-]+:[a-z0-9/+.\-]+\]/g, '')
@@ -541,12 +543,13 @@ interface RenderWindow {
 }
 
 interface ParsedSegment {
-  kind: 'text' | 'capsule' | 'file' | 'render' | 'app';
+  kind: 'text' | 'capsule' | 'file' | 'render' | 'app' | 'think';
   text?: string;
   capsule?: CapsuleGroup;
   file?: { filename: string; sizeBytes: number; pathOrLabel: string };
   render?: RenderWindow;
   app?: { appId: string; label: string };
+  think?: string;
 }
 
 function parseMessageContent(content: string): ParsedSegment[] {
@@ -555,7 +558,7 @@ function parseMessageContent(content: string): ParsedSegment[] {
   // Nota: el mime en render-content puede contener /, +, ., números y letras
   // (ej: text/html, application/pdf, application/vnd.ms-excel).
   // result usa [/result] como cierre explícito (ver nota arriba) — jamás "]".
-  const pattern = /(\[tool \w+: [^\]]+\]|\[result \w+\][\s\S]*?\[\/result\]|\[file:[^\]]+\]|\[render:[a-z]+:[a-f0-9-]+:[^\]]+\]|\[render-content:[a-f0-9-]+:[a-z0-9/+.\-]+\]|\[\/render-content\]|\[app:\w+:[^\]]+\])/g;
+  const pattern = /(\[tool \w+: [^\]]+\]|\[result \w+\][\s\S]*?\[\/result\]|\[think\][\s\S]*?\[\/think\]|\[file:[^\]]+\]|\[render:[a-z]+:[a-f0-9-]+:[^\]]+\]|\[render-content:[a-f0-9-]+:[a-z0-9/+.\-]+\]|\[\/render-content\]|\[app:\w+:[^\]]+\])/g;
   const parts = content.split(pattern).filter((p) => p !== undefined && p !== '');
 
   const pendingCapsules: CapsuleGroup[] = [];
@@ -582,6 +585,13 @@ function parseMessageContent(content: string): ParsedSegment[] {
       };
       pendingCapsules.push(capsule);
       segments.push({ kind: 'capsule', capsule });
+      continue;
+    }
+
+    // think — razonamiento intercalado (Fase de "reasoning" entre tool calls)
+    const thinkMatch = part.match(/^\[think\]([\s\S]*)\[\/think\]$/);
+    if (thinkMatch) {
+      segments.push({ kind: 'think', think: thinkMatch[1] });
       continue;
     }
 
@@ -707,6 +717,9 @@ function MessageContent({ content }: { content: string }) {
             </div>
           );
         }
+        if (seg.kind === 'think' && seg.think !== undefined) {
+          return <ThinkRow key={i} text={seg.think} />;
+        }
         if (seg.kind === 'capsule' && seg.capsule) {
           if (hiddenCapsules.has(seg.capsule.capsuleId)) return null;
           return <ToolCapsule key={i} capsule={seg.capsule} />;
@@ -738,34 +751,32 @@ function ToolCapsule({ capsule }: { capsule: CapsuleGroup }) {
   const color = getToolColor(capsule.toolName);
 
   return (
-    <div
-      className="my-2 rounded-codex border border-border bg-app-elevated overflow-hidden transition-shadow hover:shadow-sm"
-      style={{ borderRadius: '10px' }}
-    >
+    <div className="my-1 group">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-app-input/40 transition-colors"
+        className="w-full flex items-center gap-2 py-1 text-xs text-left hover:opacity-80 transition-opacity"
       >
-        {/* Chevron */}
-        <span className="text-text-muted shrink-0">
-          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        </span>
-
-        {/* Logo de la app si existe */}
-        {capsule.appId && (
-          <AppLogo appId={capsule.appId} size={16} />
-        )}
-
-        {/* Icono del tool */}
+        {/* Icono del tool, sin fondo ni borde — línea limpia tipo timeline */}
         <span style={{ color }} className="shrink-0">
           {icon}
         </span>
 
-        {/* Nombre + label */}
-        <span className="font-medium text-text-secondary shrink-0">{capsule.toolName}</span>
+        {/* Logo de la app si existe */}
+        {capsule.appId && <AppLogo appId={capsule.appId} size={14} />}
+
+        {/* Nombre + label en una sola línea */}
+        <span className="font-medium text-text-secondary shrink-0">Tool call</span>
+        <span className="text-text-muted shrink-0">·</span>
         <span className="text-text-muted truncate flex-1 text-left">{capsule.label}</span>
 
-        {/* Ocultar */}
+        {/* Chevron solo visible si hay resultado que expandir */}
+        {capsule.resultText && (
+          <span className="text-text-muted shrink-0 opacity-0 group-hover:opacity-60 transition-opacity">
+            {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+          </span>
+        )}
+
+        {/* Ocultar — solo visible al hover, no compite visualmente */}
         <span
           role="button"
           tabIndex={0}
@@ -779,21 +790,20 @@ function ToolCapsule({ capsule }: { capsule: CapsuleGroup }) {
               hideCapsule(capsule.capsuleId);
             }
           }}
-          className="codex-icon-btn w-5 h-5 opacity-40 hover:opacity-100"
-          title="Ocultar cápsula"
+          className="shrink-0 opacity-0 group-hover:opacity-40 hover:!opacity-100 transition-opacity"
+          title="Ocultar"
         >
           <EyeOff size={11} />
         </span>
       </button>
 
-      {/* Resultado colapsable */}
+      {/* Resultado — expandido inline, sin caja de fondo separada */}
       {open && capsule.resultText && (
         <div
-          className="px-3 py-2 text-xs whitespace-pre-wrap border-t border-border/60"
+          className="pl-6 pr-2 py-1.5 text-xs whitespace-pre-wrap"
           style={{
             color: 'var(--text-secondary)',
             opacity: 0.7,
-            background: 'var(--bg-app)',
             fontFamily: 'var(--font-mono, ui-monospace, monospace)',
             maxHeight: '320px',
             overflowY: 'auto',
@@ -802,6 +812,28 @@ function ToolCapsule({ capsule }: { capsule: CapsuleGroup }) {
           {capsule.resultText}
         </div>
       )}
+    </div>
+  );
+}
+
+// ============================================================================
+// ThinkRow — fila de razonamiento intercalado, mismo estilo tipo timeline
+// que ToolCapsule, para que "pensar" y "actuar" se vean como pasos del
+// mismo flujo secuencial en vez de un único bloque de razonamiento inicial.
+// ============================================================================
+
+function ThinkRow({ text }: { text: string }) {
+  const truncated = text.length > 140 ? `${text.slice(0, 140)}…` : text;
+  return (
+    <div className="my-1 flex items-center gap-2 py-1 text-xs">
+      <span className="shrink-0 text-text-muted">
+        <BrainCircuit size={14} />
+      </span>
+      <span className="font-medium text-text-secondary shrink-0">Think</span>
+      <span className="text-text-muted shrink-0">·</span>
+      <span className="text-text-muted truncate flex-1 text-left" title={text}>
+        {truncated}
+      </span>
     </div>
   );
 }

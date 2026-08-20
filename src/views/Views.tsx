@@ -77,6 +77,7 @@ export function ComplementosView() {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [url, setUrl] = useState('');
   const [name, setName] = useState('');
+  const [tab, setTab] = useState<'skills' | 'mcp' | 'native'>('mcp');
 
   useEffect(() => {
     setServers(mcpClient.listServers());
@@ -122,119 +123,184 @@ export function ComplementosView() {
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-3xl mx-auto px-6 py-10">
         <h1 className="text-3xl font-medium mb-2">Complementos</h1>
-        <p className="text-text-secondary text-sm mb-8">
+        <p className="text-text-secondary text-sm mb-6">
           Haz que Weaver se adapte a tu estilo. Conecta servidores MCP, instala skills de{' '}
           <code className="text-accent">skills.sh</code> y aprende de tus flujos.
         </p>
 
-        {/* Quick install */}
-        <div className="codex-card p-4 mb-6 bg-gradient-to-br from-accent/10 to-transparent">
-          <div className="flex items-center gap-3">
-            <Sparkles size={20} className="text-accent" />
-            <div className="flex-1">
-              <div className="font-medium">Instalar find-skills (recomendado)</div>
-              <div className="text-xs text-text-muted">
-                Permite a Weaver descubrir nuevas skills de la comunidad.
-              </div>
-            </div>
-            <Button variant="primary" onClick={installFindSkills}>
-              <Plus size={12} /> Instalar
-            </Button>
-          </div>
+        {/* Tabs: separa el catálogo en 3 secciones navegables en vez de una
+            sola página larga. Esto evita que crecer el catálogo (más MCPs,
+            más integraciones nativas) vuelva la vista inmanejable. */}
+        <div className="mb-6 flex gap-1 border-b border-border">
+          <ComplementosTab
+            active={tab === 'mcp'}
+            onClick={() => setTab('mcp')}
+            icon={<Puzzle size={14} />}
+            label="Servidores MCP"
+            count={servers.length}
+          />
+          <ComplementosTab
+            active={tab === 'skills'}
+            onClick={() => setTab('skills')}
+            icon={<Sparkles size={14} />}
+            label="Skills"
+            count={skills.length}
+          />
+          <ComplementosTab
+            active={tab === 'native'}
+            onClick={() => setTab('native')}
+            icon={<span>⚡</span>}
+            label="Integraciones nativas"
+          />
         </div>
 
-        {/* Skill installer */}
-        <section className="mb-8">
-          <h2 className="text-sm font-semibold mb-3 flex items-center gap-2">
-            <Puzzle size={14} /> Instalar skill desde URL
-          </h2>
-          <div className="flex gap-2">
-            <input
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://github.com/vercel-labs/skills"
-              className="codex-input flex-1 px-3 py-2 text-sm"
-            />
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="nombre (opcional)"
-              className="codex-input w-44 px-3 py-2 text-sm"
-            />
-            <Button variant="primary" onClick={installSkill}>
-              Instalar
-            </Button>
-          </div>
-          <p className="text-xs text-text-muted mt-1">
-            Equivale a: <code>npx skills add &lt;url&gt; --skill &lt;name&gt;</code>
-          </p>
-        </section>
+        {tab === 'mcp' && (
+          <>
+            {/* MCP servers — catálogo de presets + instalados */}
+            <McpSection servers={servers} setServers={setServers} />
 
-        {/* Skills instaladas */}
-        <section className="mb-8">
-          <h2 className="text-sm font-semibold mb-3">Skills instaladas ({skills.length})</h2>
-          {skills.length === 0 ? (
-            <div className="text-sm text-text-muted p-4 border border-dashed border-border rounded-codex text-center">
-              Aún no hay skills instaladas.
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-2">
-              {skills.map((s) => (
-                <div key={s.name} className="codex-card p-3">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium text-sm">{s.name}</span>
-                    <Badge color={s.source === 'learned' ? 'accent' : 'default'}>{s.source}</Badge>
+            {/* MCP servers — custom (avanzado) */}
+            <section className="mt-8">
+              <h2 className="text-sm font-semibold mb-3 flex items-center gap-2">
+                <Plus size={14} /> Añadir servidor MCP personalizado
+              </h2>
+              <div className="flex gap-2 mb-3">
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="nombre del servidor"
+                  className="codex-input flex-1 px-3 py-2 text-sm"
+                />
+                <input
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="paquete npm o comando"
+                  className="codex-input flex-1 px-3 py-2 text-sm"
+                />
+                <Button variant="primary" onClick={addServer}>
+                  <Plus size={12} /> Añadir
+                </Button>
+              </div>
+              <p className="text-xs text-text-muted">
+                Para servidores MCP no incluidos en el catálogo de arriba.
+              </p>
+            </section>
+          </>
+        )}
+
+        {tab === 'skills' && (
+          <>
+            {/* Quick install */}
+            <div className="codex-card p-4 mb-6 bg-gradient-to-br from-accent/10 to-transparent">
+              <div className="flex items-center gap-3">
+                <Sparkles size={20} className="text-accent" />
+                <div className="flex-1">
+                  <div className="font-medium">Instalar find-skills (recomendado)</div>
+                  <div className="text-xs text-text-muted">
+                    Permite a Weaver descubrir nuevas skills de la comunidad.
                   </div>
-                  <p className="text-xs text-text-muted mt-1">{s.description}</p>
-                  {s.triggers.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-2">
-                      {s.triggers.slice(0, 3).map((t, i) => (
-                        <span key={i} className="text-[10px] px-1.5 py-0.5 bg-app-input rounded">
-                          {t}
-                        </span>
-                      ))}
-                    </div>
-                  )}
                 </div>
-              ))}
+                <Button variant="primary" onClick={installFindSkills}>
+                  <Plus size={12} /> Instalar
+                </Button>
+              </div>
             </div>
-          )}
-        </section>
 
-        {/* MCP servers — catálogo de presets + instalados */}
-        <McpSection servers={servers} setServers={setServers} />
+            {/* Skill installer */}
+            <section className="mb-8">
+              <h2 className="text-sm font-semibold mb-3 flex items-center gap-2">
+                <Puzzle size={14} /> Instalar skill desde URL
+              </h2>
+              <div className="flex gap-2">
+                <input
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="https://github.com/vercel-labs/skills"
+                  className="codex-input flex-1 px-3 py-2 text-sm"
+                />
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="nombre (opcional)"
+                  className="codex-input w-44 px-3 py-2 text-sm"
+                />
+                <Button variant="primary" onClick={installSkill}>
+                  Instalar
+                </Button>
+              </div>
+              <p className="text-xs text-text-muted mt-1">
+                Equivale a: <code>npx skills add &lt;url&gt; --skill &lt;name&gt;</code>
+              </p>
+            </section>
 
-        {/* MCP servers — custom (avanzado) */}
-        <section className="mt-8">
-          <h2 className="text-sm font-semibold mb-3 flex items-center gap-2">
-            <Plus size={14} /> Añadir servidor MCP personalizado
-          </h2>
-          <div className="flex gap-2 mb-3">
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="nombre del servidor"
-              className="codex-input flex-1 px-3 py-2 text-sm"
-            />
-            <input
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="paquete npm o comando"
-              className="codex-input flex-1 px-3 py-2 text-sm"
-            />
-            <Button variant="primary" onClick={addServer}>
-              <Plus size={12} /> Añadir
-            </Button>
-          </div>
-          <p className="text-xs text-text-muted">
-            Para servidores MCP no incluidos en el catálogo de arriba.
-          </p>
-        </section>
+            {/* Skills instaladas */}
+            <section className="mb-8">
+              <h2 className="text-sm font-semibold mb-3">Skills instaladas ({skills.length})</h2>
+              {skills.length === 0 ? (
+                <div className="text-sm text-text-muted p-4 border border-dashed border-border rounded-codex text-center">
+                  Aún no hay skills instaladas.
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  {skills.map((s) => (
+                    <div key={s.name} className="codex-card p-3">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-sm">{s.name}</span>
+                        <Badge color={s.source === 'learned' ? 'accent' : 'default'}>{s.source}</Badge>
+                      </div>
+                      <p className="text-xs text-text-muted mt-1">{s.description}</p>
+                      {s.triggers.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-2">
+                          {s.triggers.slice(0, 3).map((t, i) => (
+                            <span key={i} className="text-[10px] px-1.5 py-0.5 bg-app-input rounded">
+                              {t}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </>
+        )}
 
-        {/* Integraciones nativas (no MCP) — separadas por diseño */}
-        <NativeIntegrationsSection />
+        {tab === 'native' && <NativeIntegrationsSection />}
       </div>
     </div>
+  );
+}
+
+function ComplementosTab({
+  active,
+  onClick,
+  icon,
+  label,
+  count,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+  count?: number;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        'flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors',
+        active ? 'border-accent text-accent' : 'border-transparent text-text-tertiary hover:text-text-secondary',
+      )}
+    >
+      {icon}
+      {label}
+      {typeof count === 'number' && (
+        <span className={cn('rounded-full px-1.5 py-0.5 text-[10px]', active ? 'bg-accent/15' : 'bg-app-elevated')}>
+          {count}
+        </span>
+      )}
+    </button>
   );
 }
 

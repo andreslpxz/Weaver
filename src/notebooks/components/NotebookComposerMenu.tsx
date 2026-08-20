@@ -11,7 +11,7 @@
  */
 
 import { useRef, useState } from 'react';
-import { Plus, FileText, Link2, Zap, Telescope, X, Loader2, Check } from 'lucide-react';
+import { Plus, FileText, Link2, Zap, Telescope, Bot, X, Loader2, Check } from 'lucide-react';
 import { cn } from '@/components/common/Button';
 import type { NotebookToolMode } from '../types';
 
@@ -141,6 +141,16 @@ export function NotebookComposerMenu({
               active={activeTool === 'deep_research'}
               onClick={() => {
                 onSelectTool(activeTool === 'deep_research' ? null : 'deep_research');
+                setOpen(false);
+              }}
+            />
+            <ToolOption
+              icon={<Bot size={16} />}
+              label="Modo Agente"
+              description="Decide por sí mismo si buscar, ejecutar código, y revisa su propia respuesta"
+              active={activeTool === 'agent'}
+              onClick={() => {
+                onSelectTool(activeTool === 'agent' ? null : 'agent');
                 setOpen(false);
               }}
             />

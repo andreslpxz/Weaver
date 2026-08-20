@@ -35,7 +35,13 @@ export interface NotebookSource {
   addedAt: number;
 }
 
-export type NotebookToolMode = 'quick_search' | 'deep_research';
+export type NotebookToolMode = 'quick_search' | 'deep_research' | 'agent';
+
+export interface AgentStepRecord {
+  kind: 'reasoning' | 'web_search' | 'code_exec' | 'final_answer' | 'self_critique';
+  label: string;
+  detail?: string;
+}
 
 export interface NotebookChatMessage {
   id: string;
@@ -49,6 +55,8 @@ export interface NotebookChatMessage {
   toolUsed?: NotebookToolMode;
   /** Notas del proceso de búsqueda (queries lanzadas, urls visitadas), solo UI. */
   toolTrace?: string[];
+  /** Pasos del bucle agéntico (Fase 5), si toolUsed === 'agent'. */
+  agentSteps?: AgentStepRecord[];
   /** true si este mensaje es un error de generación (no se envía como historial real al modelo). */
   isError?: boolean;
   createdAt: number;
