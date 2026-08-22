@@ -11,12 +11,12 @@
 
 import type { LLMProvider, Message, Tool } from '@/providers/types';
 import type { Subtask, TraceStep } from './types';
-import { atspi, automation } from '@/lib/tauri';
+import { atspi, automation, sqlite } from '@/lib/tauri';
 import { streamChat } from '@/lib/chain';
 
-const SYSTEM_PROMPT = `Eres el Ejecutor de Weaver, un agente de escritorio Linux.
-Estás trabajando en una subtarea específica. Tienes acceso al árbol de accesibilidad AT-SPI
-y a herramientas de automatización (teclado, ratón, portapapeles, ventanas).
+const SYSTEM_PROMPT = `Eres el Ejecutor de Weaver, un agente de escritorio Linux autónomo.
+Estás trabajando en una subtarea específica. Tienes acceso al árbol de accesibilidad AT-SPI,
+herramientas de automatización de ventanas/teclado/ratón/portapapeles y ejecución en la shell.
 
 Ciclo ReAct:
 1. Thought: razona qué hacer ahora.
@@ -28,12 +28,16 @@ Cuando termines la subtarea, responde con: DONE: <resumen breve>
 Si no puedes continuar, responde con: STUCK: <motivo>
 
 Herramientas disponibles (names):
+- launch_app: lanza una aplicación de escritorio (ej: "gedit", "firefox") en segundo plano sin bloquear la PC.
+- shell_exec: ejecuta comandos bash en el sistema.
 - list_applications: lista apps visibles en AT-SPI.
 - query_tree: lee el sub-árbol AT-SPI de una app (bus_name, root_path, max_depth).
-- click: hace clic en un elemento (bus_name, path).
-- type_text: escribe texto en un elemento (bus_name, path, text).
-- press_key: presiona una combinación de teclas (key, ej. "ctrl+s").
-- get_text: lee el texto de un elemento (bus_name, path).
+- click: hace clic en un elemento AT-SPI (bus_name, path).
+- double_click: hace doble clic en un elemento AT-SPI.
+- focus: enfoca un elemento AT-SPI.
+- type_text: escribe texto en un elemento AT-SPI (bus_name, path, text).
+- press_key: presiona una combinación de teclas (key, ej. "ctrl+s", "Return").
+- get_text: lee el texto de un elemento AT-SPI (bus_name, path).
 - clipboard_get / clipboard_set: portapapeles.
 - list_windows / activate_window: gestión de ventanas.
 - mouse_click_at: clic en coordenadas (x, y, button?).
@@ -52,7 +56,7 @@ export async function executeSubtask(
   provider: LLMProvider,
   model: string,
   subtask: Subtask,
-  opts: { onTrace?: (step: TraceStep) => void } = {},
+  opts: { onTrace?: (step: TraceStep) => void; signal?: AbortSignal } = {},
 ): Promise<ExecutorResult> {
   const trace: TraceStep[] = [];
   const tools = buildTools();
@@ -61,12 +65,16 @@ export async function executeSubtask(
     { role: 'system', content: SYSTEM_PROMPT },
     {
       role: 'user',
-      content: `Subtarea: ${subtask.description}\nCriterio de éxito: ${subtask.successCriteria}\nEmpieza listando las aplicaciones visibles.`,
+      content: `Subtarea: ${subtask.description}\nCriterio de éxito: ${subtask.successCriteria}\nEmpieza listando las aplicaciones visibles o lanzando la app requerida si no está abierta.`,
     },
   ];
 
   for (let step = 0; step < MAX_STEPS; step++) {
-    const result = await streamChat(provider, model, messages, { tools });
+    if (opts.signal?.aborted) {
+      return { status: 'failed', summary: 'Ejecución cancelada por el usuario', trace };
+    }
+
+    const result = await streamChat(provider, model, messages, { tools, signal: opts.signal });
     if (result.toolCalls.length > 0) {
       // Tomar el primer tool call.
       const tc = result.toolCalls[0];
@@ -145,9 +153,16 @@ export async function executeSubtask(
 
 function buildTools(): Tool[] {
   return [
+    tool('launch_app', 'Lanza una aplicación de escritorio (ej: "gedit", "firefox") en segundo plano sin bloquear el sistema.', {
+      app_name: { type: 'string' },
+      background: { type: 'boolean' },
+    }),
+    tool('shell_exec', 'Ejecuta un comando bash en la shell del sistema.', { command: { type: 'string' }, cwd: { type: 'string' } }),
     tool('list_applications', 'Lista las aplicaciones visibles en AT-SPI.', {}),
     tool('query_tree', 'Lee el sub-árbol AT-SPI.', { bus_name: { type: 'string' }, root_path: { type: 'string' }, max_depth: { type: 'number' } }),
     tool('click', 'Clic en un elemento AT-SPI.', { bus_name: { type: 'string' }, path: { type: 'string' } }),
+    tool('double_click', 'Doble clic en un elemento AT-SPI.', { bus_name: { type: 'string' }, path: { type: 'string' } }),
+    tool('focus', 'Enfoca un elemento AT-SPI.', { bus_name: { type: 'string' }, path: { type: 'string' } }),
     tool('type_text', 'Escribe texto en un elemento AT-SPI.', { bus_name: { type: 'string' }, path: { type: 'string' }, text: { type: 'string' } }),
     tool('press_key', 'Presiona una combinación de teclas (xdotool-like).', { key: { type: 'string' } }),
     tool('get_text', 'Lee texto de un elemento AT-SPI.', { bus_name: { type: 'string' }, path: { type: 'string' } }),
@@ -176,12 +191,32 @@ function tool(name: string, description: string, properties: Record<string, unkn
 
 async function dispatchTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   switch (name) {
+    case 'launch_app': {
+      const app = String(args.app_name ?? '').trim();
+      const bg = args.background !== false;
+      if (!app) throw new Error('launch_app requiere app_name');
+      const cmd = bg ? `nohup ${app} >/dev/null 2>&1 &` : app;
+      const res = await sqlite.shellExec(cmd);
+      return { ok: true, launched: app, background: bg, output: res.stdout || res.stderr || 'App iniciada en segundo plano' };
+    }
+    case 'shell_exec': {
+      const cmd = String(args.command ?? '');
+      const cwd = args.cwd ? String(args.cwd) : undefined;
+      const res = await sqlite.shellExec(cmd, cwd);
+      return { ok: res.code === 0, stdout: res.stdout, stderr: res.stderr, code: res.code };
+    }
     case 'list_applications':
       return atspi.listApplications();
     case 'query_tree':
       return atspi.queryTree(String(args.bus_name), String(args.root_path), Number(args.max_depth ?? 4));
     case 'click':
       await atspi.click(String(args.bus_name), String(args.path));
+      return { ok: true };
+    case 'double_click':
+      await atspi.doubleClick(String(args.bus_name), String(args.path));
+      return { ok: true };
+    case 'focus':
+      await atspi.focus(String(args.bus_name), String(args.path));
       return { ok: true };
     case 'type_text':
       await atspi.typeText(String(args.bus_name), String(args.path), String(args.text));

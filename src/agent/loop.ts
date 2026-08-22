@@ -100,7 +100,7 @@ export async function* runAgent(
     // Contexto para el planner.
     const similarEpisodes = await memory.findSimilar(objectiveText, 2);
     const similar = similarEpisodes.map((e) => e.objective);
-    const plan = await makePlan(provider, model, objective, { similarEpisodes: similar });
+    const plan = await makePlan(provider, model, objective, { similarEpisodes: similar }, { signal: opts.signal });
     yield emit({ type: 'plan_ready', plan });
 
     // Ejecutar subtareas en orden topológico.
@@ -140,6 +140,7 @@ export async function* runAgent(
       } else {
         // Modo legacy: executor AT-SPI estándar.
         execResult = await executeSubtask(provider, model, next, {
+          signal: opts.signal,
           onTrace: (step) => emit({ type: 'trace', subtaskId: next.id, step }),
         });
       }

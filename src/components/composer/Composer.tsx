@@ -1024,7 +1024,9 @@ export function Composer() {
             : 'Estás en modo navegador (sin acceso al filesystem real). ') +
           shellHint + '\n\n' +
           'TIENES ACCESO A HERRAMIENTAS REALES para:\n' +
+          '- Lanzar aplicaciones de escritorio en segundo plano (launch_app)\n' +
           '- Ejecutar comandos shell (shell_exec)\n' +
+          '- Controlar e interactuar con la interfaz del PC vía AT-SPI y automatización (click, double_click, focus, type_text, press_key, mouse_click_at, query_tree, list_applications, list_windows, activate_window)\n' +
           '- Leer y escribir archivos (file_read, file_write, file_list)\n' +
           '- Buscar en internet (web_search)\n' +
           '- Descargar contenido de URLs (web_fetch)\n' +
