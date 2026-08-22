@@ -79,6 +79,8 @@ export function Composer() {
     modelPickerOpen,
     appendMessage: storeAppendMessage,
     updateLastAssistantMessage: storeUpdateLastAssistantMessage,
+    updateLastAssistantReasoning: storeUpdateLastAssistantReasoning,
+    setLastAssistantThinkingDuration: storeSetLastAssistantThinkingDuration,
     setLastAssistantMessage: storeSetLastAssistantMessage,
     setAgentState,
     handleAgentEvent,
@@ -724,6 +726,10 @@ export function Composer() {
     const appendMessage = (msg: Message) => storeAppendMessage(msg, conversationId);
     const updateLastAssistantMessage = (delta: string) =>
       storeUpdateLastAssistantMessage(delta, conversationId);
+    const updateLastAssistantReasoning = (delta: string) =>
+      storeUpdateLastAssistantReasoning(delta, conversationId);
+    const setLastAssistantThinkingDuration = (seconds: number) =>
+      storeSetLastAssistantThinkingDuration(seconds, conversationId);
     const setLastAssistantMessage = (content: string) =>
       storeSetLastAssistantMessage(content, conversationId);
 
@@ -1012,7 +1018,7 @@ export function Composer() {
       {
         role: 'system',
         content:
-          `Eres Weaver, un agente de escritorio PROACTIVO y AUTÓNOMO ejecutándose en ${osName}. ` +
+          `Tu nombre es Weaver. Si el usuario te pregunta quién eres, cómo te llamas o quién te creó, responde SIEMPRE que eres Weaver, un agente de escritorio PROACTIVO y AUTÓNOMO ejecutándose en ${osName}. ` +
           (runtime.isTauri
             ? 'Tienes acceso al sistema de archivos real y puedes ejecutar comandos shell. '
             : 'Estás en modo navegador (sin acceso al filesystem real). ') +
@@ -1249,11 +1255,31 @@ export function Composer() {
     const executedCallSignatures = new globalThis.Map<string, number>();
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      let thinkingStartMs: number | null = null;
+      let thinkingEndMs: number | null = null;
+
       const result = await streamChat(llm, modelId, messages, {
         tools,
         signal,
-        onDelta: (delta) => updateLastAssistantMessage(delta),
+        onReasoningDelta: (reasoningDelta) => {
+          if (!thinkingStartMs) thinkingStartMs = Date.now();
+          updateLastAssistantReasoning(reasoningDelta);
+        },
+        onDelta: (delta) => {
+          if (thinkingStartMs && !thinkingEndMs) {
+            thinkingEndMs = Date.now();
+            const elapsed = Math.max(1, Math.round((thinkingEndMs - thinkingStartMs) / 1000));
+            setLastAssistantThinkingDuration(elapsed);
+          }
+          updateLastAssistantMessage(delta);
+        },
       });
+
+      if (thinkingStartMs && !thinkingEndMs) {
+        thinkingEndMs = Date.now();
+        const elapsed = Math.max(1, Math.round((thinkingEndMs - thinkingStartMs) / 1000));
+        setLastAssistantThinkingDuration(elapsed);
+      }
 
       // Registrar uso en métricas globales (tokens + costo estimado + éxito/fracaso).
       try {

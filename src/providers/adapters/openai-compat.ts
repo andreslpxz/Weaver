@@ -17,6 +17,9 @@ interface OpenAIChatChunk {
   choices?: Array<{
     delta?: {
       content?: string | null;
+      reasoning_content?: string | null;
+      reasoning?: string | null;
+      thought?: string | null;
       tool_calls?: Array<{
         index: number;
         id?: string;
@@ -166,6 +169,10 @@ export class OpenAICompatProvider implements LLMProvider {
           try {
             const chunk = JSON.parse(data) as OpenAIChatChunk;
             const delta = chunk.choices?.[0]?.delta;
+            const reasoning = delta?.reasoning_content ?? delta?.reasoning ?? delta?.thought;
+            if (reasoning) {
+              yield emit({ type: 'reasoning_delta', content: reasoning }, onChunk);
+            }
             if (delta?.content) {
               yield emit({ type: 'delta', content: delta.content }, onChunk);
             }

@@ -97,6 +97,8 @@ export interface Message {
   images?: ImageContent[];
   /** Razonamiento/chain-of-thought mostrado colapsable. */
   reasoning?: string;
+  /** Tiempo transcurrido de razonamiento en segundos. */
+  thinkingDurationSeconds?: number;
   /** ID único del mensaje (para copy/regenerate). */
   id?: string;
   /** Marca de tiempo. */
@@ -120,6 +122,7 @@ export interface Tool {
 
 export type StreamChunk =
   | { type: 'delta'; content: string }
+  | { type: 'reasoning_delta'; content: string }
   | { type: 'tool_call'; tool_call: ToolCall }
   | { type: 'usage'; input_tokens: number; output_tokens: number }
   | { type: 'done' }

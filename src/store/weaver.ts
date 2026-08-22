@@ -140,6 +140,8 @@ interface WeaverState {
    */
   appendMessage: (msg: Message, targetConversationId?: string) => void;
   updateLastAssistantMessage: (delta: string, targetConversationId?: string) => void;
+  updateLastAssistantReasoning: (delta: string, targetConversationId?: string) => void;
+  setLastAssistantThinkingDuration: (seconds: number, targetConversationId?: string) => void;
   /** Reemplaza el contenido completo del último mensaje asistente (no append). */
   setLastAssistantMessage: (content: string, targetConversationId?: string) => void;
   setConversationPlan: (plan: Plan) => void;
@@ -821,6 +823,50 @@ export const useWeaver = create<WeaverState>((set, get) => ({
     }
   },
 
+  updateLastAssistantReasoning: (delta, targetConversationId) => {
+    set((s) => {
+      const convId = targetConversationId ?? s.activeConversationId;
+      if (!convId) return s;
+      const conversations = s.conversations.map((c) => {
+        if (c.id !== convId) return c;
+        const msgs = [...c.messages];
+        const last = msgs[msgs.length - 1];
+        if (last && last.role === 'assistant') {
+          const prev = last.reasoning ?? '';
+          msgs[msgs.length - 1] = { ...last, reasoning: prev + delta };
+        } else {
+          msgs.push({ role: 'assistant', content: '', reasoning: delta });
+        }
+        return { ...c, messages: msgs, updatedAt: Date.now() };
+      });
+      return { conversations };
+    });
+    if (runtime.isTauri) {
+      schedulePersistLastMessage();
+    } else {
+      try {
+        localStorage.setItem('weaver:conversations', JSON.stringify(useWeaver.getState().conversations));
+      } catch { /* ignore */ }
+    }
+  },
+
+  setLastAssistantThinkingDuration: (seconds, targetConversationId) => {
+    set((s) => {
+      const convId = targetConversationId ?? s.activeConversationId;
+      if (!convId) return s;
+      const conversations = s.conversations.map((c) => {
+        if (c.id !== convId) return c;
+        const msgs = [...c.messages];
+        const last = msgs[msgs.length - 1];
+        if (last && last.role === 'assistant') {
+          msgs[msgs.length - 1] = { ...last, thinkingDurationSeconds: seconds };
+        }
+        return { ...c, messages: msgs, updatedAt: Date.now() };
+      });
+      return { conversations };
+    });
+  },
+
   setLastAssistantMessage: (content, targetConversationId) => {
     set((s) => {
       const convId = targetConversationId ?? s.activeConversationId;
@@ -1007,7 +1053,7 @@ export const useWeaver = create<WeaverState>((set, get) => ({
       const systemMsg: Message = {
         role: 'system',
         content:
-          'Eres Weaver, un asistente de escritorio amable y conciso. Si tu respuesta se acerca al límite de tokens, termina con la línea exacta <<CONTINUE>>. Al terminar del todo, emite <<END>>.',
+          'Tu nombre es Weaver. Si el usuario te pregunta quién eres, cómo te llamas o quién te creó, responde SIEMPRE que eres Weaver, un asistente de escritorio amable y conciso. Si tu respuesta se acerca al límite de tokens, termina con la línea exacta <<CONTINUE>>. Al terminar del todo, emite <<END>>.',
       };
       const full = await streamUntilDone(llm, activeMember?.modelId ?? s.modelId, [systemMsg, ...context], {
         maxChains: 5,
@@ -1119,7 +1165,7 @@ export const useWeaver = create<WeaverState>((set, get) => ({
       const systemMsg: Message = {
         role: 'system',
         content:
-          'Eres Weaver, un asistente de escritorio amable y conciso. Si tu respuesta se acerca al límite de tokens, termina con la línea exacta <<CONTINUE>>. Al terminar del todo, emite <<END>>.',
+          'Tu nombre es Weaver. Si el usuario te pregunta quién eres, cómo te llamas o quién te creó, responde SIEMPRE que eres Weaver, un asistente de escritorio amable y conciso. Si tu respuesta se acerca al límite de tokens, termina con la línea exacta <<CONTINUE>>. Al terminar del todo, emite <<END>>.',
       };
 
       const full = await streamUntilDone(llm, activeMember?.modelId ?? s.modelId, [systemMsg, ...context], {
@@ -1472,6 +1518,10 @@ export const useWeaver = create<WeaverState>((set, get) => ({
       return { hiddenCapsules: next };
     }),
 }));
+
+if (typeof window !== 'undefined') {
+  (window as unknown as { __WEAVER_STORE__: typeof useWeaver }).__WEAVER_STORE__ = useWeaver;
+}
 
 // Inicializar al cargar: crear conversación por defecto.
 useWeaver.subscribe((s) => {

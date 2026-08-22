@@ -188,31 +188,40 @@ export function BrainIcon({ size = 13, className = '' }: { size?: number; classN
 
 function ReasoningAccordion({
   text,
+  durationSeconds,
+  isStreaming,
   open,
   onToggle,
 }: {
   text: string;
+  durationSeconds?: number;
+  isStreaming?: boolean;
   open: boolean;
   onToggle: () => void;
 }) {
+  const headerText = isStreaming
+    ? 'Pensando...'
+    : durationSeconds && durationSeconds > 0
+    ? `Pensado durante ${durationSeconds} ${durationSeconds === 1 ? 'segundo' : 'segundos'}`
+    : 'Pensamiento';
+
   return (
-    <div className="mb-2 max-w-xl">
+    <div className="mb-3 max-w-2xl">
       <button
         onClick={onToggle}
-        className="inline-flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-full text-xs transition-colors border"
+        className="inline-flex items-center gap-1.5 py-1 px-2.5 rounded-full text-xs transition-colors hover:bg-app-elevated border border-border/60 select-none cursor-pointer"
         style={{
-          color: open ? 'var(--accent-strong)' : 'var(--text-muted)',
-          borderColor: open ? 'var(--accent)' : 'var(--border)',
-          background: open ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'transparent',
+          color: 'var(--text-muted)',
+          background: 'var(--bg-elevated)',
         }}
         title="Mostrar/ocultar razonamiento"
       >
-        <BrainIcon size={13} className={open ? 'text-accent' : ''} />
-        <span className="font-medium">Razonamiento</span>
+        <BrainIcon size={14} className="text-text-muted shrink-0" />
+        <span className="font-medium text-xs text-text-muted">{headerText}</span>
         <ChevronDown
-          size={11}
-          className="transition-transform duration-200"
-          style={{ transform: open ? 'rotate(0deg)' : 'rotate(-90deg)' }}
+          size={12}
+          className="text-text-muted shrink-0 transition-transform duration-200"
+          style={{ transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }}
         />
       </button>
 
@@ -224,14 +233,13 @@ function ReasoningAccordion({
       >
         <div className="overflow-hidden min-h-0">
           <div
-            className="mt-1.5 text-xs leading-relaxed px-3 py-2.5 rounded-codex border"
+            className="mt-2 text-xs leading-relaxed px-3.5 py-3 rounded-codex border border-border/50 font-sans whitespace-pre-wrap select-text"
             style={{
-              color: 'var(--text-secondary)',
+              color: 'color-mix(in srgb, var(--text-primary) 65%, transparent)',
               background: 'var(--bg-app)',
-              borderColor: 'var(--border)',
             }}
           >
-            <pre className="whitespace-pre-wrap font-sans">{text}</pre>
+            {text}
           </div>
         </div>
       </div>
@@ -325,12 +333,16 @@ function MessageBubble({ msg }: { msg: Message }) {
   // Para el botón Actualizar: color de fondo según si el texto cambió.
   const draftChanged = editDraft.trim() !== (msg.content ?? '').trim() && editDraft.trim().length > 0;
 
+  const isStreamingMsg = isAssistant && isRunning && (!msg.content || msg.content.trim() === '');
+
   return (
     <div className="group selectable">
       {/* Acordeón de razonamiento (cerebro) — solo si hay reasoning y es assistant */}
-      {isAssistant && msg.reasoning && msg.reasoning.trim() && (
+      {isAssistant && msg.reasoning && msg.reasoning.trim() !== '' && (
         <ReasoningAccordion
           text={msg.reasoning}
+          durationSeconds={msg.thinkingDurationSeconds}
+          isStreaming={isStreamingMsg}
           open={showReasoning}
           onToggle={() => setShowReasoning((v) => !v)}
         />

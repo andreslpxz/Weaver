@@ -91,6 +91,10 @@ export class OllamaProvider implements LLMProvider {
           if (!line.trim()) continue;
           try {
             const ev = JSON.parse(line);
+            if (ev?.message?.reasoning_content || ev?.message?.reasoning) {
+              const r = ev.message.reasoning_content ?? ev.message.reasoning;
+              yield emit({ type: 'reasoning_delta', content: r }, onChunk);
+            }
             if (ev?.message?.content) {
               yield emit({ type: 'delta', content: ev.message.content }, onChunk);
             }
