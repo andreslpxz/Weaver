@@ -1693,10 +1693,14 @@ function ScheduleForm({
 // ConfiguracionView
 // ============================================================================
 
+type ConfigTab = 'appearance' | 'integrations' | 'system';
+
 export function ConfiguracionView() {
   const tt = useT();
   const [lang, setLang] = useLang();
   const { themeId, setTheme, appMode, setAppMode, projects, createProject, loadProjects } = useWeaver();
+  const [tab, setTab] = useState<ConfigTab>('appearance');
+
   const [tavilyKey, setTavilyKey] = useState('');
   const [tavilyStatus, setTavilyStatus] = useState<string | null>(null);
   const [tavilyHas, setTavilyHas] = useState(false);
@@ -1754,347 +1758,430 @@ export function ConfiguracionView() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="max-w-2xl mx-auto px-6 py-10 space-y-6">
-        <div>
-          <h1 className="text-3xl font-medium mb-2">{tt('config.title')}</h1>
-          <p className="text-text-secondary text-sm">
-            Ajustes globales de Weaver. Las API keys se gestionan desde el icono del
-            modelo en el composer.
-          </p>
+    <div className="flex-1 overflow-y-auto bg-app-bg text-text-primary">
+      <div className="max-w-3xl mx-auto px-6 py-8">
+        <h1 className="text-2xl font-bold tracking-tight mb-4">Configuración</h1>
+
+        {/* Tab navigation */}
+        <div className="flex items-center gap-6 border-b border-border pb-3 mb-6">
+          <button
+            onClick={() => setTab('appearance')}
+            className={cn(
+              'text-sm font-medium transition-colors relative pb-1',
+              tab === 'appearance'
+                ? 'text-text-primary font-semibold'
+                : 'text-text-muted hover:text-text-secondary',
+            )}
+          >
+            Apariencia
+            {tab === 'appearance' && (
+              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-text-primary rounded-full" />
+            )}
+          </button>
+          <button
+            onClick={() => setTab('integrations')}
+            className={cn(
+              'text-sm font-medium transition-colors relative pb-1',
+              tab === 'integrations'
+                ? 'text-text-primary font-semibold'
+                : 'text-text-muted hover:text-text-secondary',
+            )}
+          >
+            Integraciones & APIs
+            {tab === 'integrations' && (
+              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-text-primary rounded-full" />
+            )}
+          </button>
+          <button
+            onClick={() => setTab('system')}
+            className={cn(
+              'text-sm font-medium transition-colors relative pb-1',
+              tab === 'system'
+                ? 'text-text-primary font-semibold'
+                : 'text-text-muted hover:text-text-secondary',
+            )}
+          >
+            Sistema & Información
+            {tab === 'system' && (
+              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-text-primary rounded-full" />
+            )}
+          </button>
         </div>
 
-        {/* Modo de ejecución */}
-        <SettingCard
-          title="Modo de ejecución"
-          desc="Determina qué capacidades están disponibles."
-        >
-          <div className="flex items-center gap-2">
-            <Badge color={runtime.isTauri ? 'success' : 'warning'}>
-              {runtime.isTauri ? 'Tauri webview' : 'Navegador (dev)'}
-            </Badge>
-            <span className="text-xs text-text-muted">{runtime.describe()}</span>
-          </div>
-          {runtime.isBrowser && (
-            <div className="mt-3 p-3 rounded-codex bg-warning/10 border border-warning/30 text-xs text-text-secondary space-y-2">
-              <div className="font-medium text-warning">Estás en modo navegador</div>
-              <div>
-                En este modo las API keys se guardan en <code>localStorage</code> (no es seguro, sólo para desarrollo) y las tareas agénticas AT-SPI no están disponibles. Sin embargo, las tools web (search/fetch) y el chat con tools SÍ funcionan.
-              </div>
-              <div>
-                Para acceso completo ejecuta:{' '}
-                <code className="px-1 py-0.5 rounded bg-app-bg">npm run tauri:dev</code>
+        {/* TAB 1: APARIENCIA */}
+        {tab === 'appearance' && (
+          <div className="space-y-6">
+            {/* Idioma */}
+            <div className="p-4 rounded-xl border border-border bg-app-elevated">
+              <h2 className="text-sm font-medium text-text-primary">Idioma</h2>
+              <p className="text-xs text-text-muted mb-3">Selecciona el idioma de la interfaz.</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  onClick={() => setLang('es')}
+                  className={cn(
+                    'text-left p-4 rounded-xl border transition-all flex flex-col justify-between min-h-[90px]',
+                    lang === 'es'
+                      ? 'border-border-accent ring-1 ring-text-primary bg-app-input/60'
+                      : 'border-border hover:border-border-accent bg-app-bg/50',
+                  )}
+                >
+                  <div className="font-semibold text-sm">Español</div>
+                  <div className="text-xs text-text-muted">Español (por defecto)</div>
+                </button>
+                <button
+                  onClick={() => setLang('en')}
+                  className={cn(
+                    'text-left p-4 rounded-xl border transition-all flex flex-col justify-between min-h-[90px]',
+                    lang === 'en'
+                      ? 'border-border-accent ring-1 ring-text-primary bg-app-input/60'
+                      : 'border-border hover:border-border-accent bg-app-bg/50',
+                  )}
+                >
+                  <div className="font-semibold text-sm">English</div>
+                  <div className="text-xs text-text-muted">English</div>
+                </button>
               </div>
             </div>
-          )}
-        </SettingCard>
 
-        {/* Idioma */}
-        <SettingCard
-          title={tt('config.language')}
-          desc={tt('config.language.hint')}
-        >
-          <div className="flex gap-2">
-            {(['es', 'en'] as const).map((lng) => (
-              <button
-                key={lng}
-                onClick={() => setLang(lng)}
-                className={`text-left px-3 py-2 rounded-codex border transition-colors flex-1 ${
-                  lang === lng
-                    ? 'border-accent bg-accent/10 text-text-primary'
-                    : 'border-border hover:border-border-accent text-text-secondary'
-                }`}
-              >
-                <div className="text-sm font-medium">{tt(`config.language.${lng}`)}</div>
-                <div className="text-[10px] text-text-muted mt-0.5">
-                  {lng === 'es' ? 'Español (por defecto)' : 'English'}
-                </div>
-              </button>
-            ))}
-          </div>
-        </SettingCard>
+            {/* Tema */}
+            <div className="p-4 rounded-xl border border-border bg-app-elevated">
+              <h2 className="text-sm font-medium text-text-primary">Tema</h2>
+              <p className="text-xs text-text-muted mb-3">Elige la paleta de colores. Los cambios son al instante.</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {THEMES.map((t) => {
+                  const isSelected = themeId === t.id;
+                  // Custom theme background styling for previews matching the reference image style
+                  const themeBgStyles: Record<ThemeId, { bg: string; text: string; subtext: string; border?: string }> = {
+                    'sage-dark': { bg: 'bg-[#2d3b33]', text: 'text-[#e2ece5]', subtext: 'text-[#9eb3a4]' },
+                    'pure-black': { bg: 'bg-[#000000]', text: 'text-[#ffffff]', subtext: 'text-[#a0a0a0]', border: 'border-white/20' },
+                    'soft-gray': { bg: 'bg-[#e5e7eb]', text: 'text-[#111827]', subtext: 'text-[#4b5563]' },
+                    'midnight-blue': { bg: 'bg-[#1b253b]', text: 'text-[#e0e8f8]', subtext: 'text-[#7a93c2]' },
+                    'warm-paper': { bg: 'bg-[#fef3c7]', text: 'text-[#78350f]', subtext: 'text-[#92400e]' },
+                    'cobalt': { bg: 'bg-[#1d4ed8]', text: 'text-[#ffffff]', subtext: 'text-[#bfdbfe]' },
+                  };
 
-        {/* Tema */}
-        <SettingCard
-          title={tt('config.theme')}
-          desc="Elige la paleta de colores. Los cambios se aplican al instante."
-        >
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {THEMES.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => setTheme(t.id as ThemeId)}
-                className={`text-left p-2 rounded-codex border transition-colors ${
-                  themeId === t.id
-                    ? 'border-accent bg-accent/10'
-                    : 'border-border hover:border-border-accent'
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-1">
-                  <span
-                    className="w-4 h-4 rounded-full border border-border-accent"
-                    style={{ background: t.swatch }}
-                  />
-                  <span className="text-sm font-medium">{t.label}</span>
-                </div>
-                <div className="text-[10px] text-text-muted">{t.desc}</div>
-              </button>
-            ))}
-          </div>
-        </SettingCard>
+                  const style = themeBgStyles[t.id as ThemeId] ?? {
+                    bg: 'bg-app-bg',
+                    text: 'text-text-primary',
+                    subtext: 'text-text-muted',
+                  };
 
-        {/* Modo de interfaz */}
-        <SettingCard
-          title="Modo de interfaz"
-          desc="Cambia la apariencia completa de Weaver. Normal = chat clásico. IDE = editor de archivos + agente lateral."
-        >
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={() => setAppMode('normal')}
-              className={`text-left p-3 rounded-codex border transition-colors ${
-                appMode === 'normal'
-                  ? 'border-accent bg-accent/10'
-                  : 'border-border hover:border-border-accent'
-              }`}
-            >
-              <div className="flex items-center gap-2 mb-1">
-                <MessageSquare size={14} className={appMode === 'normal' ? 'text-accent' : 'text-text-muted'} />
-                <span className="text-sm font-medium">Normal</span>
-                {appMode === 'normal' && (
-                  <span className="ml-auto text-[9px] uppercase tracking-wider text-accent">Activo</span>
-                )}
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => setTheme(t.id as ThemeId)}
+                      className={cn(
+                        'text-center p-4 rounded-xl border transition-all flex flex-col items-center justify-center min-h-[110px] relative overflow-hidden',
+                        style.bg,
+                        isSelected
+                          ? 'ring-2 ring-white border-transparent'
+                          : 'border-border hover:border-border-accent opacity-90 hover:opacity-100',
+                      )}
+                    >
+                      <div className={cn('font-semibold text-base mb-1', style.text)}>
+                        {t.label}
+                      </div>
+                      <div className={cn('text-[11px] leading-tight max-w-[160px]', style.subtext)}>
+                        {t.desc}
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
-              <div className="text-[10px] text-text-muted">
-                Chat con sidebar de conversaciones y proyectos. Todo lo que llevas actualmente.
-              </div>
-            </button>
-
-            <button
-              onClick={() => setAppMode('ide')}
-              className={`text-left p-3 rounded-codex border transition-colors ${
-                appMode === 'ide'
-                  ? 'border-accent bg-accent/10'
-                  : 'border-border hover:border-border-accent'
-              }`}
-            >
-              <div className="flex items-center gap-2 mb-1">
-                <Code2 size={14} className={appMode === 'ide' ? 'text-accent' : 'text-text-muted'} />
-                <span className="text-sm font-medium">IDE</span>
-                {appMode === 'ide' && (
-                  <span className="ml-auto text-[9px] uppercase tracking-wider text-accent">Activo</span>
-                )}
-              </div>
-              <div className="text-[10px] text-text-muted">
-                Estilo VSCode/OpenCode: explorador de archivos, editor con tabs, agente a la derecha y cambios del agente abajo.
-              </div>
-            </button>
-          </div>
-
-          {appMode === 'ide' && (
-            <div className="mt-3 p-2.5 rounded-codex bg-accent/5 border border-accent/20 text-[11px] text-text-secondary">
-              <div className="font-medium text-accent mb-1">Modo IDE activado</div>
-              Al volver al chat (vista Chat), verás el editor. Los accesos MCP, Schedules, Me y Configuración siguen disponibles en el ActivityBar izquierdo. Cambia entre modos en cualquier momento desde aquí.
             </div>
-          )}
-        </SettingCard>
 
-        {/* Sincronización Supabase */}
-        <SupabaseSyncCard
-          localProjects={projects}
-          onCreateLocal={async (name, supabaseId) => {
-            const proj = await createProject(name);
-            if (proj && supabaseId) linkLocalToSupabase(proj.id, supabaseId);
-            await loadProjects();
-            return proj;
-          }}
-        />
-
-        {/* Visión del agente (jerarquía AT-SPI → OCR → VLM) */}
-        <VisionSettingsCard />
-
-        {/* Tavily API key */}
-        <SettingCard
-          title="Búsqueda web (Tavily)"
-          desc="API key para que el agente busque en internet. Obtén una gratis en tavily.com"
-        >
-          <div className="flex gap-2">
-            <input
-              type="password"
-              value={tavilyKey}
-              onChange={(e) => setTavilyKey(e.target.value)}
-              placeholder="tvly-..."
-              className="codex-input flex-1 px-3 py-2 text-sm"
-            />
-            <Button variant="primary" onClick={saveTavily}>
-              Guardar
-            </Button>
-            {tavilyHas && (
-              <Button variant="danger" onClick={deleteTavily}>
-                <Trash2 size={12} />
-              </Button>
-            )}
-          </div>
-          <div className="flex items-center justify-between mt-2">
-            <a
-              href="https://tavily.com"
-              target="_blank"
-              rel="noreferrer"
-              className="text-xs text-accent hover:underline inline-flex items-center gap-1"
-            >
-              Obtener API key <ExternalLink size={10} />
-            </a>
-            {tavilyHas && <Badge color="success">Configurada</Badge>}
-          </div>
-          {tavilyStatus && (
-            <div className="mt-2 text-xs text-accent">{tavilyStatus}</div>
-          )}
-        </SettingCard>
-
-        {/* Importar memoria */}
-        <SettingCard
-          title="Importar memoria de otra IA"
-          desc="Trae el contexto que ChatGPT/Claude/Gemini/Grok aprendieron sobre ti."
-        >
-          <p className="text-xs text-text-secondary mb-2">
-            1. Copia el prompt y pégalo en la otra IA. 2. Pega aquí su respuesta. Weaver categorizará las entradas y las guardará como facts.
-          </p>
-          <div className="flex gap-2 mb-3">
-            <Button onClick={copyImportPrompt}>
-              <FileText size={12} /> Copiar prompt
-            </Button>
-          </div>
-          <textarea
-            value={importText}
-            onChange={(e) => setImportText(e.target.value)}
-            placeholder="Pega aquí la respuesta de la otra IA…"
-            className="codex-input w-full px-3 py-2 text-xs font-mono min-h-[160px] resize-y"
-          />
-          <div className="flex items-center justify-between mt-2">
-            <span className="text-xs text-text-muted">{importText.length} caracteres</span>
-            <Button variant="primary" onClick={doImport} disabled={!importText.trim()}>
-              <Brain size={12} /> Importar memoria
-            </Button>
-          </div>
-          {importStatus && (
-            <div className="mt-2 text-xs text-accent whitespace-pre-wrap">{importStatus}</div>
-          )}
-
-          {/* Memorias importadas */}
-          {importedMemories.length > 0 && (
-            <div className="mt-4 pt-3 border-t border-border">
-              <div className="text-xs font-medium text-text-secondary mb-2">
-                Memorias importadas ({importedMemories.length})
-              </div>
-              <div className="space-y-1 max-h-60 overflow-y-auto">
-                {importedMemories.map((m, i) => (
-                  <div
-                    key={i}
-                    className="text-xs p-2 rounded bg-app-bg border border-border"
-                  >
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <Badge color="accent">{m.source}</Badge>
-                      <span className="text-text-muted text-[10px]">
-                        {CATEGORY_LABELS[m.category]}
-                      </span>
-                    </div>
-                    <div className="text-text-secondary">{m.text}</div>
+            {/* Modo de interfaz */}
+            <div className="p-4 rounded-xl border border-border bg-app-elevated">
+              <h2 className="text-sm font-medium text-text-primary">Modo de interfaz</h2>
+              <p className="text-xs text-text-muted mb-3">
+                Cambia la apariencia completa de Weaver. Normal = chat clásico. IDE = editor de archivos + agente lateral.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  onClick={() => setAppMode('normal')}
+                  className={cn(
+                    'text-left p-3 rounded-xl border transition-all',
+                    appMode === 'normal'
+                      ? 'border-border-accent ring-1 ring-text-primary bg-app-input/60'
+                      : 'border-border hover:border-border-accent bg-app-bg/50',
+                  )}
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <MessageSquare size={14} className={appMode === 'normal' ? 'text-accent' : 'text-text-muted'} />
+                    <span className="text-sm font-medium">Normal</span>
+                    {appMode === 'normal' && (
+                      <span className="ml-auto text-[9px] uppercase tracking-wider text-accent font-semibold">Activo</span>
+                    )}
                   </div>
-                ))}
+                  <div className="text-[10px] text-text-muted">
+                    Chat con sidebar de conversaciones y proyectos. Todo lo que llevas actualmente.
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => setAppMode('ide')}
+                  className={cn(
+                    'text-left p-3 rounded-xl border transition-all',
+                    appMode === 'ide'
+                      ? 'border-border-accent ring-1 ring-text-primary bg-app-input/60'
+                      : 'border-border hover:border-border-accent bg-app-bg/50',
+                  )}
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <Code2 size={14} className={appMode === 'ide' ? 'text-accent' : 'text-text-muted'} />
+                    <span className="text-sm font-medium">IDE</span>
+                    {appMode === 'ide' && (
+                      <span className="ml-auto text-[9px] uppercase tracking-wider text-accent font-semibold">Activo</span>
+                    )}
+                  </div>
+                  <div className="text-[10px] text-text-muted">
+                    Estilo VSCode: explorador de archivos, editor con tabs, agente a la derecha y panel de cambios.
+                  </div>
+                </button>
               </div>
+
+              {appMode === 'ide' && (
+                <div className="mt-3 p-2.5 rounded-codex bg-accent/5 border border-accent/20 text-[11px] text-text-secondary">
+                  <div className="font-medium text-accent mb-1">Modo IDE activado</div>
+                  Al volver al chat (vista Chat), verás el editor. Los accesos MCP, Schedules, Me y Configuración siguen disponibles en el ActivityBar izquierdo. Cambia entre modos en cualquier momento desde aquí.
+                </div>
+              )}
             </div>
-          )}
-        </SettingCard>
-
-        {/* Tools disponibles */}
-        <SettingCard
-          title="Herramientas del agente"
-          desc="What Weaver can do via tools. Algunas requieren modo Tauri."
-        >
-          <ul className="text-xs space-y-1.5">
-            <li className="flex items-start gap-2">
-              <Search size={11} className="text-accent mt-0.5" />
-              <div>
-                <strong className="text-text-primary">web_search</strong> — Búsqueda en internet (Tavily). Funciona en navegador y Tauri.
-              </div>
-            </li>
-            <li className="flex items-start gap-2">
-              <Search size={11} className="text-accent mt-0.5" />
-              <div>
-                <strong className="text-text-primary">web_fetch</strong> — Descarga una URL y devuelve texto/markdown. Funciona en ambos modos.
-              </div>
-            </li>
-            <li className="flex items-start gap-2">
-              <Terminal size={11} className={runtime.isTauri ? 'text-accent' : 'text-text-muted'} />
-              <div>
-                <strong className="text-text-primary">shell_exec</strong> — Ejecuta comandos en bash. {runtime.isTauri ? '✓ Disponible' : '⚠ Sólo Tauri'}
-              </div>
-            </li>
-            <li className="flex items-start gap-2">
-              <FileText size={11} className={runtime.isTauri ? 'text-accent' : 'text-text-muted'} />
-              <div>
-                <strong className="text-text-primary">file_read / file_write / file_list</strong> — Operaciones de filesystem. {runtime.isTauri ? '✓ Disponible' : '⚠ Sólo Tauri'}
-              </div>
-            </li>
-            <li className="flex items-start gap-2">
-              <SettingsIcon size={11} className={runtime.isTauri ? 'text-accent' : 'text-text-muted'} />
-              <div>
-                <strong className="text-text-primary">atspi_* / auto_*</strong> — Control de apps vía accesibilidad AT-SPI. {runtime.isTauri ? '✓ Disponible' : '⚠ Sólo Tauri'}
-              </div>
-            </li>
-          </ul>
-          <div className="mt-3 p-2 rounded bg-app-bg border border-border text-[11px] text-text-muted">
-            💡 En modo navegador, si escribes "busca en internet X" o "lee el archivo /etc/hosts", Weaver usará web_search/web_fetch automáticamente. Para shell_exec y AT-SPI necesitas <code>npm run tauri:dev</code>.
           </div>
-        </SettingCard>
+        )}
 
-        <SettingCard title="Accesibilidad AT-SPI" desc="Requerido para que el agente opere otras apps (sólo en modo Tauri).">
-          <code className="text-xs">gsettings set org.gnome.desktop.interface toolkit-accessibility true</code>
-        </SettingCard>
+        {/* TAB 2: INTEGRACIONES & APIS */}
+        {tab === 'integrations' && (
+          <div className="space-y-6">
+            {/* Tavily API key */}
+            <SettingCard
+              title="Búsqueda web (Tavily)"
+              desc="API key para que el agente busque en internet. Obtén una gratis en tavily.com"
+            >
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  value={tavilyKey}
+                  onChange={(e) => setTavilyKey(e.target.value)}
+                  placeholder="tvly-..."
+                  className="codex-input flex-1 px-3 py-2 text-sm"
+                />
+                <Button variant="primary" onClick={saveTavily}>
+                  Guardar
+                </Button>
+                {tavilyHas && (
+                  <Button variant="danger" onClick={deleteTavily}>
+                    <Trash2 size={12} />
+                  </Button>
+                )}
+              </div>
+              <div className="flex items-center justify-between mt-2">
+                <a
+                  href="https://tavily.com"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs text-accent hover:underline inline-flex items-center gap-1"
+                >
+                  Obtener API key <ExternalLink size={10} />
+                </a>
+                {tavilyHas && <Badge color="success">Configurada</Badge>}
+              </div>
+              {tavilyStatus && (
+                <div className="mt-2 text-xs text-accent">{tavilyStatus}</div>
+              )}
+            </SettingCard>
 
-        <SettingCard title="Dependencias Linux" desc="Herramientas que Weaver usa internamente.">
-          <ul className="text-xs space-y-1 font-mono text-text-secondary">
-            <li>• xdotool (X11 input) — {has('xdotool') ? '✓' : '✗'}</li>
-            <li>• wtype (Wayland input) — {has('wtype') ? '✓' : '✗'}</li>
-            <li>• xclip / wl-clipboard — {has('xclip') || has('wl-copy') ? '✓' : '✗'}</li>
-            <li>• wmctrl (windows) — {has('wmctrl') ? '✓' : '✗'}</li>
-            <li>• Ollama (local models) — {has('ollama') ? '✓' : '✗ (opcional)'}</li>
-          </ul>
-        </SettingCard>
-
-        <SettingCard title="Memoria" desc="Episodios y hechos persistidos localmente.">
-          <div className="flex gap-2">
-            <Button
-              variant="danger"
-              onClick={() => {
-                if (confirm('¿Borrar TODA la memoria episódica y semántica (incluida la importada)?')) {
-                  memory.clearAll().then(() => {
-                    localStorage.removeItem('weaver:episodes');
-                    localStorage.removeItem('weaver:facts');
-                    listImportedMemories().then(setImportedMemories);
-                    alert('Memoria borrada.');
-                  });
-                }
+            {/* Sincronización Supabase */}
+            <SupabaseSyncCard
+              localProjects={projects}
+              onCreateLocal={async (name, supabaseId) => {
+                const proj = await createProject(name);
+                if (proj && supabaseId) linkLocalToSupabase(proj.id, supabaseId);
+                await loadProjects();
+                return proj;
               }}
-            >
-              <Trash2 size={12} /> Borrar memoria
-            </Button>
-          </div>
-        </SettingCard>
+            />
 
-        <SettingCard title="Acerca de" desc="">
-          <div className="text-xs text-text-muted space-y-1">
-            <div>Weaver v0.1.0</div>
-            <div>Linux build · Tauri v2 · AT-SPI2</div>
-            <a
-              href="https://github.com/andreslpxz/Weaver"
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 text-accent hover:underline"
+            {/* Visión del agente */}
+            <VisionSettingsCard />
+
+            {/* Importar memoria */}
+            <SettingCard
+              title="Importar memoria de otra IA"
+              desc="Trae el contexto que ChatGPT/Claude/Gemini/Grok aprendieron sobre ti."
             >
-              github.com/andreslpxz/Weaver <ExternalLink size={10} />
-            </a>
+              <p className="text-xs text-text-secondary mb-2">
+                1. Copia el prompt y pégalo en la otra IA. 2. Pega aquí su respuesta. Weaver categorizará las entradas y las guardará como facts.
+              </p>
+              <div className="flex gap-2 mb-3">
+                <Button onClick={copyImportPrompt}>
+                  <FileText size={12} /> Copiar prompt
+                </Button>
+              </div>
+              <textarea
+                value={importText}
+                onChange={(e) => setImportText(e.target.value)}
+                placeholder="Pega aquí la respuesta de la otra IA…"
+                className="codex-input w-full px-3 py-2 text-xs font-mono min-h-[160px] resize-y"
+              />
+              <div className="flex items-center justify-between mt-2">
+                <span className="text-xs text-text-muted">{importText.length} caracteres</span>
+                <Button variant="primary" onClick={doImport} disabled={!importText.trim()}>
+                  <Brain size={12} /> Importar memoria
+                </Button>
+              </div>
+              {importStatus && (
+                <div className="mt-2 text-xs text-accent whitespace-pre-wrap">{importStatus}</div>
+              )}
+
+              {/* Memorias importadas */}
+              {importedMemories.length > 0 && (
+                <div className="mt-4 pt-3 border-t border-border">
+                  <div className="text-xs font-medium text-text-secondary mb-2">
+                    Memorias importadas ({importedMemories.length})
+                  </div>
+                  <div className="space-y-1 max-h-60 overflow-y-auto">
+                    {importedMemories.map((m, i) => (
+                      <div
+                        key={i}
+                        className="text-xs p-2 rounded bg-app-bg border border-border"
+                      >
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <Badge color="accent">{m.source}</Badge>
+                          <span className="text-text-muted text-[10px]">
+                            {CATEGORY_LABELS[m.category]}
+                          </span>
+                        </div>
+                        <div className="text-text-secondary">{m.text}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </SettingCard>
           </div>
-        </SettingCard>
+        )}
+
+        {/* TAB 3: SISTEMA & INFORMACIÓN */}
+        {tab === 'system' && (
+          <div className="space-y-6">
+            {/* Modo de ejecución */}
+            <SettingCard
+              title="Modo de ejecución"
+              desc="Determina qué capacidades están disponibles."
+            >
+              <div className="flex items-center gap-2">
+                <Badge color={runtime.isTauri ? 'success' : 'warning'}>
+                  {runtime.isTauri ? 'Tauri webview' : 'Navegador (dev)'}
+                </Badge>
+                <span className="text-xs text-text-muted">{runtime.describe()}</span>
+              </div>
+              {runtime.isBrowser && (
+                <div className="mt-3 p-3 rounded-codex bg-warning/10 border border-warning/30 text-xs text-text-secondary space-y-2">
+                  <div className="font-medium text-warning">Estás en modo navegador</div>
+                  <div>
+                    En este modo las API keys se guardan en <code>localStorage</code> (no es seguro, sólo para desarrollo) y las tareas agénticas AT-SPI no están disponibles. Sin embargo, las tools web (search/fetch) y el chat con tools SÍ funcionan.
+                  </div>
+                  <div>
+                    Para acceso completo ejecuta:{' '}
+                    <code className="px-1 py-0.5 rounded bg-app-bg">npm run tauri:dev</code>
+                  </div>
+                </div>
+              )}
+            </SettingCard>
+
+            {/* Tools disponibles */}
+            <SettingCard
+              title="Herramientas del agente"
+              desc="What Weaver can do via tools. Algunas requieren modo Tauri."
+            >
+              <ul className="text-xs space-y-1.5">
+                <li className="flex items-start gap-2">
+                  <Search size={11} className="text-accent mt-0.5" />
+                  <div>
+                    <strong className="text-text-primary">web_search</strong> — Búsqueda en internet (Tavily). Funciona en navegador y Tauri.
+                  </div>
+                </li>
+                <li className="flex items-start gap-2">
+                  <Search size={11} className="text-accent mt-0.5" />
+                  <div>
+                    <strong className="text-text-primary">web_fetch</strong> — Descarga una URL y devuelve texto/markdown. Funciona en ambos modos.
+                  </div>
+                </li>
+                <li className="flex items-start gap-2">
+                  <Terminal size={11} className={runtime.isTauri ? 'text-accent' : 'text-text-muted'} />
+                  <div>
+                    <strong className="text-text-primary">shell_exec</strong> — Ejecuta comandos en bash. {runtime.isTauri ? '✓ Disponible' : '⚠ Sólo Tauri'}
+                  </div>
+                </li>
+                <li className="flex items-start gap-2">
+                  <FileText size={11} className={runtime.isTauri ? 'text-accent' : 'text-text-muted'} />
+                  <div>
+                    <strong className="text-text-primary">file_read / file_write / file_list</strong> — Operaciones de filesystem. {runtime.isTauri ? '✓ Disponible' : '⚠ Sólo Tauri'}
+                  </div>
+                </li>
+                <li className="flex items-start gap-2">
+                  <SettingsIcon size={11} className={runtime.isTauri ? 'text-accent' : 'text-text-muted'} />
+                  <div>
+                    <strong className="text-text-primary">atspi_* / auto_*</strong> — Control de apps vía accesibilidad AT-SPI. {runtime.isTauri ? '✓ Disponible' : '⚠ Sólo Tauri'}
+                  </div>
+                </li>
+              </ul>
+              <div className="mt-3 p-2 rounded bg-app-bg border border-border text-[11px] text-text-muted">
+                💡 En modo navegador, si escribes "busca en internet X" o "lee el archivo /etc/hosts", Weaver usará web_search/web_fetch automáticamente. Para shell_exec y AT-SPI necesitas <code>npm run tauri:dev</code>.
+              </div>
+            </SettingCard>
+
+            <SettingCard title="Accesibilidad AT-SPI" desc="Requerido para que el agente opere otras apps (sólo en modo Tauri).">
+              <code className="text-xs">gsettings set org.gnome.desktop.interface toolkit-accessibility true</code>
+            </SettingCard>
+
+            <SettingCard title="Dependencias Linux" desc="Herramientas que Weaver usa internamente.">
+              <ul className="text-xs space-y-1 font-mono text-text-secondary">
+                <li>• xdotool (X11 input) — {has('xdotool') ? '✓' : '✗'}</li>
+                <li>• wtype (Wayland input) — {has('wtype') ? '✓' : '✗'}</li>
+                <li>• xclip / wl-clipboard — {has('xclip') || has('wl-copy') ? '✓' : '✗'}</li>
+                <li>• wmctrl (windows) — {has('wmctrl') ? '✓' : '✗'}</li>
+                <li>• Ollama (local models) — {has('ollama') ? '✓' : '✗ (opcional)'}</li>
+              </ul>
+            </SettingCard>
+
+            <SettingCard title="Memoria" desc="Episodios y hechos persistidos localmente.">
+              <div className="flex gap-2">
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    if (confirm('¿Borrar TODA la memoria episódica y semántica (incluida la importada)?')) {
+                      memory.clearAll().then(() => {
+                        localStorage.removeItem('weaver:episodes');
+                        localStorage.removeItem('weaver:facts');
+                        listImportedMemories().then(setImportedMemories);
+                        alert('Memoria borrada.');
+                      });
+                    }
+                  }}
+                >
+                  <Trash2 size={12} /> Borrar memoria
+                </Button>
+              </div>
+            </SettingCard>
+
+            <SettingCard title="Acerca de" desc="">
+              <div className="text-xs text-text-muted space-y-1">
+                <div>Weaver v0.1.0</div>
+                <div>Linux build · Tauri v2 · AT-SPI2</div>
+                <a
+                  href="https://github.com/andreslpxz/Weaver"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-accent hover:underline"
+                >
+                  github.com/andreslpxz/Weaver <ExternalLink size={10} />
+                </a>
+              </div>
+            </SettingCard>
+          </div>
+        )}
       </div>
     </div>
   );
