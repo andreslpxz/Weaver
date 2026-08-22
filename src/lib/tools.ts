@@ -31,6 +31,16 @@ export interface ToolDef {
 
 export const ADVANCED_TOOLS: ToolDef[] = [
   {
+    name: 'launch_app',
+    description:
+      'Lanza una aplicación de escritorio (ej: "gedit", "firefox", "gnome-calculator") en el sistema operativo en segundo plano (background) para no bloquear la PC del usuario.',
+    category: 'shell',
+    parameters: {
+      app_name: { type: 'string', description: 'Nombre del ejecutable o aplicación (ej: "gedit", "firefox", "calculator")' },
+      background: { type: 'boolean', description: 'Si es true (default true), la ejecuta en segundo plano.' },
+    },
+  },
+  {
     name: 'shell_exec',
     description:
       'Ejecuta un comando en la shell del sistema (bash). Devuelve stdout, stderr y código de salida. Útil para instalar paquetes, correr scripts, manipular archivos, etc. Requiere confirmación del usuario.',
@@ -415,7 +425,7 @@ export function buildAdvancedToolsList() {
   const OPTIONAL_KEYS = new Set([
     'cwd', 'timeout', 'max_results', 'create_dirs', 'max_chars', 'mime_type',
     'description', 'location', 'calendar_id', 'all_day', 'priority', 'due_ts', 'list_id',
-    'from_ts', 'to_ts', 'notes', 'qty', 'category', 'title',
+    'from_ts', 'to_ts', 'notes', 'qty', 'category', 'title', 'background',
     'search', 'by_kind', 'neighbors', 'from', 'to', 'stats', 'limit', 'root_path',
     'subagent_name', 'context',
   ]);
@@ -449,6 +459,8 @@ export async function dispatchAdvancedTool(
 ): Promise<ToolExecResult> {
   try {
     switch (name) {
+      case 'launch_app':
+        return await launchApp(String(args.app_name), args.background !== false);
       case 'shell_exec':
         return await shellExec(String(args.command), args.cwd ? String(args.cwd) : undefined, Number(args.timeout ?? 30000));
       case 'file_read':
@@ -865,6 +877,17 @@ async function renderUnified(args: Record<string, unknown>): Promise<ToolExecRes
 // ============================================================================
 // Shell + filesystem (requieren Tauri)
 // ============================================================================
+
+async function launchApp(appName: string, background: boolean): Promise<ToolExecResult> {
+  if (runtime.isBrowser) {
+    return { ok: false, output: '', error: 'launch_app solo está disponible en modo Tauri.' };
+  }
+  const app = appName.trim();
+  if (!app) return { ok: false, output: '', error: 'Falta app_name' };
+  const cmd = background ? `nohup ${app} >/dev/null 2>&1 &` : app;
+  const res = await sqlite.shellExec(cmd);
+  return { ok: res.code === 0, output: `Aplicación "${app}" iniciada${background ? ' en segundo plano' : ''}.` };
+}
 
 async function shellExec(command: string, _cwd?: string, _timeout = 30000): Promise<ToolExecResult> {
   if (runtime.isBrowser) {
