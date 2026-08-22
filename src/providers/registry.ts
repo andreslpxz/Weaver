@@ -190,6 +190,7 @@ export const PROVIDERS: ProviderInfo[] = [
     baseUrl: 'https://api.lightning.ai/v1',
     docsUrl: 'https://lightning.ai/docs/overview/studios',
     models: [
+      { id: 'lightning-ai/Qwen3.8-27B', label: 'Qwen 3.8 27B', contextWindow: 262_144, supportsTools: true, supportsStreaming: true },
       { id: 'lit-gpt-4o', label: 'Lit GPT-4o', contextWindow: 128_000, supportsStreaming: true },
     ],
   },
