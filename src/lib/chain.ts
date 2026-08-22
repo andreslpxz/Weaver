@@ -21,12 +21,93 @@ export const END_MARKER = '<<END>>';
 
 export interface StreamResult {
   text: string;
+  reasoning?: string;
   toolCalls: import('@/providers/types').ToolCall[];
   usage: { inputTokens: number; outputTokens: number };
   /** True si el modelo emitió <<CONTINUE>> (necesita más espacio). */
   needsContinue: boolean;
   /** True si el modelo emitió <<END>> (terminó). */
   ended: boolean;
+}
+
+class ThinkTagStreamFilter {
+  private inThink = false;
+  private buffer = '';
+
+  constructor(
+    private onContent: (text: string) => void,
+    private onReasoning: (text: string) => void,
+  ) {}
+
+  feed(text: string) {
+    this.buffer += text;
+    this.processBuffer();
+  }
+
+  flush() {
+    if (this.buffer) {
+      if (this.inThink) {
+        this.onReasoning(this.buffer);
+      } else {
+        this.onContent(this.buffer);
+      }
+      this.buffer = '';
+    }
+  }
+
+  private processBuffer() {
+    while (this.buffer.length > 0) {
+      if (!this.inThink) {
+        const startIdx = this.buffer.indexOf('<think>');
+        if (startIdx !== -1) {
+          const content = this.buffer.slice(0, startIdx);
+          if (content) this.onContent(content);
+          this.buffer = this.buffer.slice(startIdx + 7);
+          this.inThink = true;
+          continue;
+        }
+        let partialMatch = 0;
+        for (let i = 1; i < 7 && i <= this.buffer.length; i++) {
+          if ('<think>'.startsWith(this.buffer.slice(-i))) {
+            partialMatch = i;
+            break;
+          }
+        }
+        if (partialMatch > 0) {
+          const safeContent = this.buffer.slice(0, this.buffer.length - partialMatch);
+          if (safeContent) this.onContent(safeContent);
+          this.buffer = this.buffer.slice(this.buffer.length - partialMatch);
+          break;
+        }
+        this.onContent(this.buffer);
+        this.buffer = '';
+      } else {
+        const endIdx = this.buffer.indexOf('</think>');
+        if (endIdx !== -1) {
+          const reasoning = this.buffer.slice(0, endIdx);
+          if (reasoning) this.onReasoning(reasoning);
+          this.buffer = this.buffer.slice(endIdx + 8);
+          this.inThink = false;
+          continue;
+        }
+        let partialMatch = 0;
+        for (let i = 1; i < 8 && i <= this.buffer.length; i++) {
+          if ('</think>'.startsWith(this.buffer.slice(-i))) {
+            partialMatch = i;
+            break;
+          }
+        }
+        if (partialMatch > 0) {
+          const safeReasoning = this.buffer.slice(0, this.buffer.length - partialMatch);
+          if (safeReasoning) this.onReasoning(safeReasoning);
+          this.buffer = this.buffer.slice(this.buffer.length - partialMatch);
+          break;
+        }
+        this.onReasoning(this.buffer);
+        this.buffer = '';
+      }
+    }
+  }
 }
 
 /** Quita todos los marcadores de encadenamiento de un texto. */
@@ -46,15 +127,29 @@ export async function streamChat(
     tools?: Tool[];
     signal?: AbortSignal;
     onDelta?: (delta: string) => void;
+    onReasoningDelta?: (reasoningDelta: string) => void;
   } = {},
 ): Promise<StreamResult> {
   let rawText = '';
+  let rawReasoning = '';
   const toolCalls: StreamResult['toolCalls'] = [];
   let usage = { inputTokens: 0, outputTokens: 0 };
 
-  // Buffer para detectar marcadores parciales (ej. "<<CONT" todavía no completo)
-  // y no emitirlos hasta saber si son marcador o contenido.
   let pending = '';
+
+  const thinkFilter = new ThinkTagStreamFilter(
+    (content) => {
+      pending += content;
+      const { emit, keep } = splitSafe(pending);
+      if (emit) opts.onDelta?.(emit);
+      rawText += emit;
+      pending = keep;
+    },
+    (reasoning) => {
+      rawReasoning += reasoning;
+      opts.onReasoningDelta?.(reasoning);
+    },
+  );
 
   const iter = await provider.stream({
     model,
@@ -64,21 +159,20 @@ export async function streamChat(
   });
 
   for await (const chunk of iter) {
+    if (chunk.type === 'reasoning_delta' && chunk.content) {
+      rawReasoning += chunk.content;
+      opts.onReasoningDelta?.(chunk.content);
+    }
     if (chunk.type === 'delta' && chunk.content) {
-      pending += chunk.content;
-      // Procesar pending: extraer todo lo que podamos emitir con seguridad.
-      // Si pending contiene un marcador completo, lo quitamos y no lo emitimos.
-      // Si pending termina con un prefijo de marcador, lo retenemos.
-      const { emit, keep } = splitSafe(pending);
-      if (emit) opts.onDelta?.(emit);
-      rawText += emit;
-      pending = keep;
+      thinkFilter.feed(chunk.content);
     }
     if (chunk.type === 'tool_call') toolCalls.push(chunk.tool_call);
     if (chunk.type === 'usage') {
       usage = { inputTokens: chunk.input_tokens, outputTokens: chunk.output_tokens };
     }
   }
+
+  thinkFilter.flush();
 
   // Flush final: cualquier cosa que quede en pending y NO sea marcador se emite.
   // Si es marcador (parcial o completo), se descarta.
@@ -91,6 +185,7 @@ export async function streamChat(
 
   return {
     text: rawText,
+    reasoning: rawReasoning || undefined,
     toolCalls,
     usage,
     needsContinue: pending.includes('CONTINUE') || rawText === '' && toolCalls.length === 0 && messages.length > 1,
