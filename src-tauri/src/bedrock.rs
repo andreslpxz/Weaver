@@ -18,10 +18,9 @@ use aws_sigv4::http_request::{
     sign as sigv4_sign, SignableBody, SignableRequest, SigningSettings,
 };
 use aws_sigv4::sign::v4::SigningParams;
-use aws_smithy_async::time::SystemTime;
-use http::{Method, Uri};
+use aws_smithy_runtime_api::client::identity::Identity;
 use reqwest::Client;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 const SERVICE_NAME: &str = "bedrock";
 
@@ -70,39 +69,34 @@ pub async fn invoke_bedrock(
         "weaver-bedrock",
     );
 
+    let identity = Identity::new(credentials, None);
+
     let signing_params = SigningParams::builder()
-        .identity(&credentials)
+        .identity(&identity)
         .region(region)
         .name(SERVICE_NAME)
-        .time(SystemTime::from_std(std::time::SystemTime::now()))
+        .time(SystemTime::now())
         .settings(SigningSettings::default())
         .build()
         .map_err(|e| anyhow!("SigningParams::build: {:?}", e))?;
 
-    let uri: Uri = endpoint
-        .parse()
-        .map_err(|e| anyhow!("parse uri: {}", e))?;
-
+    let host = format!("bedrock-runtime.{}.amazonaws.com", region);
     let headers = [
         ("content-type", "application/json"),
-        (
-            "host",
-            Box::leak(
-                format!("bedrock-runtime.{}.amazonaws.com", region)
-                    .into_boxed_str(),
-            ),
-        ),
+        ("host", host.as_str()),
     ];
 
     let signable = SignableRequest::new(
-        Method::POST,
-        &uri,
+        "POST",
+        &endpoint,
         headers.iter().map(|(k, v)| (*k, *v)),
         SignableBody::Bytes(body.as_bytes()),
     )
     .map_err(|e| anyhow!("SignableRequest::new: {:?}", e))?;
 
-    let (signing_instructions, _) = sigv4_sign(signable, &signing_params)
+    let http_signing_params = aws_sigv4::http_request::SigningParams::V4(signing_params);
+
+    let (signing_instructions, _) = sigv4_sign(signable, &http_signing_params)
         .map_err(|e| anyhow!("sigv4 sign: {:?}", e))?
         .into_parts();
 
@@ -115,9 +109,7 @@ pub async fn invoke_bedrock(
         .header("content-type", "application/json");
 
     for (name, value) in signing_instructions.headers() {
-        if let Ok(v) = std::str::from_utf8(value) {
-            reqwest_req = reqwest_req.header(name.as_str(), v);
-        }
+        reqwest_req = reqwest_req.header(name, value);
     }
     if let Some(token) = session_token {
         reqwest_req = reqwest_req.header("x-amz-security-token", token);
