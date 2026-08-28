@@ -1007,12 +1007,28 @@ export const useWeaver = create<WeaverState>((set, get) => ({
   rlmResults: {},
   rlmFragments: [],
   rlmTotalFragmentSize: 0,
-  setPlanMode: (v) => set({ planMode: v }),
-  setPursueObjective: (v) => set({ pursueObjective: v }),
-  setCognitiveMode: (v) => set({ cognitiveMode: v }),
+  // Los 3 modos del agente son EXCLUYENTES entre sí: activar uno desactiva
+  // los otros dos (p. ej. activar Modo plan apaga Modo cognitivo y Modo RLM).
+  setPlanMode: (v) =>
+    set((s) => ({
+      planMode: v,
+      ...(v ? { cognitiveMode: false, rlmEnabled: false } : {}),
+    })),
+  setCognitiveMode: (v) =>
+    set((s) => ({
+      cognitiveMode: v,
+      ...(v ? { planMode: false, rlmEnabled: false } : {}),
+    })),
   setChatMemoryMode: (v) => set({ chatMemoryMode: v }),
   setProjectMemoryMode: (v) => set({ projectMemoryMode: v }),
-  setRlmEnabled: (v) => set({ rlmEnabled: v }),
+  // "Perseguir objetivo" NO es un modo excluyente: es un modificador
+  // independiente y puede combinarse con cualquiera de los 3 modos.
+  setPursueObjective: (v) => set({ pursueObjective: v }),
+  setRlmEnabled: (v) =>
+    set((s) => ({
+      rlmEnabled: v,
+      ...(v ? { planMode: false, cognitiveMode: false } : {}),
+    })),
   addRlmSpawn: (info) => set((s) => ({ rlmSpawns: [...s.rlmSpawns, info] })),
   addRlmResult: (result) => set((s) => ({ rlmResults: { ...s.rlmResults, [result.childId]: result } })),
   setRlmFragments: (fragments, totalSize) => set({ rlmFragments: fragments, rlmTotalFragmentSize: totalSize }),

@@ -145,7 +145,7 @@ export function NotebookSourceSearch({ notebookId }: { notebookId: string }) {
         <button
           onClick={handleSearch}
           disabled={!query.trim() || status === 'searching'}
-          className="ml-auto flex h-8 w-8 items-center justify-center rounded-full bg-accent text-white disabled:opacity-30"
+          className="ml-auto flex h-8 w-8 items-center justify-center rounded-full bg-accent text-app-bg disabled:opacity-30"
         >
           {status === 'searching' ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
         </button>
@@ -197,7 +197,7 @@ export function NotebookSourceSearch({ notebookId }: { notebookId: string }) {
           <button
             onClick={handleImport}
             disabled={selected.size === 0 || importing}
-            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-accent py-2.5 text-sm font-medium text-white disabled:opacity-40"
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-accent py-2.5 text-sm font-medium text-app-bg disabled:opacity-40"
           >
             {importing ? <Loader2 size={14} className="animate-spin" /> : <Link2 size={14} />}
             Importar {selected.size > 0 ? `(${selected.size})` : ''}
@@ -219,7 +219,7 @@ function Checkbox({ checked, className }: { checked: boolean; className?: string
     <span
       className={cn(
         'flex h-4 w-4 shrink-0 items-center justify-center rounded border',
-        checked ? 'border-accent bg-accent text-white' : 'border-border bg-transparent',
+        checked ? 'border-accent bg-accent text-app-bg' : 'border-border bg-transparent',
         className,
       )}
     >

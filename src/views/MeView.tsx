@@ -331,7 +331,7 @@ function MonthGrid({
       <div className="grid grid-cols-7 gap-1">
         {days.map((day) => {
           const inMonth = new Date(day).getMonth() === new Date(cursor).getMonth();
-          const isToday = day === today;
+          const isToday = day === today && inMonth;
           const evs = eventsByDay.get(day) ?? [];
           return (
             <div
@@ -339,13 +339,19 @@ function MonthGrid({
               onClick={() => onCreate(day + 9 * 60 * 60 * 1000)}
               className={cn(
                 'min-h-[88px] rounded-codex border p-1 cursor-pointer transition-colors',
-                'border-border hover:border-border-accent hover:bg-app-elevated',
-                !inMonth && 'opacity-40',
-                isToday && 'border-accent bg-accent/5',
+                inMonth ? 'bg-app-elevated/40' : 'bg-transparent border-border/40 hover:border-border-accent/60',
+                'hover:border-border-accent',
+                !inMonth && 'opacity-45 saturate-50',
+                isToday && 'border-accent bg-accent/5 opacity-100',
               )}
             >
-              <div className={cn('text-[10px] mb-0.5', isToday ? 'text-accent font-bold' : 'text-text-muted')}>
+              <div className={cn('text-[10px] mb-0.5', isToday ? 'text-accent font-bold' : inMonth ? 'text-text-secondary' : 'text-text-muted/60')}>
                 {new Date(day).getDate()}
+                {!inMonth && (
+                  <span className="ml-0.5 text-[8px] uppercase opacity-70">
+                    {new Date(day).toLocaleDateString('es-MX', { month: 'short' })}
+                  </span>
+                )}
               </div>
               <div className="space-y-0.5">
                 {evs.slice(0, 3).map((ev) => {
@@ -444,11 +450,18 @@ function WeekGrid({
       <div className="flex-1 grid grid-cols-7 gap-1 relative">
         {days.map((day) => {
           const isToday = startOfDay(day) === startOfDay(Date.now());
+          // Día perteneciente al mes contiguo al del cursor → atenuado.
+          const inMonth = new Date(day).getMonth() === new Date(cursor).getMonth();
           return (
-            <div key={day} className="border-l border-border">
-              <div className={cn('h-8 text-center text-xs py-1.5', isToday && 'text-accent font-bold')}>
+            <div key={day} className={cn('border-l border-border', !inMonth && 'opacity-45 saturate-50')}>
+              <div className={cn('h-8 text-center text-xs py-1.5', isToday && inMonth ? 'text-accent font-bold' : 'text-text-secondary')}>
                 {new Date(day).toLocaleDateString('es-MX', { weekday: 'short' })}
                 <span className="ml-1 opacity-60">{new Date(day).getDate()}</span>
+                {!inMonth && (
+                  <span className="ml-0.5 text-[9px] uppercase opacity-60">
+                    {new Date(day).toLocaleDateString('es-MX', { month: 'short' })}
+                  </span>
+                )}
               </div>
               <div
                 className="relative cursor-crosshair"
@@ -1049,7 +1062,7 @@ function TaskRow({
           task.done ? 'bg-success border-success' : 'border-border-accent hover:border-accent',
         )}
       >
-        {task.done && <Check size={10} className="text-white" />}
+        {task.done && <Check size={10} className="text-app-bg" />}
       </button>
       <button
         onClick={onPriority}
@@ -1681,7 +1694,7 @@ function ShoppingModule() {
                   onClick={() => upsertMeShopping({ ...it, checked: false, checked_at: null })}
                   className="w-4 h-4 rounded bg-success border border-success flex items-center justify-center"
                 >
-                  <Check size={10} className="text-white" />
+                  <Check size={10} className="text-app-bg" />
                 </button>
                 <span className="flex-1 line-through opacity-50">{it.name}</span>
                 {it.qty && <span className="text-xs text-text-muted line-through">{it.qty}</span>}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Puzzle,
   Sparkles,
@@ -15,6 +15,7 @@ import {
   X,
   Shield,
   ChevronDown,
+  ChevronUp,
   ChevronRight,
   Loader2,
   Power,
@@ -78,6 +79,15 @@ export function ComplementosView() {
   const [url, setUrl] = useState('');
   const [name, setName] = useState('');
   const [tab, setTab] = useState<'skills' | 'mcp' | 'native'>('mcp');
+  // Búsqueda + lista progresiva de skills (6 visibles, resto por scroll).
+  const [skillsQuery, setSkillsQuery] = useState('');
+  const skillsMatches = useCallback(
+    (s: Skill) =>
+      s.name.toLowerCase().includes(skillsQuery.toLowerCase()) ||
+      s.description.toLowerCase().includes(skillsQuery.toLowerCase()),
+    [skillsQuery],
+  );
+  const skillsProg = useProgressiveList(skills, skillsMatches, skillsQuery);
 
   useEffect(() => {
     setServers(mcpClient.listServers());
@@ -236,31 +246,54 @@ export function ComplementosView() {
             {/* Skills instaladas */}
             <section className="mb-8">
               <h2 className="text-sm font-semibold mb-3">Skills instaladas ({skills.length})</h2>
+              {skills.length > 0 && (
+                <SectionSearch
+                  placeholder="Buscar skills…"
+                  value={skillsQuery}
+                  onChange={setSkillsQuery}
+                />
+              )}
               {skills.length === 0 ? (
                 <div className="text-sm text-text-muted p-4 border border-dashed border-border rounded-codex text-center">
                   Aún no hay skills instaladas.
                 </div>
+              ) : skillsProg.total === 0 ? (
+                <div className="text-xs text-text-muted italic">Sin resultados para “{skillsQuery}”.</div>
               ) : (
-                <div className="grid grid-cols-2 gap-2">
-                  {skills.map((s) => (
-                    <div key={s.name} className="codex-card p-3">
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium text-sm">{s.name}</span>
-                        <Badge color={s.source === 'learned' ? 'accent' : 'default'}>{s.source}</Badge>
-                      </div>
-                      <p className="text-xs text-text-muted mt-1">{s.description}</p>
-                      {s.triggers.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-2">
-                          {s.triggers.slice(0, 3).map((t, i) => (
-                            <span key={i} className="text-[10px] px-1.5 py-0.5 bg-app-input rounded">
-                              {t}
-                            </span>
-                          ))}
+                <>
+                  <div className="grid grid-cols-2 gap-2">
+                    {skillsProg.visible.map((s) => (
+                      <div key={s.name} className="codex-card p-3">
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium text-sm">{s.name}</span>
+                          <Badge color={s.source === 'learned' ? 'accent' : 'default'}>{s.source}</Badge>
                         </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                        <p className="text-xs text-text-muted mt-1">{s.description}</p>
+                        {s.triggers.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {s.triggers.slice(0, 3).map((t, i) => (
+                              <span key={i} className="text-[10px] px-1.5 py-0.5 bg-app-input rounded">
+                                {t}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-3">
+                    <ProgressiveControls
+                      total={skillsProg.total}
+                      visibleCount={skillsProg.visible.length}
+                      hasMore={skillsProg.hasMore}
+                      expanded={skillsProg.expanded}
+                      showAll={skillsProg.showAll}
+                      showLess={skillsProg.showLess}
+                      sentinelRef={skillsProg.sentinelRef}
+                      noun="skills"
+                    />
+                  </div>
+                </>
               )}
             </section>
           </>
@@ -301,6 +334,149 @@ function ComplementosTab({
         </span>
       )}
     </button>
+  );
+}
+
+// ============================================================================
+// Búsqueda + lista progresiva (mostrar 6, "Mostrar todos", lazy-load scroll)
+// ============================================================================
+
+const INITIAL_VISIBLE = 6;
+const BATCH = 6;
+
+/** Buscador contextual: el placeholder cambia según la sección ("Buscar MCPs",
+ *  "Buscar skills", "Buscar integraciones"…). */
+function SectionSearch({
+  placeholder,
+  value,
+  onChange,
+}: {
+  placeholder: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 mb-4">
+      <div className="relative flex-1">
+        <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className="codex-input w-full pl-8 pr-7 py-2 text-sm"
+        />
+        {value && (
+          <button
+            onClick={() => onChange('')}
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 codex-icon-btn w-5 h-5"
+            title="Limpiar"
+          >
+            <X size={11} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Lista progresiva: muestra los primeros `INITIAL_VISIBLE` elementos y un
+ * botón "Mostrar todos". Al pulsarlo, el resto se carga por lotes conforme
+ * haces scroll (IntersectionObserver). Incluye "Mostrar menos" para colapsar.
+ */
+function useProgressiveList<T>(items: T[], matches: (item: T) => boolean, query: string) {
+  const filtered = useMemo(() => (query.trim() ? items.filter(matches) : items), [items, matches, query]);
+  const [expanded, setExpanded] = useState(false);
+  const [count, setCount] = useState(INITIAL_VISIBLE);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  // Reset al cambiar la búsqueda o el tamaño de la lista.
+  useEffect(() => {
+    setExpanded(false);
+    setCount(INITIAL_VISIBLE);
+  }, [query, items.length]);
+
+  // Lazy-load por scroll una vez expandido.
+  useEffect(() => {
+    if (!expanded || count >= filtered.length) return;
+    const el = sentinelRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setCount((c) => Math.min(c + BATCH, filtered.length));
+        }
+      },
+      { rootMargin: '160px' },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [expanded, count, filtered.length]);
+
+  const visible = filtered.slice(0, expanded ? count : Math.min(INITIAL_VISIBLE, filtered.length));
+  const hasMore = filtered.length > visible.length;
+  return {
+    visible,
+    total: filtered.length,
+    hasMore,
+    hiddenCount: filtered.length - visible.length,
+    expanded,
+    showAll: () => setExpanded(true),
+    showLess: () => {
+      setExpanded(false);
+      setCount(INITIAL_VISIBLE);
+    },
+    sentinelRef,
+  };
+}
+
+/** Botones "Mostrar todos / Mostrar menos" + sentinel de scroll. */
+function ProgressiveControls({
+  total,
+  visibleCount,
+  hasMore,
+  expanded,
+  showAll,
+  showLess,
+  sentinelRef,
+  noun,
+}: {
+  total: number;
+  visibleCount: number;
+  hasMore: boolean;
+  expanded: boolean;
+  showAll: () => void;
+  showLess: () => void;
+  sentinelRef: React.RefObject<HTMLDivElement | null>;
+  noun: string;
+}) {
+  if (total === 0) return null;
+  return (
+    <>
+      {hasMore && !expanded && (
+        <div className="flex justify-center mt-1">
+          <Button onClick={showAll}>
+            <ChevronDown size={12} className="mr-1" />
+            Mostrar todos ({total})
+          </Button>
+        </div>
+      )}
+      {expanded && hasMore && <div ref={sentinelRef as React.RefObject<HTMLDivElement>} className="h-px" />}
+      {expanded && hasMore && (
+        <div className="text-center text-[11px] text-text-muted py-2">
+          Cargando más {noun} al hacer scroll… ({visibleCount}/{total})
+        </div>
+      )}
+      {expanded && !hasMore && total > INITIAL_VISIBLE && (
+        <div className="flex justify-center mt-1">
+          <Button onClick={showLess}>
+            <ChevronUp size={12} className="mr-1" />
+            Mostrar menos
+          </Button>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -555,6 +731,15 @@ const NATIVE_CATEGORIES: Array<{ id: string; label: string }> = [
 function NativeIntegrationsSection() {
   const { meIntegrations, upsertMeIntegration, deleteMeIntegration, loadMeIntegrations } = useWeaver();
   const [openConfig, setOpenConfig] = useState<string | null>(null);
+  // Búsqueda contextual + lista progresiva (6 visibles, resto por scroll).
+  const [query, setQuery] = useState('');
+  const matches = useCallback(
+    (d: NativeIntegrationDef) =>
+      d.label.toLowerCase().includes(query.toLowerCase()) ||
+      d.description.toLowerCase().includes(query.toLowerCase()),
+    [query],
+  );
+  const prog = useProgressiveList(NATIVE_INTEGRATIONS, matches, query);
 
   useEffect(() => {
     loadMeIntegrations();
@@ -608,8 +793,20 @@ function NativeIntegrationsSection() {
         </p>
       </div>
 
+      {/* Buscador contextual de integraciones */}
+      <SectionSearch
+        placeholder="Buscar integraciones…"
+        value={query}
+        onChange={setQuery}
+      />
+
+      {/* Se renderizan por categoría, pero la lista global es progresiva:
+          se muestran las primeras 6 y el resto carga al hacer scroll. */}
+      {prog.total === 0 && (
+        <div className="text-xs text-text-muted italic mb-4">Sin resultados para “{query}”.</div>
+      )}
       {NATIVE_CATEGORIES.map((cat) => {
-        const defs = NATIVE_INTEGRATIONS.filter((d) => d.kind === cat.id);
+        const defs = prog.visible.filter((d) => d.kind === cat.id);
         if (defs.length === 0) return null;
         return (
           <div key={cat.id} className="mb-5">
@@ -662,6 +859,18 @@ function NativeIntegrationsSection() {
           </div>
         );
       })}
+
+      {/* Mostrar todos / lazy-load scroll / mostrar menos */}
+      <ProgressiveControls
+        total={prog.total}
+        visibleCount={prog.visible.length}
+        hasMore={prog.hasMore}
+        expanded={prog.expanded}
+        showAll={prog.showAll}
+        showLess={prog.showLess}
+        sentinelRef={prog.sentinelRef}
+        noun="integraciones"
+      />
     </section>
   );
 }
@@ -718,9 +927,19 @@ function McpSection({
   servers: McpServer[];
   setServers: (s: McpServer[]) => void;
 }) {
-  const presets = listPresets();
+  const allPresets = useMemo(() => listPresets(), []);
+  const [query, setQuery] = useState('');
   const [installing, setInstalling] = useState<string | null>(null);
   const [configuringServer, setConfiguringServer] = useState<string | null>(null);
+
+  // Búsqueda contextual ("Buscar MCPs…") + lista progresiva (6 por lote).
+  const matches = useCallback(
+    (p: McpPreset) =>
+      p.name.toLowerCase().includes(query.toLowerCase()) ||
+      p.description.toLowerCase().includes(query.toLowerCase()),
+    [query],
+  );
+  const prog = useProgressiveList(allPresets, matches, query);
 
   function installPreset(preset: McpPreset, envValues: Record<string, string>) {
     setInstalling(preset.id);
@@ -759,9 +978,16 @@ function McpSection({
         credenciales que se te pedirán al instalar.
       </p>
 
-      {/* Grid de presets */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6">
-        {presets.map((preset) => {
+      {/* Buscador contextual de MCPs */}
+      <SectionSearch
+        placeholder="Buscar MCPs…"
+        value={query}
+        onChange={setQuery}
+      />
+
+      {/* Grid de presets — primeros 6 + "Mostrar todos" con lazy-load scroll */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-2">
+        {prog.visible.map((preset) => {
           const isInstalled = mcpClient.isPresetInstalled(preset.id);
           return (
             <McpPresetCard
@@ -777,6 +1003,21 @@ function McpSection({
             />
           );
         })}
+      </div>
+      {prog.total === 0 && (
+        <div className="text-xs text-text-muted italic mb-4">Sin resultados para “{query}”.</div>
+      )}
+      <div className="mb-6">
+        <ProgressiveControls
+          total={prog.total}
+          visibleCount={prog.visible.length}
+          hasMore={prog.hasMore}
+          expanded={prog.expanded}
+          showAll={prog.showAll}
+          showLess={prog.showLess}
+          sentinelRef={prog.sentinelRef}
+          noun="MCPs"
+        />
       </div>
 
       {/* Servidores instalados con config de tools */}

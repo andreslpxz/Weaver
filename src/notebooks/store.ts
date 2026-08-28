@@ -133,3 +133,29 @@ export function removeArtifact(id: string, artifactId: string) {
     ),
   );
 }
+
+/**
+ * Importa un notebook desde un objeto externo (importar/compartir).
+ * Siempre asigna un id NUEVO. El chat se importa vacío para no arrastrar
+ * historial ajeno; las fuentes sí viajan completas.
+ */
+export function importNotebook(data: Partial<Notebook>): Notebook {
+  const now = Date.now();
+  const nb: Notebook = {
+    id: crypto.randomUUID(),
+    name: (data.name ?? '').toString().trim() || 'Cuaderno importado',
+    description: typeof data.description === 'string' ? data.description : undefined,
+    sources: Array.isArray(data.sources)
+      ? data.sources.map((s, i) => ({
+          ...s,
+          id: typeof s?.id === 'string' && s.id ? `${s.id}` : `src-${now}-${i}`,
+        }))
+      : [],
+    chat: [],
+    artifacts: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+  persistAll([nb, ...listNotebooks()]);
+  return nb;
+}

@@ -1861,8 +1861,14 @@ export function Composer() {
               {plusOpen && (
                 <div
                   id="plus-popup"
-                  className="absolute bottom-9 left-0 z-30 w-72 bg-app-elevated border border-border-accent rounded-codex shadow-2xl animate-slide-up overflow-hidden"
+                  className="absolute bottom-9 left-0 z-30 w-[30rem] max-w-[calc(100vw-2rem)] bg-app-elevated border border-border-accent rounded-codex shadow-2xl animate-slide-up overflow-hidden"
                 >
+                  {/* Dos columnas lado a lado (Añadir | Modos): el popup deja de
+                      extenderse media pantalla en vertical. Cada columna scrollea
+                      por sí sola si no cabe (max-h 65vh). */}
+                  <div className="flex items-stretch divide-x divide-border">
+                  {/* Columna izquierda: Añadir */}
+                  <div className="w-44 shrink-0 overflow-y-auto max-h-[65vh]">
                   {/* Cabecera */}
                   <div className="px-3 py-2 text-[10px] text-text-muted uppercase tracking-wider border-b border-border">
                     Añadir
@@ -1871,7 +1877,7 @@ export function Composer() {
                   {/* Agregar fotos y archivos */}
                   <button
                     onClick={() => fileInputRef.current?.click()}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
                   >
                     <Paperclip size={15} className="text-accent shrink-0" />
                     <div className="flex-1">
@@ -1895,7 +1901,7 @@ export function Composer() {
                       };
                       input.click();
                     }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
                   >
                     <Folder size={15} className="text-accent shrink-0" />
                     <div className="flex-1">
@@ -1920,7 +1926,7 @@ export function Composer() {
                         setAttachmentError(`No se pudo descargar: ${e instanceof Error ? e.message : String(e)}`);
                       }
                     }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
                   >
                     <LinkIcon size={15} className="text-accent shrink-0" />
                     <div className="flex-1">
@@ -1939,7 +1945,7 @@ export function Composer() {
                       }
                       setAppPickerOpen(true);
                     }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
                   >
                     <Monitor size={15} className="text-accent shrink-0" />
                     <div className="flex-1">
@@ -1950,13 +1956,34 @@ export function Composer() {
                     </div>
                   </button>
 
-                  {/* Separador */}
-                  <div className="border-t border-border" />
+                  {/* Complementos (ir a vista) — cierra la columna Añadir */}
+                  <button
+                    onClick={() => {
+                      setPlusOpen(false);
+                      setView('complementos');
+                    }}
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
+                  >
+                    <Puzzle size={15} className="text-accent shrink-0" />
+                    <div className="flex-1">
+                      <div className="font-medium">Complementos</div>
+                      <div className="text-[10px] text-text-muted">Skills y servidores MCP</div>
+                    </div>
+                    <ChevronDown size={12} className="text-text-muted -rotate-90" />
+                  </button>
+                  </div>
+
+                  {/* Columna derecha: Modos — toggles compactos */}
+                  <div className="flex-1 min-w-0 overflow-y-auto max-h-[65vh]">
+                  {/* Los modos son excluyentes: solo uno activo a la vez */}
+                  <div className="px-3 py-2 text-[10px] uppercase tracking-wider text-text-muted border-b border-border">
+                    Modos · solo uno activo
+                  </div>
 
                   {/* Modo plan (toggle) */}
                   <button
                     onClick={() => setPlanMode(!planMode)}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
                   >
                     <Map size={15} className={planMode ? 'text-accent' : 'text-text-muted shrink-0'} />
                     <div className="flex-1">
@@ -1969,7 +1996,7 @@ export function Composer() {
                   {/* Perseguir objetivo (toggle) */}
                   <button
                     onClick={() => setPursueObjective(!pursueObjective)}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
                   >
                     <Target size={15} className={pursueObjective ? 'text-accent' : 'text-text-muted shrink-0'} />
                     <div className="flex-1">
@@ -1982,12 +2009,12 @@ export function Composer() {
                   {/* Modo Cognitivo (toggle) */}
                   <button
                     onClick={() => setCognitiveMode(!cognitiveMode)}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
                   >
                     <Network size={15} className={cognitiveMode ? 'text-accent' : 'text-text-muted shrink-0'} />
-                    <div className="flex-1">
+                    <div className="flex-1 min-w-0">
                       <div className="font-medium">Modo cognitivo</div>
-                      <div className="text-[10px] text-text-muted">
+                      <div className="text-[10px] text-text-muted truncate">
                         Hiper-especializado · grafo del proyecto (graphify)
                       </div>
                     </div>
@@ -1997,12 +2024,12 @@ export function Composer() {
                   {/* Memoria Chat (toggle) */}
                   <button
                     onClick={() => setChatMemoryMode(!chatMemoryMode)}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
                   >
                     <BookMarked size={15} className={chatMemoryMode ? 'text-accent' : 'text-text-muted shrink-0'} />
-                    <div className="flex-1">
+                    <div className="flex-1 min-w-0">
                       <div className="font-medium">Memoria chat</div>
-                      <div className="text-[10px] text-text-muted">
+                      <div className="text-[10px] text-text-muted truncate">
                         Recuerda nombre, gustos y contexto entre chats (memoria infinita)
                       </div>
                     </div>
@@ -2012,12 +2039,12 @@ export function Composer() {
                   {/* Memoria de Proyecto (toggle) — bitácora scoped a ESTE chat */}
                   <button
                     onClick={() => setProjectMemoryMode(!projectMemoryMode)}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
                   >
                     <BrainIcon size={15} className={projectMemoryMode ? 'text-accent' : 'text-text-muted shrink-0'} />
-                    <div className="flex-1">
+                    <div className="flex-1 min-w-0">
                       <div className="font-medium">Memoria de proyecto</div>
-                      <div className="text-[10px] text-text-muted">
+                      <div className="text-[10px] text-text-muted truncate">
                         Bitácora de este chat: qué se hizo, qué falta, decisiones
                       </div>
                     </div>
@@ -2027,36 +2054,20 @@ export function Composer() {
                   {/* RLM — Recursive Language Model (toggle) */}
                   <button
                     onClick={() => setRlmEnabled(!rlmEnabled)}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
                   >
                     <Workflow size={15} className={rlmEnabled ? 'text-accent' : 'text-text-muted shrink-0'} />
-                    <div className="flex-1">
+                    <div className="flex-1 min-w-0">
                       <div className="font-medium">Modo RLM</div>
-                      <div className="text-[10px] text-text-muted">
+                      <div className="text-[10px] text-text-muted truncate">
                         Contexto como variable · subagentes recursivos · auto-refine (/refine)
                       </div>
                     </div>
                     <ToggleSwitch on={rlmEnabled} />
                   </button>
 
-                  {/* Separador */}
-                  <div className="border-t border-border" />
-
-                  {/* Complementos (ir a vista) */}
-                  <button
-                    onClick={() => {
-                      setPlusOpen(false);
-                      setView('complementos');
-                    }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-app-input transition-colors text-left"
-                  >
-                    <Puzzle size={15} className="text-accent shrink-0" />
-                    <div className="flex-1">
-                      <div className="font-medium">Complementos</div>
-                      <div className="text-[10px] text-text-muted">Skills y servidores MCP</div>
-                    </div>
-                    <ChevronDown size={12} className="text-text-muted -rotate-90" />
-                  </button>
+                  </div>
+                  </div>
                 </div>
               )}
             </div>

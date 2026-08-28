@@ -25,6 +25,8 @@ import {
   Workflow,
   Network,
   BookOpen,
+  Star,
+  Pencil,
 } from 'lucide-react';
 import { useWeaver, type ViewId, type Project, type ProjectMember } from '@/store/weaver';
 import { cn } from '@/components/common/Button';
@@ -32,6 +34,7 @@ import { WeaverLogo } from '@/components/common/WeaverLogo';
 import { useT } from '@/lib/i18n';
 import { sqlite, runtime } from '@/lib/tauri';
 import { ProjectSettingsModal } from '@/components/projects/ProjectSettingsModal';
+import { getPinnedConvIds, toggleConvPin, onPinsChanged, prunePins } from '@/lib/pins';
 
 interface SidebarItem {
   id: ViewId | 'new-chat' | 'search';
@@ -76,6 +79,7 @@ export function Sidebar() {
     activeConversationId,
     selectConversation,
     deleteConversation,
+    renameConversation,
     projects,
     loadProjects,
     createProject,
@@ -101,6 +105,15 @@ export function Sidebar() {
   const [pwError, setPwError] = useState<string | null>(null);
   /** Proyecto expandido para mostrar su switcher de miembros. */
   const [memberSwitcherFor, setMemberSwitcherFor] = useState<string | null>(null);
+  /** Tick para re-renderizar cuando cambian los pins (localStorage + evento). */
+  const [pinTick, setPinTick] = useState(0);
+
+  useEffect(() => onPinsChanged(() => setPinTick((t) => t + 1)), []);
+
+  // Limpieza de pins que apuntan a conversaciones eliminadas.
+  useEffect(() => {
+    prunePins(new Set(conversations.map((c) => c.id)));
+  }, [conversations]);
 
   // Detección de viewport móvil.
   const [isMobile, setIsMobile] = useState(false);
@@ -225,6 +238,16 @@ export function Sidebar() {
     if (!convsByProject.has(key)) convsByProject.set(key, []);
     convsByProject.get(key)!.push(c);
   }
+
+  // Fijados primero (con re-lectura de pins en cada tick), estable para el resto.
+  const pinnedIds = pinTick >= 0 ? getPinnedConvIds() : [];
+  const pinFirst = (list: typeof conversations) =>
+    [...list].sort((a, b) => {
+      const pa = pinnedIds.includes(a.id) ? 0 : 1;
+      const pb = pinnedIds.includes(b.id) ? 0 : 1;
+      return pa - pb;
+    });
+  const noProjectConvs = pinFirst(convsByProject.get(null) ?? []);
 
   // En móvil: el sidebar colapsado no se renderiza nunca.
   // El sidebar expandido se renderiza como overlay (drawer) si mobileOpen.
@@ -426,7 +449,11 @@ export function Sidebar() {
           </div>
         )}
 
-        {/* Proyectos */}
+        {/* Proyectos — ARRIBA de la sección de chats (orden pedido por el
+            usuario). Con su propio título y botón de crear. Sin proyectos la
+            sección desaparece por completo. */}
+        {projects.length > 0 && (
+        <>
         <div className="sidebar-section-title flex items-center justify-between">
           <span>{t('sidebar.projects')}</span>
           <button
@@ -457,28 +484,6 @@ export function Sidebar() {
             <button onClick={addProject} className="codex-btn codex-btn-primary !p-1">
               <Plus size={10} />
             </button>
-          </div>
-        )}
-
-        {/* Conversaciones sin proyecto */}
-        {(convsByProject.get(null) ?? []).length > 0 && (
-          <div className="mt-2">
-            <div className="sidebar-section-title">{t('sidebar.noProject')}</div>
-            {(convsByProject.get(null) ?? []).map((c) => (
-              <ConversationRow
-                key={c.id}
-                conv={c}
-                active={c.id === activeConversationId}
-                onClick={() => selectConversation(c.id)}
-                onDelete={() => deleteConversation(c.id)}
-                menuOpen={convMenuFor === c.id}
-                onMenuToggle={() => setConvMenuFor(convMenuFor === c.id ? null : c.id)}
-                onMoveToProject={async (pid) => {
-                  await setConversationProject(c.id, pid);
-                  setConvMenuFor(null);
-                }}
-              />
-            ))}
           </div>
         )}
 
@@ -595,9 +600,14 @@ export function Sidebar() {
                       <ConversationRow
                         key={c.id}
                         conv={c}
+                        pinned={pinnedIds.includes(c.id)}
                         active={c.id === activeConversationId}
                         onClick={() => selectConversation(c.id)}
                         onDelete={() => deleteConversation(c.id)}
+                        onTogglePin={() => toggleConvPin(c.id)}
+                        onRename={async (title) => {
+                          await renameConversation(c.id, title);
+                        }}
                         menuOpen={convMenuFor === c.id}
                         onMenuToggle={() => setConvMenuFor(convMenuFor === c.id ? null : c.id)}
                         onMoveToProject={async (pid) => {
@@ -612,8 +622,72 @@ export function Sidebar() {
             </div>
           );
         })}
+        </>
+        )}
 
-        {projects.length === 0 && (convsByProject.get(null) ?? []).length === 0 && (
+        {/* Chats — DEBAJO de la sección de proyectos (orden pedido por el
+            usuario). Los fijados salen primero con una estrella. */}
+        <div className="sidebar-section-title">{t('sidebar.chats')}</div>
+        {noProjectConvs.length > 0 ? (
+          noProjectConvs.map((c) => (
+            <ConversationRow
+              key={c.id}
+              conv={c}
+              pinned={pinnedIds.includes(c.id)}
+              active={c.id === activeConversationId}
+              onClick={() => selectConversation(c.id)}
+              onDelete={() => deleteConversation(c.id)}
+              onTogglePin={() => toggleConvPin(c.id)}
+              onRename={async (title) => {
+                await renameConversation(c.id, title);
+              }}
+              menuOpen={convMenuFor === c.id}
+              onMenuToggle={() => setConvMenuFor(convMenuFor === c.id ? null : c.id)}
+              onMoveToProject={async (pid) => {
+                await setConversationProject(c.id, pid);
+                setConvMenuFor(null);
+              }}
+            />
+          ))
+        ) : (
+          <div className="px-2 py-1 text-[10px] text-text-muted italic">{t('sidebar.empty')}</div>
+        )}
+
+        {/* Sin proyectos: acceso discreto para crear el primero (la sección
+            PROYECTOS está oculta a propósito, pero sin este botón no habría
+            forma de crear el primer proyecto). */}
+        {projects.length === 0 && !showProjectInput && (
+          <button
+            onClick={() => setShowProjectInput(true)}
+            className="mt-1 w-full flex items-center gap-1.5 px-2 py-1 text-[11px] text-text-muted hover:text-accent transition-colors"
+            title={t('sidebar.newProject')}
+          >
+            <FolderPlus size={10} /> Crear proyecto
+          </button>
+        )}
+        {showProjectInput && projects.length === 0 && (
+          <div className="px-1 py-1 flex gap-1">
+            <input
+              autoFocus
+              value={newProjectName}
+              onChange={(e) => setNewProjectName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') addProject();
+                if (e.key === 'Escape') {
+                  setShowProjectInput(false);
+                  setNewProjectName('');
+                }
+              }}
+              placeholder={t('sidebar.projectName')}
+              className="codex-input flex-1 px-2 py-1 text-xs"
+            />
+            <button onClick={addProject} className="codex-btn codex-btn-primary !p-1">
+              <Plus size={10} />
+            </button>
+          </div>
+        )}
+
+        {projects.length === 0 && noProjectConvs.length === 0 && (
           <div className="px-2 py-1.5 text-xs text-text-muted">{t('sidebar.noConversations')}</div>
         )}
       </nav>
@@ -692,23 +766,46 @@ export function Sidebar() {
 
 function ConversationRow({
   conv,
+  pinned,
   active,
   onClick,
   onDelete,
+  onTogglePin,
+  onRename,
   menuOpen,
   onMenuToggle,
   onMoveToProject,
 }: {
   conv: { id: string; title: string; projectId: string | null };
+  /** Si está fijado, muestra la estrella a la derecha (siempre visible). */
+  pinned: boolean;
   active: boolean;
   onClick: () => void;
   onDelete: () => void;
+  onTogglePin: () => void;
+  onRename: (title: string) => Promise<void> | void;
   menuOpen: boolean;
   onMenuToggle: () => void;
   onMoveToProject: (pid: string | null) => void;
 }) {
   const projects = useWeaver((s) => s.projects);
   const t = useT();
+  const [renaming, setRenaming] = useState(false);
+  const [renameDraft, setRenameDraft] = useState('');
+
+  function startRename() {
+    setRenameDraft(conv.title);
+    setRenaming(true);
+    onMenuToggle(); // cerrar el menú
+  }
+
+  function commitRename() {
+    const clean = renameDraft.trim();
+    setRenaming(false);
+    setRenameDraft('');
+    if (clean && clean !== conv.title) void onRename(clean);
+  }
+
   return (
     <div
       className={cn(
@@ -719,13 +816,48 @@ function ConversationRow({
       onClick={onClick}
     >
       <MessageSquare size={14} className="shrink-0" />
-      <span className="flex-1 truncate">{conv.title || t('sidebar.newChat')}</span>
+      {renaming ? (
+        <input
+          autoFocus
+          value={renameDraft}
+          onChange={(e) => setRenameDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commitRename();
+            if (e.key === 'Escape') {
+              setRenaming(false);
+              setRenameDraft('');
+            }
+          }}
+          onBlur={commitRename}
+          onClick={(e) => e.stopPropagation()}
+          className="flex-1 min-w-0 codex-input px-1.5 py-0.5 text-xs"
+          placeholder={t('sidebar.rename')}
+        />
+      ) : (
+        <span className="flex-1 truncate">{conv.title || t('sidebar.newChat')}</span>
+      )}
+      {/* Estrella de fijado: siempre visible en chats fijados; click = quitar. */}
+      {pinned && !renaming && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onTogglePin();
+          }}
+          className="codex-icon-btn w-4 h-4 shrink-0 text-accent opacity-100"
+          title={t('sidebar.unpin')}
+        >
+          <Star size={11} fill="currentColor" />
+        </button>
+      )}
       <button
         onClick={(e) => {
           e.stopPropagation();
           onMenuToggle();
         }}
-        className="opacity-0 group-hover:opacity-100 codex-icon-btn w-5 h-5 shrink-0"
+        className={cn(
+          'codex-icon-btn w-5 h-5 shrink-0',
+          pinned ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+        )}
         title={t('sidebar.moveTo')}
       >
         <MoreHorizontal size={12} />
@@ -745,6 +877,26 @@ function ConversationRow({
           className="absolute right-0 top-full mt-1 z-50 w-48 bg-app-elevated border border-border-accent rounded-codex shadow-2xl animate-slide-up overflow-hidden"
           onClick={(e) => e.stopPropagation()}
         >
+          {/* Fijar / quitar fijado */}
+          <button
+            onClick={() => {
+              onTogglePin();
+              onMenuToggle();
+            }}
+            className="w-full text-left px-2 py-1.5 text-xs hover:bg-app-input flex items-center gap-1.5"
+          >
+            <Star size={11} className={pinned ? 'text-accent' : 'text-text-muted'} fill={pinned ? 'currentColor' : 'none'} />
+            {pinned ? t('sidebar.unpin') : t('sidebar.pin')}
+          </button>
+          {/* Renombrar */}
+          <button
+            onClick={startRename}
+            className="w-full text-left px-2 py-1.5 text-xs hover:bg-app-input flex items-center gap-1.5"
+          >
+            <Pencil size={11} className="text-text-muted" />
+            {t('sidebar.rename')}
+          </button>
+          <div className="border-t border-border my-0.5" />
           <div className="px-2 py-1 text-[10px] text-text-muted uppercase">{t('sidebar.moveTo')}</div>
           <button
             onClick={() => onMoveToProject(null)}

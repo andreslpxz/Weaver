@@ -154,11 +154,36 @@ function FactsList({ facts, onChange }: { facts: Fact[]; onChange: () => void })
         </div>
       )}
 
-      {/* Lista */}
+      {/* Lista — empty state compacto y anclado arriba con acciones rápidas */}
       {facts.length === 0 ? (
-        <div className="text-center py-12 text-text-muted text-sm">
-          <Database size={32} className="mx-auto mb-2 opacity-40" />
-          No hay facts. El agente irá aprendiendo cosas sobre ti y aparecerán aquí.
+        <div className="text-text-muted text-sm px-5 py-5 border border-dashed border-border rounded-codex">
+          <div className="flex items-center gap-2 mb-1.5">
+            <Database size={16} className="opacity-50" />
+            <span className="font-medium text-text-secondary">Aún no hay facts en memoria</span>
+          </div>
+          <p className="text-xs mb-3">
+            El agente irá aprendiendo cosas sobre ti aquí. También puedes crear el primero a mano:
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {[
+              { k: 'user.name', v: 'Tu nombre' },
+              { k: 'user.timezone', v: 'America/Mexico_City' },
+              { k: 'user.preferences', v: 'Prefiero respuestas breves y en español' },
+            ].map((ex) => (
+              <button
+                key={ex.k}
+                onClick={() => {
+                  setNewKey(ex.k);
+                  setNewValue(ex.v);
+                  setShowNew(true);
+                }}
+                className="text-[11px] px-2 py-1 rounded-codex border border-border bg-app-input hover:border-accent/50 transition-colors"
+                title="Crear este fact de ejemplo"
+              >
+                <code className="text-accent">{ex.k}</code>
+              </button>
+            ))}
+          </div>
         </div>
       ) : (
         <div className="space-y-1.5">
@@ -249,9 +274,14 @@ function EpisodesList({ episodes }: { episodes: Episode[] }) {
       </div>
 
       {episodes.length === 0 ? (
-        <div className="text-center py-12 text-text-muted text-sm">
-          <Database size={32} className="mx-auto mb-2 opacity-40" />
-          No hay episodios todavía. Aparecerán aquí cuando completes tareas con el agente.
+        <div className="text-text-muted text-sm px-5 py-5 border border-dashed border-border rounded-codex">
+          <div className="flex items-center gap-2 mb-1">
+            <Database size={16} className="opacity-50" />
+            <span className="font-medium text-text-secondary">Aún no hay episodios</span>
+          </div>
+          <p className="text-xs">
+            Aparecerán aquí cuando completes tareas con el agente: qué se hizo, resultado y lecciones aprendidas.
+          </p>
         </div>
       ) : (
         <div className="space-y-2">

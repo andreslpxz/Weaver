@@ -30,9 +30,11 @@ import {
   ListPlus,
   MessageSquare,
   Globe,
+  ChevronDown,
 } from 'lucide-react';
 import { Button } from '@/components/common/Button';
 import { useWeaver } from '@/store/weaver';
+import { ModelPickerPopup } from '@/components/model-picker/ModelPickerPopup';
 import { getWorkflow, saveGraph, appendChatMessage, updateLastRun } from '@/workflows/store';
 import type { Workflow, WorkflowNode, WorkflowEdge, WorkflowNodeType, WorkflowChatMessage, WorkflowRunLogEntry } from '@/workflows/types';
 import { WORKFLOW_NODE_LABELS } from '@/workflows/types';
@@ -435,6 +437,12 @@ function WorkflowChatPanel({
   const [busy, setBusy] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Mismo selector de modelo que el chat principal (mismo estado global).
+  const providerLabel = useWeaver((s) => s.providerId);
+  const modelLabel = useWeaver((s) => s.modelId);
+  const modelPickerOpen = useWeaver((s) => s.modelPickerOpen);
+  const setModelPickerOpen = useWeaver((s) => s.setModelPickerOpen);
+
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages]);
@@ -526,9 +534,20 @@ function WorkflowChatPanel({
 
   return (
     <div className="w-[340px] shrink-0 border-l border-border flex flex-col min-h-0 bg-app-sidebar">
-      <div className="h-11 border-b border-border flex items-center px-3 shrink-0">
+      <div className="h-11 border-b border-border flex items-center justify-between px-3 shrink-0">
         <span className="text-xs font-medium text-text-secondary">Chat del workflow</span>
+        {/* Model picker — el mismo componente y estado global que el chat normal */}
+        <button
+          onClick={() => setModelPickerOpen(!modelPickerOpen)}
+          className="composer-model-picker inline-flex items-center gap-1 px-2 py-1 rounded-codex border border-border-accent text-[11px] text-text-primary hover:bg-app-elevated transition-colors cursor-pointer min-w-0"
+          title="Cambiar modelo"
+        >
+          <span className="opacity-70 truncate max-w-[70px] capitalize">{providerLabel}</span>
+          <span className="font-medium truncate max-w-[90px]">{modelLabel}</span>
+          <ChevronDown size={11} className="opacity-60 shrink-0" />
+        </button>
       </div>
+      {modelPickerOpen && <ModelPickerPopup onClose={() => setModelPickerOpen(false)} />}
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
         {messages.length === 0 && (

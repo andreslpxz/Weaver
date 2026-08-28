@@ -246,7 +246,7 @@ export function NotebookChatPanel({ notebook }: { notebook: Notebook }) {
             <button
               onClick={handleSend}
               disabled={!input.trim()}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-white disabled:opacity-30"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-app-bg disabled:opacity-30"
             >
               <ArrowUp size={16} />
             </button>
@@ -311,7 +311,7 @@ function ChatBubble({ message, sources }: { message: NotebookChatMessage; source
       <div
         className={cn(
           'max-w-[85%] rounded-2xl px-4 py-2.5 text-sm',
-          isUser ? 'bg-accent text-white' : message.isError ? 'bg-danger/10 text-danger' : 'bg-app-elevated text-text-primary',
+          isUser ? 'bg-accent text-app-bg' : message.isError ? 'bg-danger/10 text-danger' : 'bg-app-elevated text-text-primary',
         )}
       >
         {isUser ? <span className="whitespace-pre-wrap">{message.content}</span> : <MarkdownBody text={message.content} />}

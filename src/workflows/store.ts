@@ -95,3 +95,25 @@ export function updateLastRun(id: string, run: Workflow['lastRun']) {
   const all = listWorkflows().map((w) => (w.id === id ? { ...w, lastRun: run, updatedAt: Date.now() } : w));
   persistAll(all);
 }
+
+/**
+ * Importa un workflow desde un objeto externo (importar/compartir).
+ * Siempre asigna un id NUEVO para no chocar con existentes. Limpia
+ * lastRun/chat si vienen dañados. Devuelve el workflow creado.
+ */
+export function importWorkflow(data: Partial<Workflow>): Workflow {
+  const now = Date.now();
+  const wf: Workflow = {
+    id: crypto.randomUUID(),
+    name: (data.name ?? '').toString().trim() || 'Workflow importado',
+    nodes: Array.isArray(data.nodes) ? data.nodes : [],
+    edges: Array.isArray(data.edges) ? data.edges : [],
+    chat: [],
+    createdAt: now,
+    updatedAt: now,
+    enabled: typeof data.enabled === 'boolean' ? data.enabled : true,
+    ...(Array.isArray(data.tags) ? { tags: data.tags } : {}),
+  };
+  persistAll([wf, ...listWorkflows()]);
+  return wf;
+}
