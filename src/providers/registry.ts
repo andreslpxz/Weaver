@@ -187,7 +187,7 @@ export const PROVIDERS: ProviderInfo[] = [
     label: 'Lightning AI',
     desc: 'OpenAI-compatible gateway',
     family: 'openai-compat',
-    baseUrl: 'https://api.lightning.ai/v1',
+    baseUrl: 'https://lightning.ai/api/v1',
     docsUrl: 'https://lightning.ai/docs/overview/studios',
     models: [
       { id: 'lightning-ai/Qwen3.8-27B', label: 'Qwen 3.8 27B', contextWindow: 262_144, supportsTools: true, supportsStreaming: true },
