@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import {
+  Zap,
   Webhook,
   Clock,
   Code2,
@@ -70,37 +71,61 @@ const STATUS_RING: Record<NonNullable<WorkflowNodeData['status']>, string> = {
   error: '#ef4444',
 };
 
+/**
+ * Tarjeta de nodo estilo n8n+: tile de icono grande con color de categoría,
+ * badge "Trigger" flotante sobre el borde, resumen de config, anillo de
+ * estado (running/ok/error) y etiquetas true/false fuera del nodo en el IF.
+ */
 function WorkflowNodeCard({ data, selected }: NodeProps) {
   const d = data as WorkflowNodeData;
   const meta = NODE_META[d.nodeType];
   const Icon = meta.icon;
-  const isTrigger = d.nodeType === 'webhook' || d.nodeType === 'schedule';
+  const isTrigger = d.nodeType === 'webhook' || d.nodeType === 'schedule' || d.nodeType === 'manual';
   const isIf = d.nodeType === 'if';
-  const ring = STATUS_RING[d.status ?? 'idle'];
+  const status = d.status ?? 'idle';
+  const ring = STATUS_RING[status];
+
+  const shadows = [
+    ring !== 'transparent' ? `0 0 0 2px ${ring}` : '',
+    selected ? `0 0 0 4px ${meta.color}30, 0 10px 28px rgba(0,0,0,0.4)` : '',
+  ].filter(Boolean).join(', ');
 
   return (
     <div
-      className="rounded-codex border bg-app-elevated px-3 py-2.5 min-w-[180px] max-w-[220px] shadow-sm"
+      className={`relative rounded-xl border bg-app-elevated px-3 py-3 min-w-[200px] max-w-[240px] transition-shadow ${status === 'running' ? 'animate-pulse' : ''}`}
       style={{
-        borderRadius: '10px',
+        borderRadius: 12,
         borderColor: selected ? meta.color : 'var(--border)',
-        boxShadow: ring !== 'transparent' ? `0 0 0 2px ${ring}` : undefined,
+        boxShadow: shadows || undefined,
       }}
     >
-      {!isTrigger && (
-        <Handle type="target" position={Position.Left} style={{ background: meta.color, width: 8, height: 8 }} />
+      {isTrigger && (
+        <span
+          className="absolute -top-2.5 left-3 h-[18px] px-1.5 inline-flex items-center gap-1 rounded-full text-[8.5px] font-bold tracking-wider uppercase"
+          style={{ background: 'var(--bg-app)', color: meta.color, border: `1px solid ${meta.color}66` }}
+        >
+          <Zap size={8} strokeWidth={2.5} /> Trigger
+        </span>
       )}
 
-      <div className="flex items-center gap-2">
+      {!isTrigger && (
+        <Handle
+          type="target"
+          position={Position.Left}
+          style={{ background: meta.color, width: 9, height: 9, border: '2px solid var(--bg-app)' }}
+        />
+      )}
+
+      <div className="flex items-center gap-2.5">
         <div
-          className="w-6 h-6 rounded-md flex items-center justify-center shrink-0"
-          style={{ background: meta.bg, color: meta.color }}
+          className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border"
+          style={{ background: meta.bg, color: meta.color, borderColor: `${meta.color}40` }}
         >
-          <Icon size={13} />
+          <Icon size={15} />
         </div>
         <div className="min-w-0">
-          <div className="text-xs font-medium text-text-primary truncate">{d.label}</div>
-          <div className="text-[10px] text-text-muted truncate">{d.configSummary || WORKFLOW_TYPE_LABEL[d.nodeType]}</div>
+          <div className="text-[12.5px] font-semibold text-text-primary leading-tight truncate">{d.label}</div>
+          <div className="text-[10.5px] text-text-muted truncate mt-0.5">{d.configSummary || WORKFLOW_TYPE_LABEL[d.nodeType]}</div>
         </div>
       </div>
 
@@ -110,21 +135,34 @@ function WorkflowNodeCard({ data, selected }: NodeProps) {
             type="source"
             position={Position.Right}
             id="true"
-            style={{ background: '#22c55e', width: 8, height: 8, top: '35%' }}
+            style={{ background: '#22c55e', width: 9, height: 9, top: '35%', border: '2px solid var(--bg-app)' }}
           />
           <Handle
             type="source"
             position={Position.Right}
             id="false"
-            style={{ background: '#ef4444', width: 8, height: 8, top: '65%' }}
+            style={{ background: '#ef4444', width: 9, height: 9, top: '65%', border: '2px solid var(--bg-app)' }}
           />
-          <div className="flex justify-between text-[9px] text-text-muted mt-1 px-0.5">
-            <span className="text-success">true</span>
-            <span className="text-danger">false</span>
-          </div>
+          {/* Etiquetas fuera del nodo, junto a cada handle (estilo n8n). */}
+          <span
+            className="absolute text-[8px] font-bold uppercase tracking-wide text-success"
+            style={{ left: '100%', marginLeft: 6, top: '35%', transform: 'translateY(-50%)' }}
+          >
+            true
+          </span>
+          <span
+            className="absolute text-[8px] font-bold uppercase tracking-wide text-danger"
+            style={{ left: '100%', marginLeft: 6, top: '65%', transform: 'translateY(-50%)' }}
+          >
+            false
+          </span>
         </>
       ) : (
-        <Handle type="source" position={Position.Right} style={{ background: meta.color, width: 8, height: 8 }} />
+        <Handle
+          type="source"
+          position={Position.Right}
+          style={{ background: meta.color, width: 9, height: 9, border: '2px solid var(--bg-app)' }}
+        />
       )}
     </div>
   );
