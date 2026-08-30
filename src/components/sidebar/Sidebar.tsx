@@ -335,9 +335,12 @@ export function Sidebar() {
       <aside className={wrapperClass}>
       {/* Header */}
       <div className="flex items-center justify-between px-3 h-12 border-b border-border">
-        <div className="flex items-center gap-2 text-accent">
-          <WeaverLogo size={20} />
-          <span className="font-semibold text-sm text-text-primary">Weaver</span>
+        {/* El logo "W" hace de primera letra: [W] + "eaver" = Weaver. */}
+        <div className="flex items-center gap-[3px]">
+          <span className="text-accent inline-flex items-center">
+            <WeaverLogo size={14} />
+          </span>
+          <span className="font-semibold text-sm text-text-primary">eaver</span>
         </div>
         {isMobile ? (
           <button onClick={() => setMobileOpen(false)} className="codex-icon-btn" title={t('sidebar.searchClose')}>

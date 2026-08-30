@@ -51,6 +51,7 @@ import {
 import { formatSize } from '@/lib/attachments';
 import { speak, stopSpeaking, isTTSSupported } from '@/lib/voice';
 import { runtime } from '@/lib/tauri';
+import { WeaverLogo } from '@/components/common/WeaverLogo';
 
 export function MessageList() {
   const conversation = useWeaver((s) =>
@@ -1604,16 +1605,6 @@ function TraceCard({ subtaskId, steps }: { subtaskId: string; steps: TraceStep[]
 }
 
 function WeaverMark() {
-  return (
-    <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-      <rect width="48" height="48" rx="10" fill="var(--bg-elevated)" />
-      <path
-        d="M10 38L38 10M10 10L38 38"
-        stroke="var(--accent)"
-        strokeWidth="3"
-        strokeLinecap="round"
-      />
-      <circle cx="24" cy="24" r="5" fill="var(--accent)" />
-    </svg>
-  );
+  // Logo oficial "W" tejida de Weaver (antes: placeholder X + círculo).
+  return <WeaverLogo size={44} className="text-accent" />;
 }
