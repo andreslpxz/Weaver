@@ -42,6 +42,41 @@
     transition: background-color 0.2s ease, color 0.2s ease;
   }
 
+  /* Densidad del espaciado (la usan los componentes de @layer components) */
+  :root { --space-factor: 1; }
+  html[data-density='compacta'] { --space-factor: 0.82; }
+  html[data-density='normal']   { --space-factor: 1; }
+  html[data-density='relajada'] { --space-factor: 1.22; }
+
+  /* Escala de redondez — variables por nivel (consumidas al final del archivo,
+     FUERA de @layer, para ganar a las utilidades de Tailwind) */
+  :root { --r-sm: 2px; --r-md: 6px; --r-lg: 8px; --r-xl: 12px; --r-2xl: 16px; --r-3xl: 24px; }
+  html[data-radius='nulo']       { --r-sm: 0px;    --r-md: 0px;    --r-lg: 0px;    --r-xl: 0px;    --r-2xl: 0px;   --r-3xl: 0px; }
+  html[data-radius='sutil']      { --r-sm: 2px;    --r-md: 3px;    --r-lg: 4px;    --r-xl: 5px;    --r-2xl: 6px;   --r-3xl: 8px; }
+  html[data-radius='medio']      { --r-sm: 2px;    --r-md: 6px;    --r-lg: 8px;    --r-xl: 12px;   --r-2xl: 16px;  --r-3xl: 24px; }
+  html[data-radius='redondeado'] { --r-sm: 4px;    --r-md: 8px;    --r-lg: 12px;   --r-xl: 18px;   --r-2xl: 24px;  --r-3xl: 32px; }
+  html[data-radius='completo']   { --r-sm: 6px;    --r-md: 12px;   --r-lg: 18px;   --r-xl: 26px;   --r-2xl: 34px;  --r-3xl: 44px; }
+
+  /* Elevación (sombras) — variables por nivel */
+  :root {
+    --elev-1: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --elev-2: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+    --elev-3: 0 20px 25px -5px rgb(0 0 0 / 0.25), 0 8px 10px -6px rgb(0 0 0 / 0.2);
+  }
+  html[data-elev='0'] { --elev-1: none; --elev-2: none; --elev-3: none; }
+  html[data-elev='1'] { --elev-1: 0 1px 2px 0 rgb(0 0 0 / 0.05); --elev-2: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1); --elev-3: 0 10px 15px -3px rgb(0 0 0 / 0.15), 0 4px 6px -4px rgb(0 0 0 / 0.12); }
+  html[data-elev='2'] { --elev-1: 0 2px 4px 0 rgb(0 0 0 / 0.12); --elev-2: 0 8px 12px -2px rgb(0 0 0 / 0.22), 0 4px 8px -3px rgb(0 0 0 / 0.18); --elev-3: 0 24px 32px -6px rgb(0 0 0 / 0.35), 0 10px 14px -8px rgb(0 0 0 / 0.28); }
+  html[data-elev='3'] { --elev-1: 0 3px 6px 0 rgb(0 0 0 / 0.22); --elev-2: 0 12px 18px -3px rgb(0 0 0 / 0.38), 0 6px 10px -4px rgb(0 0 0 / 0.3); --elev-3: 0 32px 48px -8px rgb(0 0 0 / 0.55), 0 14px 20px -10px rgb(0 0 0 / 0.42); }
+
+  /* Escala de tamaño de texto (afecta a todo lo rem-based) */
+  html[data-fontscale='0'] { font-size: 87.5%; }
+  html[data-fontscale='1'] { font-size: 93.75%; }
+  html[data-fontscale='2'] { font-size: 100%; }
+  html[data-fontscale='3'] { font-size: 106.25%; }
+  html[data-fontscale='4'] { font-size: 112.5%; }
+  html[data-fontscale='5'] { font-size: 118.75%; }
+  html[data-fontscale='6'] { font-size: 125%; }
+
   /* Scrollbar minimalista */
   ::-webkit-scrollbar {
     width: 8px;
@@ -63,12 +98,12 @@
   .codex-card {
     background: var(--bg-elevated);
     border: 1px solid var(--border);
-    border-radius: 0.5rem;
+    border-radius: var(--r-lg);
   }
   .codex-input {
     background: var(--bg-input);
     border: 1px solid var(--border);
-    border-radius: 0.5rem;
+    border-radius: var(--r-lg);
     color: var(--text-primary);
   }
   .codex-input::placeholder {
@@ -79,7 +114,9 @@
     border-color: var(--accent);
   }
   .codex-btn {
-    @apply inline-flex items-center justify-center gap-2 px-3 py-1.5 rounded-codex text-sm font-medium cursor-pointer;
+    @apply inline-flex items-center justify-center gap-2 text-sm font-medium cursor-pointer;
+    padding: calc(0.375rem * var(--space-factor)) calc(0.75rem * var(--space-factor));
+    border-radius: var(--r-lg);
     color: var(--text-secondary);
     transition: background-color 0.15s, color 0.15s;
   }
@@ -96,7 +133,8 @@
     color: var(--bg-app);
   }
   .codex-icon-btn {
-    @apply inline-flex items-center justify-center w-7 h-7 rounded-codex cursor-pointer;
+    @apply inline-flex items-center justify-center w-7 h-7 cursor-pointer;
+    border-radius: var(--r-lg);
     color: var(--text-muted);
     transition: background-color 0.15s, color 0.15s;
   }
@@ -105,7 +143,9 @@
     background: var(--bg-elevated);
   }
   .sidebar-item {
-    @apply flex items-center gap-2 px-2 py-1.5 rounded-codex text-sm cursor-pointer;
+    @apply flex items-center gap-2 text-sm cursor-pointer;
+    padding: calc(0.375rem * var(--space-factor)) calc(0.5rem * var(--space-factor));
+    border-radius: var(--r-lg);
     color: var(--text-secondary);
     transition: background-color 0.15s, color 0.15s;
   }
@@ -144,4 +184,82 @@ html.ide-mode .codex-input {
 html.ide-mode .composer-outer {
   padding-left: 0.375rem !important;
   padding-right: 0.375rem !important;
+}
+
+/* ============================================================================
+   Sistema de diseño configurable (lib/design.ts) — REMAPS SIN CAPA.
+   Van FUERA de @layer para ganar a las utilidades de Tailwind (una regla
+   sin capa vence a cualquier regla en capa con la misma importancia).
+   Defaults = valores originales de Tailwind (cero cambio visual).
+   ========================================================================== */
+
+/* Tipografía principal y de código, controlables desde Apariencia */
+body.font-sans {
+  font-family: var(--font-main, 'Inter', system-ui, sans-serif);
+}
+.font-mono {
+  font-family: var(--font-code, 'JetBrains Mono', 'Fira Code', monospace);
+}
+
+/* Remap de utilidades de radio de Tailwind a la escala activa.
+   rounded-full se mantiene circular (avatares, dots, spinners). */
+.rounded-sm    { border-radius: var(--r-sm) !important; }
+.rounded       { border-radius: var(--r-sm) !important; }
+.rounded-md    { border-radius: var(--r-md) !important; }
+.rounded-lg    { border-radius: var(--r-lg) !important; }
+.rounded-xl    { border-radius: var(--r-xl) !important; }
+.rounded-2xl   { border-radius: var(--r-2xl) !important; }
+.rounded-3xl   { border-radius: var(--r-3xl) !important; }
+.rounded-codex { border-radius: var(--r-lg) !important; }
+.rounded-t-xl  { border-radius: var(--r-xl) var(--r-xl) 0 0 !important; }
+.rounded-b-xl  { border-radius: 0 0 var(--r-xl) var(--r-xl) !important; }
+.rounded-t-lg  { border-radius: var(--r-lg) var(--r-lg) 0 0 !important; }
+.rounded-b-lg  { border-radius: 0 0 var(--r-lg) var(--r-lg) !important; }
+.rounded-t-2xl { border-radius: var(--r-2xl) var(--r-2xl) 0 0 !important; }
+.rounded-b-2xl { border-radius: 0 0 var(--r-2xl) var(--r-2xl) !important; }
+.rounded-l-lg  { border-radius: var(--r-lg) 0 0 var(--r-lg) !important; }
+.rounded-r-lg  { border-radius: 0 var(--r-lg) var(--r-lg) 0 !important; }
+.rounded-l-xl  { border-radius: var(--r-xl) 0 0 var(--r-xl) !important; }
+.rounded-r-xl  { border-radius: 0 var(--r-xl) var(--r-xl) 0 !important; }
+
+/* Remap de utilidades de sombra al nivel de elevación activo */
+.shadow-sm  { box-shadow: var(--elev-1) !important; }
+.shadow     { box-shadow: var(--elev-2) !important; }
+.shadow-md  { box-shadow: var(--elev-2) !important; }
+.shadow-lg  { box-shadow: var(--elev-3) !important; }
+.shadow-xl  { box-shadow: var(--elev-3) !important; }
+.shadow-2xl { box-shadow: var(--elev-3) !important; }
+
+/* Slider nativo con estilo Weaver (webkit/blink) */
+input[type='range'].design-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border-accent);
+  outline: none;
+  cursor: pointer;
+}
+input[type='range'].design-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-elevated);
+  box-shadow: 0 0 0 1px var(--border-accent);
+  transition: transform 0.12s ease;
+}
+input[type='range'].design-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+input[type='range'].design-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-elevated);
+  cursor: pointer;
 }

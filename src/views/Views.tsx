@@ -27,6 +27,8 @@ import {
   RefreshCw,
   Database,
   Eye,
+  SlidersHorizontal,
+  RotateCcw,
 } from 'lucide-react';
 import { mcpClient, listPresets, type McpServer, type ToolApproval } from '@/mcp/client';
 import { type McpPreset } from '@/mcp/presets';
@@ -35,6 +37,25 @@ import { skillsInstaller } from '@/skills/installer';
 import { Badge, Button, cn } from '@/components/common/Button';
 import { runtime } from '@/lib/tauri';
 import { THEMES, type ThemeId } from '@/lib/themes';
+import {
+  STYLE_PRESETS,
+  getStoredStyleId,
+  getDesignPrefs,
+  saveDesignPrefs,
+  applyDesign,
+  applyStylePreset,
+  getStyleById,
+  RADII,
+  ELEVATIONS,
+  FONT_MAINS,
+  FONT_CODES,
+  DENSITIES,
+  FONT_SCALES,
+  type DesignPrefs,
+  type StylePreset,
+  type StyleId,
+  type ElevationId,
+} from '@/lib/design';
 import { useWeaver } from '@/store/weaver';
 import { useT, useLang } from '@/lib/i18n';
 import { memory } from '@/agent/memory';
@@ -1931,6 +1952,315 @@ function ScheduleForm({
 }
 
 // ============================================================================
+// Estilo total — tarjetas de preset + paleta fina + detalles avanzados
+// ============================================================================
+
+const THEME_CARD_STYLES: Record<ThemeId, { bg: string; text: string; subtext: string }> = {
+  'sage-dark': { bg: 'bg-[#2d3b33]', text: 'text-[#e2ece5]', subtext: 'text-[#9eb3a4]' },
+  'pure-black': { bg: 'bg-[#000000]', text: 'text-[#ffffff]', subtext: 'text-[#a0a0a0]' },
+  'soft-gray': { bg: 'bg-[#e5e7eb]', text: 'text-[#111827]', subtext: 'text-[#4b5563]' },
+  'midnight-blue': { bg: 'bg-[#1b253b]', text: 'text-[#e0e8f8]', subtext: 'text-[#7a93c2]' },
+  'warm-paper': { bg: 'bg-[#fef3c7]', text: 'text-[#78350f]', subtext: 'text-[#92400e]' },
+  'cobalt': { bg: 'bg-[#1d4ed8]', text: 'text-[#ffffff]', subtext: 'text-[#bfdbfe]' },
+  'claude-warm': { bg: 'bg-[#30302e]', text: 'text-[#f5f4ef]', subtext: 'text-[#b8b6b0]' },
+  'gemini-dark': { bg: 'bg-[#1d2026]', text: 'text-[#e8eef8]', subtext: 'text-[#9aa7bd]' },
+  'chatgpt-dark': { bg: 'bg-[#2f2f2f]', text: 'text-[#ececec]', subtext: 'text-[#b4b4b4]' },
+};
+
+/** Fila de slider etiquetado (radio, elevación, texto, densidad). */
+function DesignSliderRow(props: {
+  label: string;
+  hint: string;
+  min: number;
+  max: number;
+  value: number;
+  current: string;
+  minLabel: string;
+  maxLabel: string;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="flex items-center gap-4">
+      <div className="w-40 shrink-0">
+        <div className="text-xs font-medium text-text-primary">{props.label}</div>
+        <div className="text-[10px] text-text-muted">{props.hint}</div>
+      </div>
+      <div className="flex-1 min-w-0">
+        <input
+          type="range"
+          className="design-slider"
+          min={props.min}
+          max={props.max}
+          step={1}
+          value={props.value}
+          onChange={(e) => props.onChange(Number(e.target.value))}
+        />
+        <div className="flex justify-between mt-1">
+          <span className="text-[9px] uppercase tracking-wide text-text-muted">{props.minLabel}</span>
+          <span className="text-[10px] text-accent font-medium">{props.current}</span>
+          <span className="text-[9px] uppercase tracking-wide text-text-muted">{props.maxLabel}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StyleDesignSections() {
+  const { themeId, setTheme } = useWeaver();
+  const [styleId, setStyleId] = useState<StyleId>(getStoredStyleId());
+  const [prefs, setPrefs] = useState<DesignPrefs>(getDesignPrefs());
+  const [advOpen, setAdvOpen] = useState(true);
+
+  const activeStyle = getStyleById(styleId);
+
+  function updatePrefs(patch: Partial<DesignPrefs>) {
+    const next = { ...prefs, ...patch };
+    setPrefs(next);
+    saveDesignPrefs(next);
+    applyDesign(next);
+  }
+
+  function selectStyle(s: StylePreset) {
+    const p = applyStylePreset(s.id); // persiste + aplica al DOM
+    setStyleId(s.id);
+    setPrefs(p);
+    setTheme(s.themeId);
+  }
+
+  function resetToStyle() {
+    const p = applyStylePreset(styleId);
+    setPrefs(p);
+    setTheme(activeStyle.themeId);
+  }
+
+  const radiusIdx = Math.max(0, RADII.findIndex((r) => r.id === prefs.radius));
+  const elevIdx = Math.max(0, ELEVATIONS.findIndex((e) => e.id === prefs.elevation));
+  const densityIdx = Math.max(0, DENSITIES.findIndex((d) => d.id === prefs.density));
+  const scale = FONT_SCALES[prefs.fontScale] ?? FONT_SCALES[2];
+
+  return (
+    <>
+      {/* ---------- Estilo total ---------- */}
+      <div className="p-4 rounded-xl border border-border bg-app-elevated">
+        <h2 className="text-sm font-medium text-text-primary">Estilo total y diseño de interfaz</h2>
+        <p className="text-xs text-text-muted mb-3">
+          Elige la paleta de colores, la tipografía, los bordes y el diseño. Los cambios son al instante.
+        </p>
+        <div className="flex gap-3 overflow-x-auto pb-1.5 -mx-1 px-1">
+          {STYLE_PRESETS.map((s) => {
+            const isActive = s.id === styleId;
+            const fontStack = FONT_MAINS.find((f) => f.id === s.defaults.fontMain)?.stack;
+            const radiusDemo =
+              s.defaults.radius === 'nulo' ? 0 : s.defaults.radius === 'sutil' ? 3 : s.defaults.radius === 'medio' ? 8 : s.defaults.radius === 'redondeado' ? 14 : 999;
+            return (
+              <button
+                key={s.id}
+                onClick={() => selectStyle(s)}
+                className={cn(
+                  'relative shrink-0 w-[168px] rounded-xl border p-2 text-left transition-all flex flex-col',
+                  isActive ? 'border-transparent' : 'border-border hover:border-border-accent opacity-90 hover:opacity-100',
+                )}
+                style={{
+                  background: s.preview.bg,
+                  boxShadow: isActive ? `0 0 0 2px ${s.preview.accent}` : undefined,
+                }}
+              >
+                {isActive && (
+                  <span
+                    className="absolute top-2.5 right-2.5 z-10 text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
+                    style={{ background: s.preview.accent, color: s.preview.bg }}
+                  >
+                    Activo
+                  </span>
+                )}
+
+                {/* Mini-preview del estilo */}
+                <div
+                  className="rounded-lg p-2.5 mb-2 h-[108px] flex flex-col justify-between overflow-hidden"
+                  style={{ background: s.preview.panel, borderRadius: Math.min(radiusDemo, 14) }}
+                >
+                  <div className="grid grid-cols-4 gap-1">
+                    {[s.preview.accent, s.preview.text, s.preview.muted, s.preview.bg].map((c, i) => (
+                      <div key={i} className="h-5" style={{ background: c, borderRadius: Math.min(radiusDemo, 6) }} />
+                    ))}
+                  </div>
+                  <div>
+                    <div className="text-sm font-bold leading-tight truncate" style={{ color: s.preview.text, fontFamily: fontStack }}>
+                      {s.name}
+                    </div>
+                    <div className="text-[9px] leading-tight" style={{ color: s.preview.muted }}>
+                      {s.tagline}
+                    </div>
+                  </div>
+                  <div className="flex gap-1">
+                    <div className="h-3.5 flex-1" style={{ background: s.preview.accent, borderRadius: radiusDemo }} />
+                    <div className="h-3.5 flex-1" style={{ border: `1px solid ${s.preview.muted}`, borderRadius: radiusDemo }} />
+                  </div>
+                </div>
+
+                <div className="text-[10px] leading-snug text-text-secondary mb-2 min-h-[42px]">{s.desc}</div>
+
+                <span
+                  className="mt-auto w-full h-7 rounded-md text-[9px] font-semibold uppercase tracking-wider inline-flex items-center justify-center gap-1.5 border transition-colors"
+                  style={{
+                    borderColor: isActive ? s.preview.accent : s.preview.muted,
+                    color: isActive ? s.preview.accent : s.preview.text,
+                  }}
+                >
+                  <Check size={10} /> Seleccionar
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ---------- Paleta fina (solo color) ---------- */}
+      <div className="p-4 rounded-xl border border-border bg-app-elevated">
+        <h2 className="text-sm font-medium text-text-primary">Paleta de color</h2>
+        <p className="text-xs text-text-muted mb-3">
+          Ajuste fino: cambia solo los colores, mantiene la redondez y tipografía del estilo activo.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {THEMES.map((t) => {
+            const isSelected = themeId === t.id;
+            const style = THEME_CARD_STYLES[t.id as ThemeId] ?? {
+              bg: 'bg-app-bg',
+              text: 'text-text-primary',
+              subtext: 'text-text-muted',
+            };
+            return (
+              <button
+                key={t.id}
+                onClick={() => setTheme(t.id as ThemeId)}
+                className={cn(
+                  'text-center p-4 rounded-xl border transition-all flex flex-col items-center justify-center min-h-[110px] relative overflow-hidden',
+                  style.bg,
+                  isSelected
+                    ? 'ring-2 ring-white border-transparent'
+                    : 'border-border hover:border-border-accent opacity-90 hover:opacity-100',
+                )}
+              >
+                <div className={cn('font-semibold text-base mb-1', style.text)}>{t.label}</div>
+                <div className={cn('text-[11px] leading-tight max-w-[160px]', style.subtext)}>{t.desc}</div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ---------- Detalles de diseño y tipografía (avanzado) ---------- */}
+      <div className="p-4 rounded-xl border border-border bg-app-elevated">
+        <button onClick={() => setAdvOpen(!advOpen)} className="w-full flex items-center gap-3 text-left">
+          <div className="w-8 h-8 shrink-0 rounded-lg border border-border flex items-center justify-center">
+            <SlidersHorizontal size={13} className="text-accent" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-sm font-medium text-text-primary">Detalles de diseño y tipografía</h2>
+            <p className="text-[11px] text-text-muted">Redondez, sombras, tipografía, tamaño y espaciado — ajuste fino.</p>
+          </div>
+          {advOpen ? <ChevronUp size={14} className="text-text-muted" /> : <ChevronDown size={14} className="text-text-muted" />}
+        </button>
+
+        {advOpen && (
+          <div className="mt-5 space-y-5">
+            <DesignSliderRow
+              label="Radio de borde"
+              hint="De esquinas rectas a píldora"
+              min={0}
+              max={RADII.length - 1}
+              value={radiusIdx}
+              current={RADII[radiusIdx].label}
+              minLabel="Recto"
+              maxLabel="Píldora"
+              onChange={(v) => updatePrefs({ radius: RADII[v].id })}
+            />
+            <DesignSliderRow
+              label="Sombra de elevación"
+              hint="Mínima a alta"
+              min={0}
+              max={ELEVATIONS.length - 1}
+              value={elevIdx}
+              current={ELEVATIONS[elevIdx].label}
+              minLabel="Mínima"
+              maxLabel="Alta"
+              onChange={(v) => updatePrefs({ elevation: ELEVATIONS[v].id as ElevationId })}
+            />
+            <DesignSliderRow
+              label="Tamaño del texto"
+              hint={`${scale.pct}% del tamaño base`}
+              min={0}
+              max={FONT_SCALES.length - 1}
+              value={prefs.fontScale}
+              current={`${scale.pct}%`}
+              minLabel="Pequeño"
+              maxLabel="Enorme"
+              onChange={(v) => updatePrefs({ fontScale: v })}
+            />
+            <DesignSliderRow
+              label="Espaciado (densidad)"
+              hint="Cuánto aire hay entre elementos"
+              min={0}
+              max={DENSITIES.length - 1}
+              value={densityIdx}
+              current={DENSITIES[densityIdx].label}
+              minLabel="Compacto"
+              maxLabel="Relajado"
+              onChange={(v) => updatePrefs({ density: DENSITIES[v].id })}
+            />
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <div>
+                <span className="text-xs font-medium text-text-primary block mb-1.5">Fuente principal</span>
+                <select
+                  className="codex-input w-full text-xs px-2.5 py-2 cursor-pointer"
+                  value={prefs.fontMain}
+                  onChange={(e) => updatePrefs({ fontMain: e.target.value as DesignPrefs['fontMain'] })}
+                >
+                  {FONT_MAINS.map((f) => (
+                    <option key={f.id} value={f.id} style={{ fontFamily: f.stack }}>
+                      {f.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <span className="text-xs font-medium text-text-primary block mb-1.5">Fuente de código</span>
+                <select
+                  className="codex-input w-full text-xs px-2.5 py-2 cursor-pointer"
+                  value={prefs.fontCode}
+                  onChange={(e) => updatePrefs({ fontCode: e.target.value as DesignPrefs['fontCode'] })}
+                >
+                  {FONT_CODES.map((f) => (
+                    <option key={f.id} value={f.id} style={{ fontFamily: f.stack }}>
+                      {f.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-1 border-t border-border">
+              <span className="text-[10px] text-text-muted">
+                Estilo activo: <span className="text-text-secondary font-medium">{activeStyle.name}</span> — los sliders
+                guardan tu ajuste personal.
+              </span>
+              <button
+                onClick={resetToStyle}
+                className="codex-btn text-[11px] gap-1.5 mt-2"
+                title={`Volver a los valores de ${activeStyle.name}`}
+              >
+                <RotateCcw size={11} /> Restablecer
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+// ============================================================================
 // ConfiguracionView
 // ============================================================================
 
@@ -2084,52 +2414,8 @@ export function ConfiguracionView() {
               </div>
             </div>
 
-            {/* Tema */}
-            <div className="p-4 rounded-xl border border-border bg-app-elevated">
-              <h2 className="text-sm font-medium text-text-primary">Tema</h2>
-              <p className="text-xs text-text-muted mb-3">Elige la paleta de colores. Los cambios son al instante.</p>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {THEMES.map((t) => {
-                  const isSelected = themeId === t.id;
-                  // Custom theme background styling for previews matching the reference image style
-                  const themeBgStyles: Record<ThemeId, { bg: string; text: string; subtext: string; border?: string }> = {
-                    'sage-dark': { bg: 'bg-[#2d3b33]', text: 'text-[#e2ece5]', subtext: 'text-[#9eb3a4]' },
-                    'pure-black': { bg: 'bg-[#000000]', text: 'text-[#ffffff]', subtext: 'text-[#a0a0a0]', border: 'border-white/20' },
-                    'soft-gray': { bg: 'bg-[#e5e7eb]', text: 'text-[#111827]', subtext: 'text-[#4b5563]' },
-                    'midnight-blue': { bg: 'bg-[#1b253b]', text: 'text-[#e0e8f8]', subtext: 'text-[#7a93c2]' },
-                    'warm-paper': { bg: 'bg-[#fef3c7]', text: 'text-[#78350f]', subtext: 'text-[#92400e]' },
-                    'cobalt': { bg: 'bg-[#1d4ed8]', text: 'text-[#ffffff]', subtext: 'text-[#bfdbfe]' },
-                  };
-
-                  const style = themeBgStyles[t.id as ThemeId] ?? {
-                    bg: 'bg-app-bg',
-                    text: 'text-text-primary',
-                    subtext: 'text-text-muted',
-                  };
-
-                  return (
-                    <button
-                      key={t.id}
-                      onClick={() => setTheme(t.id as ThemeId)}
-                      className={cn(
-                        'text-center p-4 rounded-xl border transition-all flex flex-col items-center justify-center min-h-[110px] relative overflow-hidden',
-                        style.bg,
-                        isSelected
-                          ? 'ring-2 ring-white border-transparent'
-                          : 'border-border hover:border-border-accent opacity-90 hover:opacity-100',
-                      )}
-                    >
-                      <div className={cn('font-semibold text-base mb-1', style.text)}>
-                        {t.label}
-                      </div>
-                      <div className={cn('text-[11px] leading-tight max-w-[160px]', style.subtext)}>
-                        {t.desc}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+            {/* Estilo total + paleta + detalles avanzados de diseño */}
+            <StyleDesignSections />
 
             {/* Modo de interfaz */}
             <div className="p-4 rounded-xl border border-border bg-app-elevated">

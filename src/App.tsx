@@ -21,6 +21,7 @@ import { MetricsView } from '@/components/agent/MetricsView';
 import { RlmPanel } from '@/components/agent/rlm/RlmPanel';
 import { useWeaver } from '@/store/weaver';
 import { initTheme } from '@/lib/themes';
+import { initDesign } from '@/lib/design';
 import { startScheduler } from '@/lib/scheduler';
 import { initSubagents } from '@/agent/subagent';
 import { LiveOverlay } from '@/components/voice/LiveOverlay';
@@ -29,9 +30,10 @@ import { useVoiceStore } from '@/store/voice';
 export default function App() {
   const { view, loadConversations, themeId, loadMeAll, appMode, setAppMode, activeConversationId, activeNotebookId } = useWeaver();
 
-  // Inicializar tema al montar.
+  // Inicializar tema y sistema de diseño al montar.
   useEffect(() => {
     initTheme();
+    initDesign();
   }, []);
 
   // Re-aplicar tema cuando cambie.

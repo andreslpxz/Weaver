@@ -12,7 +12,10 @@ export type ThemeId =
   | 'soft-gray'      // Gris claro modo claro
   | 'midnight-blue'  // Azul oscuro tipo VSCode
   | 'warm-paper'     // Crema/papel cálido modo claro
-  | 'cobalt';        // Azul cobalto sobre negro
+  | 'cobalt'         // Azul cobalto sobre negro
+  | 'claude-warm'    // Gris cálido + coral (estilo Claude)
+  | 'gemini-dark'    // Negro azulado + azul (estilo Gemini)
+  | 'chatgpt-dark';  // Gris neutro + botones claros (estilo ChatGPT)
 
 export interface Theme {
   id: ThemeId;
@@ -163,6 +166,75 @@ export const THEMES: Theme[] = [
       '--danger': '#ef4444',
       '--warning': '#f59e0b',
       '--success': '#10b981',
+    },
+  },
+  {
+    id: 'claude-warm',
+    label: 'Claude Warm',
+    desc: 'Gris cálido con acento coral, serif elegante',
+    mode: 'dark',
+    swatch: '#D97757',
+    vars: {
+      '--bg-app': '#262624',
+      '--bg-sidebar': '#1f1e1d',
+      '--bg-elevated': '#30302e',
+      '--bg-input': '#2b2a28',
+      '--border': '#3d3c3a',
+      '--border-accent': '#54524e',
+      '--text-primary': '#f5f4ef',
+      '--text-secondary': '#b8b6b0',
+      '--text-muted': '#8a8880',
+      '--accent': '#d97757',
+      '--accent-strong': '#e89073',
+      '--danger': '#e07a5f',
+      '--warning': '#e8b86a',
+      '--success': '#7bae7f',
+    },
+  },
+  {
+    id: 'gemini-dark',
+    label: 'Gemini Dark',
+    desc: 'Negro azulado con brillo azul suave',
+    mode: 'dark',
+    swatch: '#8AB4F8',
+    vars: {
+      '--bg-app': '#101214',
+      '--bg-sidebar': '#16181c',
+      '--bg-elevated': '#1d2026',
+      '--bg-input': '#22262d',
+      '--border': '#2a2f37',
+      '--border-accent': '#3a414d',
+      '--text-primary': '#e8eef8',
+      '--text-secondary': '#9aa7bd',
+      '--text-muted': '#667186',
+      '--accent': '#8ab4f8',
+      '--accent-strong': '#aecbfa',
+      '--danger': '#f28b82',
+      '--warning': '#fdd663',
+      '--success': '#81c995',
+    },
+  },
+  {
+    id: 'chatgpt-dark',
+    label: 'ChatGPT Dark',
+    desc: 'Gris neutro, botones blancos, sin distracción',
+    mode: 'dark',
+    swatch: '#ECECEC',
+    vars: {
+      '--bg-app': '#212121',
+      '--bg-sidebar': '#171717',
+      '--bg-elevated': '#2f2f2f',
+      '--bg-input': '#2f2f2f',
+      '--border': '#3a3a3a',
+      '--border-accent': '#4a4a4a',
+      '--text-primary': '#ececec',
+      '--text-secondary': '#b4b4b4',
+      '--text-muted': '#8f8f8f',
+      '--accent': '#ececec',
+      '--accent-strong': '#ffffff',
+      '--danger': '#ef4444',
+      '--warning': '#f59e0b',
+      '--success': '#10a37f',
     },
   },
 ];
