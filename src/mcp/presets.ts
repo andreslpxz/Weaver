@@ -45,6 +45,18 @@ const FIGMA_LOGO = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.or
 <path d="M20 12c0 2.208-1.792 4-4 4s-4-1.792-4-4 1.792-4 4-4 4 1.792 4 4z" fill="#1ABCFE"/>
 </svg>`;
 
+const MEMORY_LOGO = `<svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+<path d="M12 2a9 9 0 0 0-9 9c0 3.8 2.38 7.04 5.74 8.33.39.15.76-.14.76-.55v-.44a2 2 0 0 1 .58-1.41l1.5-1.5a2 2 0 0 0 .58-1.42V13a1 1 0 0 1 1-1h.5a1 1 0 0 0 1-1v-1a2 2 0 0 1 2-2h.5a1 1 0 0 0 1-1V6.5A4.5 4.5 0 0 0 12 2zm-1 4a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zm6 1a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/>
+</svg>`;
+
+const BRAVE_LOGO = `<svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+<path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1 6h2v2h-2V7zm0 4h2v6h-2v-6z"/>
+</svg>`;
+
+const CLOUDFLARE_LOGO = `<svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+<path d="M18.8 10.5c-.3-2.6-2.5-4.5-5.2-4.5-2.1 0-4 1.2-4.8 3-2.3.2-4.1 2.2-4.1 4.6 0 2.5 2 4.5 4.5 4.5h9.4c2.1 0 3.8-1.7 3.8-3.8 0-1.9-1.4-3.5-3.3-3.8z"/>
+</svg>`;
+
 // ============================================================================
 // Tipos
 // ============================================================================
@@ -216,6 +228,86 @@ export const MCP_PRESETS: McpPreset[] = [
       'get_components',
       'get_styles',
       'export_image',
+    ],
+  },
+  {
+    id: 'memory',
+    name: 'Memory',
+    description: 'Grafo de conocimiento y memoria persistente basada en entidades y relaciones para el agente.',
+    category: 'productivity',
+    color: '#8B5CF6',
+    logo: MEMORY_LOGO,
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-memory'],
+    envVars: [],
+    docsUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/memory',
+    exampleTools: [
+      'create_entities',
+      'create_relations',
+      'add_observations',
+      'read_graph',
+      'search_nodes',
+      'delete_entities',
+    ],
+  },
+  {
+    id: 'brave-search',
+    name: 'Brave Search',
+    description: 'Búsqueda web y local utilizando la API de Brave Search.',
+    category: 'browser',
+    color: '#FB542B',
+    logo: BRAVE_LOGO,
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-brave-search'],
+    envVars: [
+      {
+        name: 'BRAVE_API_KEY',
+        label: 'Brave Search API Key',
+        type: 'password',
+        required: true,
+        helpText: 'Clave API de Brave Search para realizar búsquedas web y locales.',
+        obtainUrl: 'https://brave.com/search/api/',
+      },
+    ],
+    docsUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search',
+    exampleTools: [
+      'brave_web_search',
+      'brave_local_search',
+    ],
+  },
+  {
+    id: 'cloudflare',
+    name: 'Cloudflare',
+    description: 'Gestión y administración de recursos en infraestructura Cloudflare (Workers, KV, DNS, etc.).',
+    category: 'developer',
+    color: '#F38020',
+    logo: CLOUDFLARE_LOGO,
+    command: 'npx',
+    args: ['-y', '@cloudflare/mcp-server-cloudflare'],
+    envVars: [
+      {
+        name: 'CLOUDFLARE_API_KEY',
+        label: 'Cloudflare API Token',
+        type: 'password',
+        required: true,
+        helpText: 'Token de API de Cloudflare con los permisos requeridos.',
+        obtainUrl: 'https://dash.cloudflare.com/profile/api-tokens',
+      },
+      {
+        name: 'CLOUDFLARE_ACCOUNT_ID',
+        label: 'Cloudflare Account ID',
+        type: 'text',
+        required: true,
+        helpText: 'ID de cuenta de Cloudflare.',
+        obtainUrl: 'https://dash.cloudflare.com/',
+      },
+    ],
+    docsUrl: 'https://github.com/cloudflare/mcp-server-cloudflare',
+    exampleTools: [
+      'deploy_worker',
+      'list_workers',
+      'get_kv_namespaces',
+      'get_dns_records',
     ],
   },
 ];
