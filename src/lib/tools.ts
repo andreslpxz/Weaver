@@ -480,7 +480,7 @@ export async function dispatchAdvancedTool(
       case 'ask_user_input':
         return {
           ok: true,
-          output: String(args.selected_option ?? args.response ?? 'Respuesta de usuario recibida.'),
+          output: String(args.selected_option ?? args.response ?? 'Aguardando respuesta del usuario mediante el widget interactivo.'),
         };
       case 'launch_app':
         return await launchApp(String(args.app_name), args.background !== false);

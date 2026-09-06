@@ -45,7 +45,7 @@ export function InteractivePromptWidget({
     if (isCompleted) return;
     onSubmitResponse(
       toolCallId,
-      'El usuario omitió responder a esta pregunta y prefirió no seleccionar ninguna opción.',
+      'El usuario omitió responder a esta pregunta. Continúa con la conversación usando la información disponible sin insistir ni volver a hacer la misma pregunta. Toma la mejor decisión posible o menciona naturalmente si algo falta.',
     );
   };
 

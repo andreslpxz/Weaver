@@ -182,7 +182,7 @@ export function Composer() {
           abortRef.current = ac;
           const { createProvider } = await import('@/providers');
           const llm = await createProvider(providerId);
-          await runChatWithTools(llm, `[Respuesta de usuario a ask_user_input: "${answerText}"]`, [], ac.signal, conversationId);
+          await runChatWithTools(llm, '', [], ac.signal, conversationId);
         } catch (err) {
           console.error('[Composer] Failed to resume agent loop after ask_user_input:', err);
         } finally {
@@ -990,21 +990,36 @@ export function Composer() {
     const priorMsgs: Message[] = [];
     try {
       const wState = useWeaver.getState();
-      const conv = wState.conversations.find((c) => c.id === wState.activeConversationId);
+      const conv = wState.conversations.find((c) => c.id === conversationId);
       if (conv) {
-        // conv.messages = [...prev, userMsgJustAdded, assistantPlaceholderEmpty]
-        const cutoff = conv.messages.length - 2;
+        const hasUserText = Boolean(userText && userText.trim());
+        const cutoff = hasUserText ? conv.messages.length - 2 : conv.messages.length - 1;
         const hist = cutoff > 0 ? conv.messages.slice(0, cutoff) : [];
-        const windowed = hist.slice(-20); // últimos 20 mensajes
+        const windowed = hist.slice(-30); // últimos 30 mensajes
         for (const m of windowed) {
-          if (m.role !== 'user' && m.role !== 'assistant') continue;
-          if (m.content === null) continue;
-          if (m.role === 'assistant' && m.content.trim() === '') continue;
-          priorMsgs.push({
-            role: m.role,
-            content: m.content,
-            ...(m.images && m.images.length > 0 ? { images: m.images } : {}),
-          });
+          if (m.role === 'user') {
+            if (!m.content) continue;
+            priorMsgs.push({
+              role: 'user',
+              content: m.content,
+              ...(m.images && m.images.length > 0 ? { images: m.images } : {}),
+            });
+          } else if (m.role === 'assistant') {
+            if (m.content === null && (!m.tool_calls || m.tool_calls.length === 0)) continue;
+            if (m.content === '' && (!m.tool_calls || m.tool_calls.length === 0)) continue;
+            priorMsgs.push({
+              role: 'assistant',
+              content: m.content || null,
+              ...(m.tool_calls && m.tool_calls.length > 0 ? { tool_calls: m.tool_calls } : {}),
+              ...(m.reasoning ? { reasoning: m.reasoning } : {}),
+            });
+          } else if (m.role === 'tool') {
+            priorMsgs.push({
+              role: 'tool',
+              tool_call_id: m.tool_call_id,
+              content: m.content,
+            });
+          }
         }
       }
     } catch (e) {
@@ -1274,7 +1289,7 @@ export function Composer() {
           'Si tu respuesta se acerca al límite de tokens, termina con <<CONTINUE>>. Al terminar del todo, emite <<END>>.',
       },
       ...priorMsgs,
-      { role: 'user', content: userText, images: images.length > 0 ? images : undefined },
+      ...(userText && userText.trim() ? [{ role: 'user' as const, content: userText, images: images.length > 0 ? images : undefined }] : []),
     ];
 
     const tools = [...buildAdvancedToolsList(), ...mcpExtraTools];
@@ -1480,12 +1495,18 @@ export function Composer() {
       });
 
       // Ejecutar cada tool call y agregar resultados.
+      let hasAskUserInput = false;
       for (const tc of result.toolCalls) {
         let args: Record<string, unknown> = {};
         try {
           args = JSON.parse(tc.function.arguments || '{}');
         } catch {
           // ignore parse errors
+        }
+
+        if (tc.function.name === 'ask_user_input') {
+          hasAskUserInput = true;
+          break;
         }
 
         // Feedback visual limpio: mostrar qué tool se está ejecutando.
@@ -1549,6 +1570,11 @@ export function Composer() {
           tool_call_id: tc.id,
           content: llmResult,
         });
+      }
+
+      if (hasAskUserInput) {
+        producedFinalText = true;
+        break;
       }
 
       // Ceder el hilo brevemente para que el UI pinte el resultado del tool
