@@ -147,7 +147,7 @@ export function Composer() {
     ta.style.height = Math.min(ta.scrollHeight, 200) + 'px';
   }, [value]);
 
-  // Escuchar sugerencias de la UI
+  // Escuchar sugerencias de la UI y respuestas de ask_user_input
   useEffect(() => {
     const handler = (e: Event) => {
       const text = (e as CustomEvent<string>).detail;
@@ -155,8 +155,50 @@ export function Composer() {
       taRef.current?.focus();
     };
     window.addEventListener('weaver:set-composer', handler as EventListener);
-    return () => window.removeEventListener('weaver:set-composer', handler as EventListener);
-  }, []);
+
+    const toolResponseHandler = (e: Event) => {
+      const detail = (e as CustomEvent<{ conversationId: string; toolCallId: string; answerText: string }>).detail;
+      if (!detail) return;
+      const { conversationId, toolCallId, answerText } = detail;
+
+      // Append user tool response to the conversation
+      storeAppendMessage(
+        {
+          id: newMsgId(),
+          ts: Date.now(),
+          role: 'tool',
+          tool_call_id: toolCallId,
+          content: answerText,
+        },
+        conversationId,
+      );
+
+      // Trigger automatic agent loop continuation with user provided tool response
+      void (async () => {
+        try {
+          setIsRunning(true);
+          setAgentState('planning');
+          const ac = new AbortController();
+          abortRef.current = ac;
+          const { createProvider } = await import('@/providers');
+          const llm = await createProvider(providerId);
+          await runChatWithTools(llm, `[Respuesta de usuario a ask_user_input: "${answerText}"]`, [], ac.signal, conversationId);
+        } catch (err) {
+          console.error('[Composer] Failed to resume agent loop after ask_user_input:', err);
+        } finally {
+          setIsRunning(false);
+          abortRef.current = null;
+          setAgentState('idle');
+        }
+      })();
+    };
+    window.addEventListener('weaver:submit-tool-response', toolResponseHandler as EventListener);
+
+    return () => {
+      window.removeEventListener('weaver:set-composer', handler as EventListener);
+      window.removeEventListener('weaver:submit-tool-response', toolResponseHandler as EventListener);
+    };
+  }, [providerId, storeAppendMessage, setAgentState]);
 
   // Cerrar popup + al hacer click fuera
   useEffect(() => {
@@ -1099,6 +1141,10 @@ export function Composer() {
           '- En Linux: /home/<username>/ — descubre username primero\n' +
           '- %USERNAME% y $USER NO se expanden en file_read/file_write/file_list, SOLO en shell_exec\n' +
           '- Para save_file no necesitas ruta, solo filename\n\n' +
+          '═══ USO DE LA HERRAMIENTA ask_user_input ═══\n' +
+          '- Úsala cuando necesites entender preferencias, objetivos o parámetros ambiguos antes de ejecutar un script, workflow o acción destructiva.\n' +
+          '- NO la uses cuando ya tengas suficiente contexto para actuar.\n' +
+          '- NO la uses para análisis comparativos abiertos (ej: "¿Prefieres Rust o TypeScript?") ni para conversaciones casuales/emocionales.\n\n' +
           '═══ REGLAS DE TOOLS ═══\n' +
           '- web_search ya devuelve un resumen. Úsalo directamente.\n' +
           '- Si web_fetch falla, no insistas. Usa web_search.\n' +

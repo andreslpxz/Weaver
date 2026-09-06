@@ -52,6 +52,7 @@ import { formatSize } from '@/lib/attachments';
 import { speak, stopSpeaking, isTTSSupported } from '@/lib/voice';
 import { runtime } from '@/lib/tauri';
 import { WeaverLogo } from '@/components/common/WeaverLogo';
+import { InteractivePromptWidget } from './InteractivePromptWidget';
 
 export function MessageList() {
   const conversation = useWeaver((s) =>
@@ -261,6 +262,9 @@ function MessageBubble({ msg }: { msg: Message }) {
   const editTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const regenerate = useWeaver((s) => s.regenerateMessage);
   const editUserMessage = useWeaver((s) => s.editUserMessage);
+  const conversation = useWeaver((s) =>
+    s.conversations.find((c) => c.id === s.activeConversationId),
+  );
   const isRunning = useWeaver((s) => {
     const c = s.conversations.find((cc) => cc.id === s.activeConversationId);
     return c?.agentState !== 'idle' && c?.agentState !== 'error';
@@ -467,6 +471,47 @@ function MessageBubble({ msg }: { msg: Message }) {
             </div>
           ) : (
             <MessageContent content={msg.content ?? ''} />
+          )}
+
+          {/* Interactive Prompt Widget para ask_user_input */}
+          {isAssistant && msg.tool_calls && msg.tool_calls.length > 0 && (
+            msg.tool_calls.map((tc) => {
+              if (tc.function.name !== 'ask_user_input') return null;
+              let args: any = {};
+              try {
+                args = JSON.parse(tc.function.arguments || '{}');
+              } catch {
+                /* ignore */
+              }
+              const toolResponseMsg = conversation?.messages.find(
+                (m) => m.role === 'tool' && m.tool_call_id === tc.id,
+              );
+              const isCompleted = Boolean(toolResponseMsg);
+              const selectedAnswer = toolResponseMsg?.content ?? null;
+
+              return (
+                <InteractivePromptWidget
+                  key={tc.id}
+                  toolCallId={tc.id}
+                  args={args}
+                  isCompleted={isCompleted}
+                  selectedAnswer={selectedAnswer}
+                  onSubmitResponse={(toolCallId, answerText) => {
+                    if (conversation?.id) {
+                      window.dispatchEvent(
+                        new CustomEvent('weaver:submit-tool-response', {
+                          detail: {
+                            conversationId: conversation.id,
+                            toolCallId,
+                            answerText,
+                          },
+                        }),
+                      );
+                    }
+                  }}
+                />
+              );
+            })
           )}
 
           {/* Botones de acción bajo el mensaje: copiar + escuchar + regenerar */}
@@ -734,6 +779,7 @@ function MessageContent({ content }: { content: string }) {
           return <ThinkRow key={i} text={seg.think} />;
         }
         if (seg.kind === 'capsule' && seg.capsule) {
+          if (seg.capsule.toolName === 'ask_user_input') return null;
           if (hiddenCapsules.has(seg.capsule.capsuleId)) return null;
           return <ToolCapsule key={i} capsule={seg.capsule} />;
         }
