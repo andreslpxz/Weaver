@@ -91,4 +91,45 @@ describe('ask_user_input tool schema and widget', () => {
     expect(screen.getByText('Seleccionado:')).toBeTruthy();
     expect(screen.getByText('Sí')).toBeTruthy();
   });
+
+  it('handles skip action and renders skipped state correctly', () => {
+    const handleSubmit = vi.fn();
+    const { rerender } = render(
+      <InteractivePromptWidget
+        toolCallId="call-skip"
+        args={{
+          question: '¿Cuál es tu color favorito?',
+          options: ['Rojo', 'Azul'],
+        }}
+        isCompleted={false}
+        selectedAnswer={null}
+        onSubmitResponse={handleSubmit}
+      />
+    );
+
+    const skipBtn = screen.getByText('Omitir');
+    fireEvent.click(skipBtn);
+
+    expect(handleSubmit).toHaveBeenCalledWith(
+      'call-skip',
+      expect.stringContaining('El usuario omitió responder a esta pregunta'),
+    );
+
+    const skipMessage = handleSubmit.mock.calls[0][1];
+
+    rerender(
+      <InteractivePromptWidget
+        toolCallId="call-skip"
+        args={{
+          question: '¿Cuál es tu color favorito?',
+          options: ['Rojo', 'Azul'],
+        }}
+        isCompleted={true}
+        selectedAnswer={skipMessage}
+        onSubmitResponse={handleSubmit}
+      />
+    );
+
+    expect(screen.getByText('✓ Omitido')).toBeTruthy();
+  });
 });
