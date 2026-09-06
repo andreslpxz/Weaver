@@ -31,6 +31,24 @@ export interface ToolDef {
 
 export const ADVANCED_TOOLS: ToolDef[] = [
   {
+    name: 'ask_user_input',
+    description:
+      'Muestra un widget interactivo en la UI con opciones para que el usuario elija o ingrese una aclaración antes de continuar la ejecución.',
+    category: 'automation',
+    parameters: {
+      question: { type: 'string', description: 'La pregunta o aclaración para el usuario.' },
+      options: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Lista de opciones cortas y seleccionables.',
+      },
+      allow_custom: {
+        type: 'boolean',
+        description: 'Si es true, permite al usuario escribir texto libre adicional si ninguna opción se ajusta.',
+      },
+    },
+  },
+  {
     name: 'launch_app',
     description:
       'Lanza una aplicación de escritorio (ej: "gedit", "firefox", "gnome-calculator") en el sistema operativo en segundo plano (background) para no bloquear la PC del usuario.',
@@ -427,7 +445,7 @@ export function buildAdvancedToolsList() {
     'description', 'location', 'calendar_id', 'all_day', 'priority', 'due_ts', 'list_id',
     'from_ts', 'to_ts', 'notes', 'qty', 'category', 'title', 'background',
     'search', 'by_kind', 'neighbors', 'from', 'to', 'stats', 'limit', 'root_path',
-    'subagent_name', 'context',
+    'subagent_name', 'context', 'allow_custom',
   ]);
   return ADVANCED_TOOLS.map((t) => ({
     type: 'function' as const,
@@ -459,6 +477,11 @@ export async function dispatchAdvancedTool(
 ): Promise<ToolExecResult> {
   try {
     switch (name) {
+      case 'ask_user_input':
+        return {
+          ok: true,
+          output: String(args.selected_option ?? args.response ?? 'Respuesta de usuario recibida.'),
+        };
       case 'launch_app':
         return await launchApp(String(args.app_name), args.background !== false);
       case 'shell_exec':
