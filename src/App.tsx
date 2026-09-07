@@ -26,9 +26,15 @@ import { startScheduler } from '@/lib/scheduler';
 import { initSubagents } from '@/agent/subagent';
 import { LiveOverlay } from '@/components/voice/LiveOverlay';
 import { useVoiceStore } from '@/store/voice';
+import { telegramBot } from '@/lib/telegramBot';
 
 export default function App() {
-  const { view, loadConversations, themeId, loadMeAll, appMode, setAppMode, activeConversationId, activeNotebookId } = useWeaver();
+  const { view, loadConversations, themeId, loadMeAll, appMode, setAppMode, activeConversationId, activeNotebookId, meIntegrations } = useWeaver();
+
+  // Sincronizar estado del bot de Telegram según las integraciones activas.
+  useEffect(() => {
+    telegramBot.syncState();
+  }, [meIntegrations]);
 
   // Inicializar tema y sistema de diseño al montar.
   useEffect(() => {
